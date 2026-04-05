@@ -75,6 +75,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.net.toUri
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.google.ai.edge.gallery.R
+import com.google.ai.edge.gallery.common.UgotAuthConfig
 import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.ModelDownloadStatus
 import com.google.ai.edge.gallery.data.ModelDownloadStatusType
@@ -260,7 +261,35 @@ fun DownloadAndTryButton(
         downloadStarted = true
         // For HuggingFace urls
         if (model.url.startsWith("https://huggingface.co")) {
+          val ugotAccessToken = modelManagerViewModel.getUgotAccessTokenOrNull()
+          if (!ugotAccessToken.isNullOrBlank()) {
+            val proxyUrl = UgotAuthConfig.buildHuggingFaceProxyUrl(model.url)
+            Log.d(TAG, "Model '${model.name}' is from HuggingFace. Using UGOT proxy url: $proxyUrl")
+            val proxyResponseCode =
+              modelManagerViewModel.getModelUrlResponse(
+                model = model,
+                accessToken = ugotAccessToken,
+                overrideUrl = proxyUrl,
+              )
+            if (
+              proxyResponseCode == HttpURLConnection.HTTP_OK ||
+                proxyResponseCode == HttpURLConnection.HTTP_PARTIAL
+            ) {
+              model.downloadUrlOverride = proxyUrl
+              withContext(Dispatchers.Main) { startDownload(ugotAccessToken) }
+              return@launch
+            }
+            checkingToken = false
+            downloadStarted = false
+            Log.e(
+              TAG,
+              "UGOT HuggingFace proxy is not accessible for '${model.name}'. Response code: $proxyResponseCode",
+            )
+            showErrorDialog = true
+            return@launch
+          }
           checkingToken = true
+          model.downloadUrlOverride = ""
 
           // Check if the url needs auth.
           Log.d(
@@ -322,6 +351,7 @@ fun DownloadAndTryButton(
         }
         // For other urls, just download the model.
         else {
+          model.downloadUrlOverride = ""
           Log.d(
             TAG,
             "Model '${model.name}' is not from huggingface. Start downloading the model...",

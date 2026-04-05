@@ -101,10 +101,11 @@ class DefaultDownloadRepository(
     // Create input data.
     val builder = Data.Builder()
     val totalBytes = model.totalBytes + model.extraDataFiles.sumOf { it.sizeInBytes }
+    val requestUrl = model.downloadUrlOverride.ifEmpty { model.url }
     val inputDataBuilder =
       builder
         .putString(KEY_MODEL_NAME, model.name)
-        .putString(KEY_MODEL_URL, model.url)
+        .putString(KEY_MODEL_URL, requestUrl)
         .putString(KEY_MODEL_COMMIT_HASH, model.version)
         .putString(KEY_MODEL_DOWNLOAD_MODEL_DIR, model.normalizedName)
         .putString(KEY_MODEL_DOWNLOAD_FILE_NAME, model.downloadFileName)

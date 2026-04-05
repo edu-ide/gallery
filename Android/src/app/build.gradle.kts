@@ -33,16 +33,13 @@ android {
   compileSdk = 35
 
   defaultConfig {
-    applicationId = "com.google.aiedge.gallery"
+    applicationId = "com.ugot.chat"
     minSdk = 31
     targetSdk = 35
     versionCode = 23
     versionName = "1.0.11"
 
-    // Needed for HuggingFace auth workflows.
-    // Use the scheme of the "Redirect URLs" in HuggingFace app.
-    manifestPlaceholders["appAuthRedirectScheme"] =
-        "REPLACE_WITH_YOUR_REDIRECT_SCHEME_IN_HUGGINGFACE_APP"
+    manifestPlaceholders["appAuthRedirectScheme"] = "com.ugot.chat"
     manifestPlaceholders["applicationName"] = "com.google.ai.edge.gallery.GalleryApplication"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -73,6 +70,8 @@ dependencies {
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.activity.compose)
+  implementation(libs.androidx.credentials)
+  implementation(libs.androidx.credentials.play.services.auth)
   implementation(platform(libs.androidx.compose.bom))
   implementation(libs.androidx.ui)
   implementation(libs.androidx.ui.graphics)
@@ -85,6 +84,8 @@ dependencies {
   implementation(libs.androidx.work.runtime)
   implementation(libs.androidx.datastore)
   implementation(libs.com.google.code.gson)
+  implementation(libs.mcp.kotlin.sdk.client)
+  implementation(libs.ktor.client.okhttp)
   implementation(libs.androidx.lifecycle.process)
   implementation(libs.androidx.security.crypto)
   implementation(libs.androidx.webkit)
@@ -109,6 +110,7 @@ dependencies {
   implementation(libs.firebase.messaging)
   implementation(libs.androidx.exifinterface)
   implementation(libs.moshi.kotlin)
+  implementation(libs.googleid)
   kapt(libs.hilt.android.compiler)
   testImplementation(libs.junit)
   androidTestImplementation(libs.androidx.junit)

@@ -22,10 +22,12 @@
   <string name="add_audio" translatable="false">+Audio</string>
   <string name="aichat_initializing_title" translatable="false">Initializing model</string>
   <string name="aichat_initializing_content" translatable="false">Sit tight, this can take up to 1 minute</string>
-  <string name="app_intro" translatable="false">Explore a world of amazing on-device models from</string>
-  <string name="app_name" translatable="false">Google AI Edge Gallery</string>
-  <string name="app_name_first_part" translatable="false">Google AI</string>
-  <string name="app_name_second_part" translatable="false">Edge Gallery</string>
+  <string name="aichat_emptystate_title" translatable="false">AI Chat</string>
+  <string name="aichat_emptystate_content" translatable="false">Chat with on-device large language models</string>
+  <string name="app_intro" translatable="false">Private, fast conversations powered by local and connected AI.</string>
+  <string name="app_name" translatable="false">UGOT Chat</string>
+  <string name="app_name_first_part" translatable="false">UGOT</string>
+  <string name="app_name_second_part" translatable="false">Chat</string>
   <string name="askimage_emptystate_title" translatable="false">Ask Image</string>
   <string name="askimage_emptystate_content" translatable="false">To get started, tap the + below to add an image (max 10 images per chat) and type a prompt to ask a question about it!</string>
   <string name="askaudio_emptystate_title" translatable="false">Ask Audio</string>
@@ -170,7 +172,19 @@
   <string name="test" translatable="false">Test</string>
   <string name="text_image_generation_text_field_placeholder" translatable="false">Type prompt…</string>
   <string name="text_input_placeholder_llm_chat" translatable="false">Type prompt…</string>
-  <string name="tos_dialog_title_app" translatable="false">Welcome to Google AI Edge Gallery</string>
+  <string name="tos_dialog_title_app" translatable="false">Welcome to UGOT Chat</string>
+  <string name="ugot_home_title" translatable="false">UGOT Chat</string>
+  <string name="ugot_home_subtitle" translatable="false">A focused chat shell for on-device and MCP-powered experiences, without the model-lab clutter.</string>
+  <string name="ugot_home_primary_label" translatable="false">Primary entry</string>
+  <string name="ugot_home_primary_description" translatable="false">Start chatting right away.</string>
+  <string name="ugot_home_primary_hint" translatable="false">The full Gallery browser stays available only for development builds.</string>
+  <string name="ugot_home_start_chat" translatable="false">Open chat</string>
+  <string name="ugot_home_developer_tools" translatable="false">Developer gallery</string>
+  <string name="ugot_home_developer_caption" translatable="false">Visible only in debug/dev builds.</string>
+  <string name="ugot_login_title" translatable="false">Sign in to UGOT Chat</string>
+  <string name="ugot_login_subtitle" translatable="false">Use native Google sign-in and exchange the Google ID token for a UGOT session you can reuse across chat and MCP-powered tools.</string>
+  <string name="ugot_login_button" translatable="false">Continue with Google</string>
+  <string name="ugot_login_browser_fallback" translatable="false">Use browser sign-in instead</string>
   <string name="tos_dialog_title_gemma" translatable="false">Gemma Terms of Use</string>
   <string name="tos_dialog_accept_and_continue_button_label" translatable="false">Accept &amp; continue</string>
   <string name="tos_dialog_agree_and_continue_button_label" translatable="false">Agree &amp; continue</string>

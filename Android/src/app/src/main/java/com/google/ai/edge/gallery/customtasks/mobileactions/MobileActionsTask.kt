@@ -59,6 +59,11 @@ class MobileActionsTask @Inject constructor() : CustomTask {
       icon = Icons.Outlined.Functions,
       agentNameRes = R.string.chat_agent_agent_name,
       models = mutableListOf(),
+      modelNames =
+        listOf(
+          "Gemma3-1B-IT",
+          "Gemma3-1B-IT q4",
+        ),
       experimental = true,
     )
 

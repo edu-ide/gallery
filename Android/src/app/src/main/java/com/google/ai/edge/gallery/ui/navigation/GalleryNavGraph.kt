@@ -42,7 +42,9 @@ import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -69,19 +71,24 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.google.ai.edge.gallery.BuildConfig
 import com.google.ai.edge.gallery.GalleryEvent
 import com.google.ai.edge.gallery.customtasks.common.CustomTaskData
 import com.google.ai.edge.gallery.customtasks.common.CustomTaskDataForBuiltinTask
+import com.google.ai.edge.gallery.data.BuiltInTaskId
 import com.google.ai.edge.gallery.data.ModelDownloadStatusType
 import com.google.ai.edge.gallery.data.Task
+import com.google.ai.edge.gallery.data.UgotTokenStatus
 import com.google.ai.edge.gallery.data.isLegacyTasks
 import com.google.ai.edge.gallery.firebaseAnalytics
+import com.google.ai.edge.gallery.ui.auth.UgotLoginScreen
 import com.google.ai.edge.gallery.ui.benchmark.BenchmarkScreen
 import com.google.ai.edge.gallery.ui.common.ErrorDialog
 import com.google.ai.edge.gallery.ui.common.ModelPageAppBar
 import com.google.ai.edge.gallery.ui.common.chat.ModelDownloadStatusInfoPanel
 import com.google.ai.edge.gallery.ui.home.HomeScreen
 import com.google.ai.edge.gallery.ui.home.PromoScreenGm4
+import com.google.ai.edge.gallery.ui.home.UgotHomeScreen
 import com.google.ai.edge.gallery.ui.modelmanager.GlobalModelManager
 import com.google.ai.edge.gallery.ui.modelmanager.ModelInitializationStatusType
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManager
@@ -91,7 +98,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private const val TAG = "AGGalleryNavGraph"
+private const val ROUTE_STARTUP = "startup"
+private const val ROUTE_AUTH_LOGIN = "auth_login"
 private const val ROUTE_HOMESCREEN = "homepage"
+private const val ROUTE_DEVELOPER_HOME = "developer_home"
 private const val ROUTE_MODEL_LIST = "model_list"
 private const val ROUTE_MODEL = "route_model"
 private const val ROUTE_BENCHMARK = "benchmark"
@@ -156,6 +166,7 @@ fun GalleryNavHost(
   var enableHomeScreenAnimation by remember { mutableStateOf(true) }
   var enableModelListAnimation by remember { mutableStateOf(true) }
   var lastNavigatedModelName = remember { "" }
+  val enableDeveloperGallery = BuildConfig.DEBUG
 
   // Track whether app is in foreground.
   DisposableEffect(lifecycleOwner) {
@@ -182,12 +193,105 @@ fun GalleryNavHost(
 
   NavHost(
     navController = navController,
-    startDestination = ROUTE_HOMESCREEN,
+    startDestination = ROUTE_STARTUP,
     enterTransition = { EnterTransition.None },
     exitTransition = { ExitTransition.None },
   ) {
+    composable(route = ROUTE_STARTUP) {
+      val uiState by modelManagerViewModel.uiState.collectAsState()
+      val chatTask = modelManagerViewModel.getTaskById(BuiltInTaskId.LLM_CHAT)
+      val initialModel = modelManagerViewModel.getPreferredModelForTask(BuiltInTaskId.LLM_CHAT)
+
+      LaunchedEffect(uiState.loadingModelAllowlist, chatTask?.id, initialModel?.name) {
+        val authStatus = modelManagerViewModel.getUgotTokenStatusAndData().status
+        Log.d(
+          TAG,
+          "startup: loading=${uiState.loadingModelAllowlist}, auth=$authStatus, chatTask=${chatTask?.id}, model=${initialModel?.name}",
+        )
+        if (authStatus != UgotTokenStatus.NOT_EXPIRED) {
+          navController.navigate(ROUTE_AUTH_LOGIN) {
+            popUpTo(ROUTE_STARTUP) { inclusive = true }
+          }
+        } else if (!uiState.loadingModelAllowlist) {
+          when {
+            chatTask != null && initialModel != null -> {
+              Log.d(TAG, "startup: navigating directly to chat model ${initialModel.name}")
+              pickedTask = chatTask
+              lastNavigatedModelName = ""
+              navController.navigate("$ROUTE_MODEL/${chatTask.id}/${initialModel.name}") {
+                popUpTo(ROUTE_STARTUP) { inclusive = true }
+              }
+            }
+            enableDeveloperGallery -> {
+              Log.d(TAG, "startup: no chat model, opening developer home")
+              navController.navigate(ROUTE_DEVELOPER_HOME) {
+                popUpTo(ROUTE_STARTUP) { inclusive = true }
+              }
+            }
+            else -> {
+              Log.d(TAG, "startup: no chat model, opening fallback home")
+              navController.navigate(ROUTE_HOMESCREEN) {
+                popUpTo(ROUTE_STARTUP) { inclusive = true }
+              }
+            }
+          }
+        }
+      }
+
+      Box(modifier = Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+        val authStatus = modelManagerViewModel.getUgotTokenStatusAndData().status
+        if (authStatus != UgotTokenStatus.NOT_EXPIRED) {
+          Text("Checking sign-in…")
+        } else if (uiState.loadingModelAllowlist) {
+          CircularProgressIndicator()
+        } else {
+          Text("Opening UGOT Chat…")
+        }
+      }
+    }
+
+    composable(route = ROUTE_AUTH_LOGIN) {
+      UgotLoginScreen(
+        modelManagerViewModel = modelManagerViewModel,
+        onLoginSuccess = {
+          navController.navigate(ROUTE_STARTUP) {
+            popUpTo(ROUTE_AUTH_LOGIN) { inclusive = true }
+          }
+        },
+      )
+    }
+
     // Home screen.
     composable(route = ROUTE_HOMESCREEN) {
+      UgotHomeScreen(
+        onStartChat = {
+          val task =
+            modelManagerViewModel.getTaskById(BuiltInTaskId.LLM_CHAT)
+              ?: modelManagerViewModel.uiState.value.tasks.firstOrNull()
+          task?.let {
+            pickedTask = it
+            enableModelListAnimation = true
+            navController.navigate(ROUTE_MODEL_LIST)
+            firebaseAnalytics?.logEvent(
+              GalleryEvent.CAPABILITY_SELECT.id,
+              Bundle().apply { putString("capability_name", it.id) },
+            )
+          }
+        },
+        onOpenDeveloperGallery =
+          if (enableDeveloperGallery) {
+            { navController.navigate(ROUTE_DEVELOPER_HOME) }
+          } else {
+            null
+          },
+      )
+    }
+
+    composable(
+      route = ROUTE_DEVELOPER_HOME,
+      enterTransition = { slideEnter() },
+      exitTransition = { slideExit() },
+    ) {
       // Create a state to trigger PromoScreen fade in animation.
       val promoId = "gm4"
       Box(modifier = modifier.fillMaxSize()) {

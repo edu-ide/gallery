@@ -26,6 +26,7 @@ import com.google.ai.edge.gallery.AppLifecycleProvider
 import com.google.ai.edge.gallery.BuildConfig
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.common.ProjectConfig
+import com.google.ai.edge.gallery.common.UgotAuthConfig
 import com.google.ai.edge.gallery.common.getJsonResponse
 import com.google.ai.edge.gallery.customtasks.common.CustomTask
 import com.google.ai.edge.gallery.data.Accelerator
@@ -47,6 +48,8 @@ import com.google.ai.edge.gallery.data.RuntimeType
 import com.google.ai.edge.gallery.data.SOC
 import com.google.ai.edge.gallery.data.TMP_FILE_EXT
 import com.google.ai.edge.gallery.data.Task
+import com.google.ai.edge.gallery.data.UgotAuthStorage
+import com.google.ai.edge.gallery.data.UgotTokenStatusAndData
 import com.google.ai.edge.gallery.data.ValueType
 import com.google.ai.edge.gallery.data.createLlmChatConfigs
 import com.google.ai.edge.gallery.proto.AccessTokenData
@@ -57,6 +60,7 @@ import com.google.gson.JsonSyntaxException
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
+import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import javax.inject.Inject
@@ -66,6 +70,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import net.openid.appauth.AuthorizationException
 import net.openid.appauth.AuthorizationRequest
 import net.openid.appauth.AuthorizationResponse
@@ -78,6 +83,25 @@ private const val MODEL_ALLOWLIST_FILENAME = "model_allowlist.json"
 private const val MODEL_ALLOWLIST_TEST_FILENAME = "model_allowlist_test.json"
 private const val ALLOWLIST_BASE_URL =
   "https://raw.githubusercontent.com/google-ai-edge/gallery/refs/heads/main/model_allowlists"
+private val PREFERRED_CHAT_MODEL_NAMES =
+  listOf(
+    "Gemma-3n-E2B-it",
+    "Gemma-3n-E2B-it-int4",
+    "Gemma-3n-E4B-it",
+    "Gemma-3n-E4B-it-int4",
+    "Qwen2.5-1.5B-Instruct",
+    "Qwen2.5-1.5B-Instruct q8",
+  )
+private val PREFERRED_MOBILE_ACTIONS_MODEL_NAMES =
+  listOf(
+    "Gemma-3n-E2B-it",
+    "Gemma-3n-E2B-it-int4",
+    "Gemma-3n-E4B-it",
+    "Gemma-3n-E4B-it-int4",
+    "Gemma3-1B-IT",
+    "Gemma3-1B-IT q4",
+    "MobileActions-270M",
+  )
 
 private const val TEST_MODEL_ALLOW_LIST = ""
 
@@ -211,6 +235,14 @@ constructor(
     return uiState.value.tasks.filter { ids.contains(it.id) }
   }
 
+  fun getPreferredModelForTask(taskId: String): Model? {
+    val task = getTaskById(taskId) ?: return null
+    val preferredModelNames = getPreferredModelNamesForTask(taskId)
+    return task.models.find { model -> preferredModelNames.contains(model.name) }
+      ?: task.models.find { it.bestForTaskIds.contains(task.id) }
+      ?: task.models.firstOrNull()
+  }
+
   fun getCustomTaskByTaskId(id: String): CustomTask? {
     return getActiveCustomTasks().find { it.task.id == id }
   }
@@ -256,6 +288,12 @@ constructor(
     for (task in curTasks) {
       for (model in task.models) {
         model.preProcess()
+      }
+      val preferredModelNames = getPreferredModelNamesForTask(task.id)
+      val preferredModel = task.models.find { model -> preferredModelNames.contains(model.name) }
+      if (preferredModel != null) {
+        task.models.remove(preferredModel)
+        task.models.add(0, preferredModel)
       }
       // Move the model that is best for this task to the front.
       val bestModel = task.models.find { it.bestForTaskIds.contains(task.id) }
@@ -532,6 +570,15 @@ constructor(
     dataStoreRepository.saveTextInputHistory(_uiState.value.textInputHistory)
   }
 
+  private fun getPreferredModelNamesForTask(taskId: String): List<String> {
+    return when (taskId) {
+      BuiltInTaskId.LLM_CHAT,
+      BuiltInTaskId.LLM_PROMPT_LAB -> PREFERRED_CHAT_MODEL_NAMES
+      BuiltInTaskId.LLM_MOBILE_ACTIONS -> PREFERRED_MOBILE_ACTIONS_MODEL_NAMES
+      else -> emptyList()
+    }
+  }
+
   fun readThemeOverride(): Theme {
     return dataStoreRepository.readTheme()
   }
@@ -540,10 +587,11 @@ constructor(
     dataStoreRepository.saveTheme(theme = theme)
   }
 
-  fun getModelUrlResponse(model: Model, accessToken: String? = null): Int {
+  fun getModelUrlResponse(model: Model, accessToken: String? = null, overrideUrl: String? = null): Int {
     try {
-      val url = URL(model.url)
+      val url = URL(overrideUrl ?: model.url)
       val connection = url.openConnection() as HttpURLConnection
+      connection.requestMethod = "HEAD"
       if (accessToken != null) {
         connection.setRequestProperty("Authorization", "Bearer $accessToken")
       }
@@ -677,6 +725,17 @@ constructor(
       .build()
   }
 
+  fun getUgotAuthorizationRequest(): AuthorizationRequest {
+    return AuthorizationRequest.Builder(
+        UgotAuthConfig.authServiceConfig,
+        UgotAuthConfig.clientId,
+        ResponseTypeValues.CODE,
+        UgotAuthConfig.redirectUri.toUri(),
+      )
+      .setScope(UgotAuthConfig.scopes)
+      .build()
+  }
+
   fun handleAuthResult(result: ActivityResult, onTokenRequested: (TokenRequestResult) -> Unit) {
     val dataIntent = result.data
     if (dataIntent == null) {
@@ -748,6 +807,168 @@ constructor(
 
       else -> {
         onTokenRequested(TokenRequestResult(status = TokenRequestResultType.USER_CANCELLED))
+      }
+    }
+  }
+
+  fun handleUgotAuthResult(
+    result: ActivityResult,
+    onTokenRequested: (TokenRequestResult) -> Unit,
+  ) {
+    val dataIntent = result.data
+    if (dataIntent == null) {
+      onTokenRequested(
+        TokenRequestResult(
+          status = TokenRequestResultType.FAILED,
+          errorMessage = "Empty auth result",
+        )
+      )
+      return
+    }
+
+    val response = AuthorizationResponse.fromIntent(dataIntent)
+    val exception = AuthorizationException.fromIntent(dataIntent)
+
+    when {
+      response?.authorizationCode != null -> {
+        var errorMessage: String? = null
+        authService.performTokenRequest(response.createTokenExchangeRequest()) { tokenResponse, tokenEx ->
+          if (tokenResponse != null) {
+            val accessToken = tokenResponse.accessToken
+            if (accessToken.isNullOrBlank()) {
+              errorMessage = "Empty access token"
+            } else {
+              UgotAuthStorage.saveTokenData(
+                dataStoreRepository = dataStoreRepository,
+                accessToken = accessToken,
+                refreshToken = tokenResponse.refreshToken,
+                expiresAtMs = tokenResponse.accessTokenExpirationTime,
+              )
+            }
+          } else if (tokenEx != null) {
+            errorMessage = "Token exchange failed: ${tokenEx.message}"
+          } else {
+            errorMessage = "Token exchange failed"
+          }
+
+          if (errorMessage == null) {
+            onTokenRequested(TokenRequestResult(status = TokenRequestResultType.SUCCEEDED))
+          } else {
+            onTokenRequested(
+              TokenRequestResult(
+                status = TokenRequestResultType.FAILED,
+                errorMessage = errorMessage,
+              )
+            )
+          }
+        }
+      }
+
+      exception != null -> {
+        onTokenRequested(
+          TokenRequestResult(
+            status =
+              if (exception.message == "User cancelled flow") TokenRequestResultType.USER_CANCELLED
+              else TokenRequestResultType.FAILED,
+            errorMessage = exception.message,
+          )
+        )
+      }
+
+      else -> onTokenRequested(TokenRequestResult(status = TokenRequestResultType.USER_CANCELLED))
+    }
+  }
+
+  fun getUgotTokenStatusAndData(): UgotTokenStatusAndData {
+    return UgotAuthStorage.getTokenStatusAndData(dataStoreRepository)
+  }
+
+  fun getUgotAccessTokenOrNull(): String? {
+    return UgotAuthStorage.getValidAccessTokenOrNull(dataStoreRepository)
+  }
+
+  fun clearUgotAccessTokenData() {
+    UgotAuthStorage.clearTokenData(dataStoreRepository)
+  }
+
+  fun exchangeGoogleIdTokenForUgotTokens(
+    idToken: String,
+    onDone: (TokenRequestResult) -> Unit,
+  ) {
+    viewModelScope.launch(Dispatchers.IO) {
+      suspend fun finish(result: TokenRequestResult) {
+        withContext(Dispatchers.Main) { onDone(result) }
+      }
+
+      try {
+        val connection =
+          URL("${UgotAuthConfig.authServerBaseUrl}/oauth2/token").openConnection()
+            as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.doOutput = true
+        connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+
+        val body =
+          buildString {
+            append("grant_type=urn:ietf:params:oauth:grant-type:token-exchange")
+            append("&subject_token_type=urn:ietf:params:oauth:token-type:id_token")
+            append("&subject_token=${java.net.URLEncoder.encode(idToken, "UTF-8")}")
+            append("&client_id=${java.net.URLEncoder.encode(UgotAuthConfig.mobileClientId, "UTF-8")}")
+            append("&scope=${java.net.URLEncoder.encode(UgotAuthConfig.mobileScopes, "UTF-8")}")
+          }
+
+        OutputStreamWriter(connection.outputStream).use { writer ->
+          writer.write(body)
+          writer.flush()
+        }
+
+        val responseCode = connection.responseCode
+        val rawBody =
+          (if (responseCode in 200..299) connection.inputStream else connection.errorStream)
+            ?.bufferedReader()
+            ?.use { it.readText() }
+            .orEmpty()
+
+        if (responseCode !in 200..299) {
+          finish(
+            TokenRequestResult(
+              status = TokenRequestResultType.FAILED,
+              errorMessage = "Token exchange failed ($responseCode): $rawBody",
+            )
+          )
+          return@launch
+        }
+
+        val payload = Gson().fromJson(rawBody, Map::class.java)
+        val accessToken = payload["access_token"] as? String
+        val refreshToken = payload["refresh_token"] as? String
+        val expiresIn = (payload["expires_in"] as? Number)?.toLong()
+        if (accessToken.isNullOrBlank()) {
+          finish(
+            TokenRequestResult(
+              status = TokenRequestResultType.FAILED,
+              errorMessage = "Token exchange returned no access token",
+            )
+          )
+          return@launch
+        }
+
+        val expiresAtMs = expiresIn?.let { System.currentTimeMillis() + it * 1000 }
+        UgotAuthStorage.saveTokenData(
+          dataStoreRepository = dataStoreRepository,
+          accessToken = accessToken,
+          refreshToken = refreshToken,
+          expiresAtMs = expiresAtMs,
+        )
+
+        finish(TokenRequestResult(status = TokenRequestResultType.SUCCEEDED))
+      } catch (e: Exception) {
+        finish(
+          TokenRequestResult(
+            status = TokenRequestResultType.FAILED,
+            errorMessage = e.message ?: "Token exchange failed",
+          )
+        )
       }
     }
   }
@@ -829,24 +1050,34 @@ constructor(
 
         if (modelAllowlist == null) {
           // Load from github.
-          var version = BuildConfig.VERSION_NAME.replace(".", "_")
-          val url = getAllowlistUrl(version)
-          Log.d(TAG, "Loading model allowlist from internet. Url: $url")
-          val data = getJsonResponse<ModelAllowlist>(url = url)
-          modelAllowlist = data?.jsonObj
+          val allowlistVersions = getAllowlistVersionCandidates(BuildConfig.VERSION_NAME)
+          var loadedAllowlistContent: String? = null
+          for (version in allowlistVersions) {
+            val url = getAllowlistUrl(version)
+            Log.d(TAG, "Loading model allowlist from internet. Url: $url")
+            val data = getJsonResponse<ModelAllowlist>(url = url)
+            modelAllowlist = data?.jsonObj
+            if (modelAllowlist != null) {
+              loadedAllowlistContent = data?.textContent
+              Log.d(TAG, "Done: loading model allowlist from internet, version=$version")
+              break
+            }
+          }
 
           if (modelAllowlist == null) {
             Log.w(TAG, "Failed to load model allowlist from internet. Trying to load it from disk")
             modelAllowlist = readModelAllowlistFromDisk()
           } else {
-            Log.d(TAG, "Done: loading model allowlist from internet")
-            saveModelAllowlistToDisk(modelAllowlistContent = data?.textContent ?: "{}")
+            saveModelAllowlistToDisk(modelAllowlistContent = loadedAllowlistContent ?: "{}")
           }
         }
 
         if (modelAllowlist == null) {
           _uiState.update {
-            uiState.value.copy(loadingModelAllowlistError = "Failed to load model list")
+            uiState.value.copy(
+              loadingModelAllowlist = false,
+              loadingModelAllowlistError = "Failed to load model list",
+            )
           }
           return@launch
         }
@@ -921,6 +1152,12 @@ constructor(
         processPendingDownloads()
       } catch (e: Exception) {
         e.printStackTrace()
+        _uiState.update {
+          uiState.value.copy(
+            loadingModelAllowlist = false,
+            loadingModelAllowlistError = e.message ?: "Failed to load model list",
+          )
+        }
       }
     }
   }
@@ -1322,4 +1559,20 @@ constructor(
 
 private fun getAllowlistUrl(version: String): String {
   return "$ALLOWLIST_BASE_URL/${version}.json"
+}
+
+private fun getAllowlistVersionCandidates(versionName: String): List<String> {
+  val parsed = versionName.split(".").mapNotNull { it.toIntOrNull() }
+  if (parsed.size != 3) {
+    return listOf(versionName.replace(".", "_"))
+  }
+
+  val major = parsed[0]
+  val minor = parsed[1]
+  val patch = parsed[2]
+  return buildList {
+    for (candidatePatch in patch downTo 0) {
+      add("${major}_${minor}_${candidatePatch}")
+    }
+  }
 }

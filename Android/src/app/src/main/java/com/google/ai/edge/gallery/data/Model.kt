@@ -254,6 +254,7 @@ data class Model(
   var prevConfigValues: Map<String, Any> = mapOf(),
   var totalBytes: Long = 0L,
   var accessToken: String? = null,
+  var downloadUrlOverride: String = "",
 ) {
   init {
     normalizedName = NORMALIZE_NAME_REGEX.replace(name, "_")

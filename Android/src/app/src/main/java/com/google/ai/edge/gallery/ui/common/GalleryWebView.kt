@@ -96,6 +96,8 @@ open class BaseGalleryWebViewClient(private val context: Context) : WebViewClien
 fun GalleryWebView(
   modifier: Modifier = Modifier,
   initialUrl: String? = null,
+  initialHtml: String? = null,
+  htmlBaseUrl: String? = null,
   useIframeWrapper: Boolean = false,
   preventParentScrolling: Boolean = false,
   allowRequestPermission: Boolean = false,
@@ -218,14 +220,31 @@ fun GalleryWebView(
 
         webViewClient = curWebViewClient
 
+        onWebViewCreated?.invoke(this)
         initialUrl?.let { url ->
-          if (useIframeWrapper) {
-            loadDataWithBaseURL(null, iframeWrapper.replace("___", url), "text/html", "UTF-8", null)
-          } else {
-            loadUrl(url)
+          if (initialHtml == null) {
+            if (useIframeWrapper) {
+              loadDataWithBaseURL(
+                null,
+                iframeWrapper.replace("___", url),
+                "text/html",
+                "UTF-8",
+                null,
+              )
+            } else {
+              loadUrl(url)
+            }
           }
         }
-        onWebViewCreated?.invoke(this)
+        initialHtml?.let { html ->
+          loadDataWithBaseURL(
+            htmlBaseUrl,
+            html,
+            "text/html",
+            "UTF-8",
+            null,
+          )
+        }
       }
     },
     onRelease = { webView ->
