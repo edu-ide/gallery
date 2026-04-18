@@ -1,0 +1,9 @@
+appId: com.ugot.chat
+---
+- extendedWaitUntil:
+    visible: "UGOT Fortune"
+    timeout: 20000
+- assertVisible: "UGOT Fortune"
+- assertVisible: "Connectors"
+- assertVisible: "Open"
+- takeScreenshot: signed-in-deeplink

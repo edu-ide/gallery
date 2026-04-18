@@ -1,0 +1,7 @@
+appId: com.ugot.chat
+---
+- launchApp:
+    clearState: true
+- assertVisible: "Sign in to UGOT Chat"
+- assertVisible: "Continue with Google"
+- takeScreenshot: signed-out-auth-gate

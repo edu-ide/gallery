@@ -1,5 +1,11 @@
 # Development notes
 
+## Unified Chat Boundary
+
+- Keep `GalleryNavGraph`, `LlmChatScreen`, `ChatView`, `ChatPanel`, and `MessageInputText` additive.
+- Add product logic under `ui/unifiedchat/*` or wrapper-specific custom task files when slot wiring is not enough.
+- Do not introduce connector-specific behavior directly inside upstream hot files unless the change is only slot wiring or generic host-state plumbing.
+
 ## Build app locally
 
 To successfully build and run the application through Android Studio, you need to configure it with your own HuggingFace Developer Application ([official doc](https://huggingface.co/docs/hub/oauth#creating-an-oauth-app)). This is required for the model download functionality to work correctly.
