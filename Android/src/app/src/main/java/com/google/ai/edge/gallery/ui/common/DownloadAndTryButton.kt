@@ -80,6 +80,7 @@ import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.ModelDownloadStatusType
 import com.google.ai.edge.gallery.data.RuntimeType
 import com.google.ai.edge.gallery.data.Task
+import com.google.ai.edge.gallery.ui.auth.rememberUgotNativeGoogleSignInLauncher
 import com.google.ai.edge.gallery.ui.common.tos.GemmaTermsOfUseDialog
 import com.google.ai.edge.gallery.ui.common.tos.TosViewModel
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
@@ -95,6 +96,38 @@ private const val SYSTEM_RESERVED_MEMORY_IN_BYTES = 3 * (1L shl 30)
 
 private val MODEL_NAMES_TO_SHOW_GEMMA_LICENSES =
   setOf("Gemma-3n-E2B-it", "Gemma-3n-E4B-it", "Gemma3-1B-IT")
+
+internal enum class DownloadErrorDialogAction {
+  DISMISS,
+  REAUTHENTICATE_UGOT,
+}
+
+internal data class DownloadErrorDialogState(
+  val title: String,
+  val message: String,
+  val confirmLabel: String = "Close",
+  val action: DownloadErrorDialogAction = DownloadErrorDialogAction.DISMISS,
+)
+
+internal fun createDownloadErrorDialogState(
+  responseCode: Int,
+  usedUgotProxy: Boolean,
+): DownloadErrorDialogState {
+  if (usedUgotProxy && responseCode == HttpURLConnection.HTTP_UNAUTHORIZED) {
+    return DownloadErrorDialogState(
+      title = "UGOT sign-in required",
+      message =
+        "Your UGOT session was rejected by the model download proxy. Continue with Google to sign in again and retry the download.",
+      confirmLabel = "Continue with Google",
+      action = DownloadErrorDialogAction.REAUTHENTICATE_UGOT,
+    )
+  }
+
+  return DownloadErrorDialogState(
+    title = "Unknown network error",
+    message = "Please check your internet connection.",
+  )
+}
 
 /**
  * Handles the "Download & Try it" button click, managing the model download process based on
@@ -143,7 +176,7 @@ fun DownloadAndTryButton(
   val context = LocalContext.current
   var checkingToken by remember { mutableStateOf(false) }
   var showAgreementAckSheet by remember { mutableStateOf(false) }
-  var showErrorDialog by remember { mutableStateOf(false) }
+  var errorDialogState by remember { mutableStateOf<DownloadErrorDialogState?>(null) }
   var showMemoryWarning by remember { mutableStateOf(false) }
   var showGemmaTermsOfUseDialog by remember { mutableStateOf(false) }
   var downloadStarted by remember { mutableStateOf(false) }
@@ -251,6 +284,26 @@ fun DownloadAndTryButton(
     authResultLauncher.launch(authIntent)
   }
 
+  val startUgotNativeSignIn =
+    rememberUgotNativeGoogleSignInLauncher(
+      modelManagerViewModel = modelManagerViewModel,
+      onStarted = { errorDialogState = null },
+    ) { tokenResult ->
+      when (tokenResult.status) {
+        TokenRequestResultType.SUCCEEDED -> {
+          errorDialogState = null
+        }
+        TokenRequestResultType.FAILED -> {
+          errorDialogState =
+            DownloadErrorDialogState(
+              title = "UGOT sign-in failed",
+              message = tokenResult.errorMessage ?: "Continue with Google to sign in again.",
+            )
+        }
+        TokenRequestResultType.USER_CANCELLED -> Unit
+      }
+    }
+
   // Launches a coroutine to handle the initial check and potential authentication flow
   // before downloading the model. It checks if the model needs to be downloaded first,
   // handles HuggingFace URLs by verifying the need for authentication, and initiates
@@ -282,11 +335,18 @@ fun DownloadAndTryButton(
             }
             checkingToken = false
             downloadStarted = false
+            if (proxyResponseCode == HttpURLConnection.HTTP_UNAUTHORIZED) {
+              modelManagerViewModel.clearUgotAccessTokenData()
+            }
             Log.e(
               TAG,
               "UGOT HuggingFace proxy is not accessible for '${model.name}'. Response code: $proxyResponseCode",
             )
-            showErrorDialog = true
+            errorDialogState =
+              createDownloadErrorDialogState(
+                responseCode = proxyResponseCode,
+                usedUgotProxy = true,
+              )
             return@launch
           }
           checkingToken = true
@@ -306,7 +366,11 @@ fun DownloadAndTryButton(
             checkingToken = false
             downloadStarted = false
             Log.e(TAG, "Unknown network error")
-            showErrorDialog = true
+            errorDialogState =
+              createDownloadErrorDialogState(
+                responseCode = firstResponseCode,
+                usedUgotProxy = false,
+              )
             return@launch
           }
           Log.d(TAG, "Model '${model.name}' needs auth. Start token exchange process...")
@@ -575,7 +639,7 @@ fun DownloadAndTryButton(
     }
   }
 
-  if (showErrorDialog) {
+  errorDialogState?.let { state ->
     AlertDialog(
       icon = {
         Icon(
@@ -584,10 +648,32 @@ fun DownloadAndTryButton(
           tint = MaterialTheme.colorScheme.error,
         )
       },
-      title = { Text("Unknown network error") },
-      text = { Text("Please check your internet connection.") },
-      onDismissRequest = { showErrorDialog = false },
-      confirmButton = { TextButton(onClick = { showErrorDialog = false }) { Text("Close") } },
+      title = { Text(state.title) },
+      text = { Text(state.message) },
+      onDismissRequest = { errorDialogState = null },
+      confirmButton = {
+        TextButton(
+          onClick = {
+            when (state.action) {
+              DownloadErrorDialogAction.DISMISS -> {
+                errorDialogState = null
+              }
+              DownloadErrorDialogAction.REAUTHENTICATE_UGOT -> {
+                errorDialogState = null
+                startUgotNativeSignIn()
+              }
+            }
+          }
+        ) {
+          Text(state.confirmLabel)
+        }
+      },
+      dismissButton =
+        if (state.action == DownloadErrorDialogAction.REAUTHENTICATE_UGOT) {
+          { TextButton(onClick = { errorDialogState = null }) { Text("Close") } }
+        } else {
+          null
+        },
     )
   }
 

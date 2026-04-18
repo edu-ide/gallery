@@ -1,11 +1,5 @@
 package com.google.ai.edge.gallery.ui.auth
 
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.credentials.CredentialManager
-import androidx.credentials.CustomCredential
-import androidx.credentials.GetCredentialRequest
-import androidx.credentials.exceptions.GetCredentialException
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,7 +11,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -29,21 +22,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.google.ai.edge.gallery.R
-import com.google.ai.edge.gallery.common.UgotAuthConfig
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.gallery.ui.modelmanager.TokenRequestResultType
-import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
-import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
-import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
-import java.util.UUID
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 
 @Composable
 fun UgotLoginScreen(
@@ -53,34 +37,26 @@ fun UgotLoginScreen(
 ) {
   var loggingIn by remember { mutableStateOf(false) }
   var errorMessage by remember { mutableStateOf<String?>(null) }
-  val context = LocalContext.current
-  val scope = remember { CoroutineScope(Dispatchers.Main) }
-  val credentialManager = remember(context) { CredentialManager.create(context) }
-
-  val authResultLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-      modelManagerViewModel.handleUgotAuthResult(result) { tokenResult ->
-        loggingIn = false
-        when (tokenResult.status) {
-          TokenRequestResultType.SUCCEEDED -> {
-            errorMessage = null
-            onLoginSuccess()
-          }
-          TokenRequestResultType.FAILED -> {
-            errorMessage = tokenResult.errorMessage ?: "Sign-in failed"
-          }
-          TokenRequestResultType.USER_CANCELLED -> Unit
+  val startNativeSignIn =
+    rememberUgotNativeGoogleSignInLauncher(
+      modelManagerViewModel = modelManagerViewModel,
+      onStarted = {
+        loggingIn = true
+        errorMessage = null
+      },
+    ) { tokenResult ->
+      loggingIn = false
+      when (tokenResult.status) {
+        TokenRequestResultType.SUCCEEDED -> {
+          errorMessage = null
+          onLoginSuccess()
         }
+        TokenRequestResultType.FAILED -> {
+          errorMessage = tokenResult.errorMessage ?: "Google sign-in failed"
+        }
+        TokenRequestResultType.USER_CANCELLED -> Unit
       }
     }
-
-  fun launchBrowserFallback() {
-    loggingIn = true
-    errorMessage = null
-    val request = modelManagerViewModel.getUgotAuthorizationRequest()
-    val intent = modelManagerViewModel.authService.getAuthorizationRequestIntent(request)
-    authResultLauncher.launch(intent)
-  }
 
   Box(
     modifier =
@@ -126,55 +102,7 @@ fun UgotLoginScreen(
           )
         }
         Button(
-          onClick = {
-            loggingIn = true
-            errorMessage = null
-            scope.launch {
-              try {
-                val googleOption =
-                  GetSignInWithGoogleOption.Builder(UgotAuthConfig.googleServerClientId)
-                    .setNonce(UUID.randomUUID().toString())
-                    .build()
-                val request =
-                  GetCredentialRequest.Builder()
-                    .addCredentialOption(googleOption)
-                    .build()
-                val result = credentialManager.getCredential(context, request)
-                val credential = result.credential
-                if (
-                  credential is CustomCredential &&
-                    credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
-                ) {
-                  val googleCredential = GoogleIdTokenCredential.createFrom(credential.data)
-                  modelManagerViewModel.exchangeGoogleIdTokenForUgotTokens(googleCredential.idToken) { tokenResult ->
-                    loggingIn = false
-                    when (tokenResult.status) {
-                      TokenRequestResultType.SUCCEEDED -> {
-                        errorMessage = null
-                        onLoginSuccess()
-                      }
-                      TokenRequestResultType.FAILED -> {
-                        errorMessage = tokenResult.errorMessage ?: "Google sign-in failed"
-                      }
-                      TokenRequestResultType.USER_CANCELLED -> Unit
-                    }
-                  }
-                } else {
-                  loggingIn = false
-                  errorMessage = "Google sign-in was not available on this device"
-                }
-              } catch (e: GoogleIdTokenParsingException) {
-                loggingIn = false
-                errorMessage = e.message ?: "Failed to parse Google token"
-              } catch (e: GetCredentialException) {
-                loggingIn = false
-                errorMessage = e.message ?: "Native sign-in failed"
-              } catch (e: Exception) {
-                loggingIn = false
-                errorMessage = e.message ?: "Native sign-in failed"
-              }
-            }
-          },
+          onClick = startNativeSignIn,
           enabled = !loggingIn,
           modifier = Modifier.fillMaxWidth(),
           shape = RoundedCornerShape(18.dp),
@@ -187,14 +115,6 @@ fun UgotLoginScreen(
           } else {
             Text(stringResource(R.string.ugot_login_button))
           }
-        }
-        OutlinedButton(
-          onClick = { launchBrowserFallback() },
-          enabled = !loggingIn,
-          modifier = Modifier.fillMaxWidth(),
-          shape = RoundedCornerShape(18.dp),
-        ) {
-          Text(stringResource(R.string.ugot_login_browser_fallback))
         }
       }
     }

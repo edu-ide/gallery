@@ -23,12 +23,12 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.edit
-import androidx.core.net.toUri
 import androidx.core.os.bundleOf
 import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
@@ -47,6 +47,8 @@ import java.util.concurrent.Executors
 private const val TAG = "AGDownloadRepository"
 private const val MODEL_NAME_TAG = "modelName"
 private const val TASK_ID_TAG = "taskId"
+private const val GLOBAL_MODEL_MANAGER_HOST = "global_model_manager"
+private const val MODEL_HOST = "model"
 
 data class AGWorkInfo(val taskId: String, val modelName: String, val workId: String)
 
@@ -83,6 +85,12 @@ class DefaultDownloadRepository(
   private val lifecycleProvider: AppLifecycleProvider,
 ) : DownloadRepository {
   private val workManager = WorkManager.getInstance(context)
+
+  private fun createAppDeepLink(host: String, vararg pathSegments: String): Uri =
+    Uri.Builder().scheme(context.packageName).authority(host).apply {
+      pathSegments.forEach(::appendPath)
+    }.build()
+
   /**
    * Stores the start time of a model download.
    *
@@ -296,18 +304,15 @@ class DefaultDownloadRepository(
     }
     // Download from global model manager. Open the global model manager screen.
     else if (taskId == DOWNLOAD_FROM_GLOBAL_MODEL_MANAGER_TASK_ID) {
-      intent =
-        Intent(Intent.ACTION_VIEW, "com.google.ai.edge.gallery://global_model_manager".toUri())
-          .apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }
+      intent = Intent(Intent.ACTION_VIEW, createAppDeepLink(GLOBAL_MODEL_MANAGER_HOST)).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+      }
     } else {
-
-      // Otherwise, create the deep link as before.
       intent =
         Intent(
-            Intent.ACTION_VIEW,
-            "com.google.ai.edge.gallery://model/$taskId/${modelName}".toUri(),
-          )
-          .apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }
+          Intent.ACTION_VIEW,
+          createAppDeepLink(MODEL_HOST, taskId, modelName),
+        ).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }
     }
 
     // Create a PendingIntent

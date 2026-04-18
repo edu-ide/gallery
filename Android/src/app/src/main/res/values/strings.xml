@@ -189,7 +189,6 @@
   <string name="ugot_login_title" translatable="false">Sign in to UGOT Chat</string>
   <string name="ugot_login_subtitle" translatable="false">Use native Google sign-in and exchange the Google ID token for a UGOT session you can reuse across chat and MCP-powered tools.</string>
   <string name="ugot_login_button" translatable="false">Continue with Google</string>
-  <string name="ugot_login_browser_fallback" translatable="false">Use browser sign-in instead</string>
   <string name="tos_dialog_title_gemma" translatable="false">Gemma Terms of Use</string>
   <string name="tos_dialog_accept_and_continue_button_label" translatable="false">Accept &amp; continue</string>
   <string name="tos_dialog_agree_and_continue_button_label" translatable="false">Agree &amp; continue</string>

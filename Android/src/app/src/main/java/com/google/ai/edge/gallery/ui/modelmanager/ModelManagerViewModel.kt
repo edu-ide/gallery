@@ -790,17 +790,6 @@ constructor(
       .build()
   }
 
-  fun getUgotAuthorizationRequest(): AuthorizationRequest {
-    return AuthorizationRequest.Builder(
-        UgotAuthConfig.authServiceConfig,
-        UgotAuthConfig.clientId,
-        ResponseTypeValues.CODE,
-        UgotAuthConfig.redirectUri.toUri(),
-      )
-      .setScope(UgotAuthConfig.scopes)
-      .build()
-  }
-
   fun handleAuthResult(result: ActivityResult, onTokenRequested: (TokenRequestResult) -> Unit) {
     val dataIntent = result.data
     if (dataIntent == null) {
@@ -873,74 +862,6 @@ constructor(
       else -> {
         onTokenRequested(TokenRequestResult(status = TokenRequestResultType.USER_CANCELLED))
       }
-    }
-  }
-
-  fun handleUgotAuthResult(
-    result: ActivityResult,
-    onTokenRequested: (TokenRequestResult) -> Unit,
-  ) {
-    val dataIntent = result.data
-    if (dataIntent == null) {
-      onTokenRequested(
-        TokenRequestResult(
-          status = TokenRequestResultType.FAILED,
-          errorMessage = "Empty auth result",
-        )
-      )
-      return
-    }
-
-    val response = AuthorizationResponse.fromIntent(dataIntent)
-    val exception = AuthorizationException.fromIntent(dataIntent)
-
-    when {
-      response?.authorizationCode != null -> {
-        var errorMessage: String? = null
-        authService.performTokenRequest(response.createTokenExchangeRequest()) { tokenResponse, tokenEx ->
-          if (tokenResponse != null) {
-            val accessToken = tokenResponse.accessToken
-            if (accessToken.isNullOrBlank()) {
-              errorMessage = "Empty access token"
-            } else {
-              UgotAuthStorage.saveTokenData(
-                dataStoreRepository = dataStoreRepository,
-                accessToken = accessToken,
-                refreshToken = tokenResponse.refreshToken,
-                expiresAtMs = tokenResponse.accessTokenExpirationTime,
-              )
-            }
-          } else if (tokenEx != null) {
-            errorMessage = "Token exchange failed: ${tokenEx.message}"
-          } else {
-            errorMessage = "Token exchange failed"
-          }
-
-          if (errorMessage == null) {
-            onTokenRequested(TokenRequestResult(status = TokenRequestResultType.SUCCEEDED))
-          } else {
-            onTokenRequested(
-              TokenRequestResult(
-                status = TokenRequestResultType.FAILED,
-                errorMessage = errorMessage,
-              )
-            )
-          }
-        }
-      }
-
-      exception != null -> {
-        onTokenRequested(
-          TokenRequestResult(
-            status =
-              if (exception.message == "User cancelled flow") TokenRequestResultType.USER_CANCELLED
-              else TokenRequestResultType.FAILED,
-            errorMessage = exception.message,
-          )
-        )
-      }
-
-      else -> onTokenRequested(TokenRequestResult(status = TokenRequestResultType.USER_CANCELLED))
     }
   }
 
