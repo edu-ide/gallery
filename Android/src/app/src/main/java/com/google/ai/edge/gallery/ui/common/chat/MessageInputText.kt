@@ -174,6 +174,7 @@ fun MessageInputText(
   showAudioPicker: Boolean = false,
   showStopButtonWhenInProgress: Boolean = false,
   onImageLimitExceeded: () -> Unit = {},
+  extraTopContent: (@Composable () -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val lifecycleOwner = LocalLifecycleOwner.current
@@ -305,6 +306,8 @@ fun MessageInputText(
   }
 
   Column {
+    extraTopContent?.invoke()
+
     // A preview panel for the selected images and audio clips.
     if (pickedImages.isNotEmpty() || pickedAudioClips.isNotEmpty()) {
       Row(
