@@ -76,6 +76,29 @@ class UnifiedChatCapabilityRegistryTest {
   }
 
   @Test
+  fun resolveActiveCapabilities_appliesModelCapabilityPolicyBeforeProviderHints() {
+    val textOnlyModel = Model(name = "Gemma 4", displayName = "Gemma 4")
+
+    val result =
+      UnifiedChatCapabilityRegistry(
+        providers =
+          mapOf(
+            UnifiedChatCapability.IMAGE to UnifiedChatCapabilityProvider { _, hint -> hint.activateImage },
+            UnifiedChatCapability.AUDIO to UnifiedChatCapabilityProvider { _, hint -> hint.activateAudio },
+          )
+      ).resolve(
+        model = textOnlyModel,
+        entryHint =
+          UnifiedChatEntryHint(
+            activateImage = true,
+            activateAudio = true,
+          ),
+      )
+
+    assertEquals(setOf(UnifiedChatCapability.TEXT), result.enabledCapabilities)
+  }
+
+  @Test
   fun supportsUnifiedChatCapability_usesExplicitCapabilityPolicy() {
     val textOnlyModel = Model(name = "Gemma 4", displayName = "Gemma 4")
     val multimodalModel =

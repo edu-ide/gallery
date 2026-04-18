@@ -24,7 +24,9 @@ class UnifiedChatCapabilityRegistry(
   fun resolve(model: Model, entryHint: UnifiedChatEntryHint): UnifiedChatCapabilityResolution {
     val enabled =
       providers.entries
-        .filter { (_, provider) -> provider.isEnabled(model, entryHint) }
+        .filter { (capability, provider) ->
+          model.supportsUnifiedChatCapability(capability) && provider.isEnabled(model, entryHint)
+        }
         .map { it.key }
         .toSet()
     val enabledCapabilities = enabled + UnifiedChatCapability.TEXT
