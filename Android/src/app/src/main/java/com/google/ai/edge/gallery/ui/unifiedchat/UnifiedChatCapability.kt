@@ -42,3 +42,22 @@ internal fun Model.supportsUnifiedChatCapability(
     UnifiedChatCapability.AUDIO -> llmSupportAudio
   }
 }
+
+internal fun recommendCompatibleModelFromPools(
+  currentTaskModels: List<Model>,
+  unifiedChatModels: List<Model>,
+  requiredCapability: UnifiedChatCapability,
+): Model? {
+  val dedupedModelPool =
+    buildList {
+      addAll(currentTaskModels)
+      unifiedChatModels.forEach { candidate ->
+        if (currentTaskModels.none { existing -> existing.name == candidate.name }) {
+          add(candidate)
+        }
+      }
+    }
+  return dedupedModelPool.firstOrNull { model ->
+    model.supportsUnifiedChatCapability(requiredCapability)
+  }
+}

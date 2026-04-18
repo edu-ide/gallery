@@ -58,7 +58,7 @@ import com.google.ai.edge.gallery.proto.ImportedModel
 import com.google.ai.edge.gallery.proto.Theme
 import com.google.ai.edge.gallery.runtime.aicore.AICoreModelHelper
 import com.google.ai.edge.gallery.ui.unifiedchat.UnifiedChatCapability
-import com.google.ai.edge.gallery.ui.unifiedchat.supportsUnifiedChatCapability
+import com.google.ai.edge.gallery.ui.unifiedchat.recommendCompatibleModelFromPools
 import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -255,9 +255,11 @@ constructor(
     requiredCapability: UnifiedChatCapability,
     currentTaskId: String,
   ): Model? {
-    return getTaskById(currentTaskId)?.models?.firstOrNull { model ->
-      model.supportsUnifiedChatCapability(requiredCapability)
-    }
+    return recommendCompatibleModelFromPools(
+      currentTaskModels = getTaskById(currentTaskId)?.models.orEmpty(),
+      unifiedChatModels = getTaskById(BuiltInTaskId.LLM_CHAT)?.models.orEmpty(),
+      requiredCapability = requiredCapability,
+    )
   }
 
   fun getCustomTaskByTaskId(id: String): CustomTask? {

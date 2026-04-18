@@ -117,4 +117,29 @@ class UnifiedChatCapabilityRegistryTest {
     assertEquals(true, multimodalModel.supportsUnifiedChatCapability(UnifiedChatCapability.IMAGE))
     assertEquals(true, multimodalModel.supportsUnifiedChatCapability(UnifiedChatCapability.AUDIO))
   }
+
+  @Test
+  fun recommendCompatibleModelFromPools_fallsBackToUnifiedChatModels() {
+    val imageOnlyTaskModel =
+      Model(
+        name = "Gemma 4 image",
+        displayName = "Gemma 4 image",
+        llmSupportImage = true,
+      )
+    val audioCapableChatModel =
+      Model(
+        name = "Gemma 4 audio",
+        displayName = "Gemma 4 audio",
+        llmSupportAudio = true,
+      )
+
+    val selected =
+      recommendCompatibleModelFromPools(
+        currentTaskModels = listOf(imageOnlyTaskModel),
+        unifiedChatModels = listOf(imageOnlyTaskModel, audioCapableChatModel),
+        requiredCapability = UnifiedChatCapability.AUDIO,
+      )
+
+    assertEquals(audioCapableChatModel, selected)
+  }
 }
