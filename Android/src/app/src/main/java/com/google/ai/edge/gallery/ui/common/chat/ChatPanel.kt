@@ -93,6 +93,8 @@ import com.google.ai.edge.gallery.ui.common.AudioAnimation
 import com.google.ai.edge.gallery.ui.common.ErrorDialog
 import com.google.ai.edge.gallery.ui.common.FloatingBanner
 import com.google.ai.edge.gallery.ui.common.RotationalLoader
+import com.google.ai.edge.gallery.ui.unifiedchat.messages.ChatMessageMcpWidgetCard
+import com.google.ai.edge.gallery.ui.unifiedchat.messages.MessageBodyMcpWidgetCard
 import com.google.ai.edge.gallery.ui.modelmanager.ModelInitializationStatusType
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.gallery.ui.theme.customColors
@@ -426,6 +428,14 @@ fun ChatPanel(
 
                       // Webview.
                       is ChatMessageWebView -> MessageBodyWebview(message = message)
+
+                      // MCP widget card.
+                      is ChatMessageMcpWidgetCard ->
+                        MessageBodyMcpWidgetCard(
+                          message = message,
+                          onExpandClicked = {},
+                          onResumeClicked = {},
+                        )
 
                       // Collapsable progress panel.
                       is ChatMessageCollapsableProgressPanel ->

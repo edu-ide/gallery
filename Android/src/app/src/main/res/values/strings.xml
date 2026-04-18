@@ -81,6 +81,8 @@
   <string name="continue_button_label" translatable="false">Continue</string>
   <string name="conversation_history" translatable="false">Conversation History</string>
   <string name="copy" translatable="false">Copy</string>
+  <string name="mcp_widget_card_open" translatable="false">Open</string>
+  <string name="mcp_widget_card_fullscreen" translatable="false">Fullscreen</string>
   <string name="create" translatable="false">Create</string>
   <string name="delete" translatable="false">Delete</string>
   <string name="description_required" translatable="false">Description*</string>
