@@ -110,6 +110,7 @@ fun ChatView(
   composableBelowMessageList: @Composable (Model) -> Unit = {},
   showImagePicker: Boolean = false,
   showAudioPicker: Boolean = false,
+  showStandaloneAudioRecordButtonInComposer: Boolean = false,
   emptyStateComposable: @Composable (Model) -> Unit = {},
   allowEditingSystemPrompt: Boolean = false,
   curSystemPrompt: String = "",
@@ -117,6 +118,7 @@ fun ChatView(
   sendMessageTrigger: SendMessageTrigger? = null,
   connectorBarContent: (@Composable () -> Unit)? = null,
   showTopBar: Boolean = true,
+  selectedModelOverride: Model? = null,
   showConversationHistoryButton: Boolean = false,
   mcpWidgetHostState: McpWidgetHostState? = null,
   mcpUiSession: McpWidgetSessionHost? = null,
@@ -134,7 +136,7 @@ fun ChatView(
 ) {
   val uiState by viewModel.uiState.collectAsState()
   val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
-  val selectedModel = modelManagerUiState.selectedModel
+  val selectedModel = selectedModelOverride ?: modelManagerUiState.selectedModel
   val activeMcpWidgetSnapshot = mcpWidgetHostState?.activeSnapshot
 
   // Image viewer related.
@@ -274,6 +276,8 @@ fun ChatView(
                   showStopButtonInInputWhenInProgress = showStopButtonInInputWhenInProgress,
                   showImagePicker = showImagePicker,
                   showAudioPicker = showAudioPicker,
+                  showStandaloneAudioRecordButtonInComposer =
+                    showStandaloneAudioRecordButtonInComposer,
                   emptyStateComposable = emptyStateComposable,
                   connectorBarContent = connectorBarContent,
                   onMcpWidgetResumeClicked = { message ->

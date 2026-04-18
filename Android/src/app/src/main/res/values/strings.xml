@@ -33,7 +33,7 @@
   <string name="askimage_emptystate_content" translatable="false">To get started, tap the + below to add an image (max 10 images per chat) and type a prompt to ask a question about it!</string>
   <string name="askimage_emptystate_content_aicore" translatable="false">To get started, tap the + below to add an image (max 1 image per chat) and type a prompt to ask a question about it!</string>
   <string name="askaudio_emptystate_title" translatable="false">Ask Audio</string>
-  <string name="askaudio_emptystate_content" translatable="false">To get started, tap the + below to add a audio clip (limited to 1 clip up to 30 seconds) and type a prompt to transcribe or translate it!</string>
+  <string name="askaudio_emptystate_content" translatable="false">To get started, tap the mic below to record an audio clip, or use + to attach one, then type a prompt to transcribe or translate it.</string>
   <string name="gallery_news_notification_title" translatable="false">Gallery News</string>
   <string name="baseline" translatable="false">Baseline</string>
   <string name="basic_info" translatable="false">Basic info</string>
@@ -106,6 +106,7 @@
   <string name="generate_and_copy" translatable="false">Generate and copy</string>
   <string name="grant_permissions" translatable="false">Grant permissions</string>
   <string name="grant_record_audio_permission" translatable="false">Grant record audio permission</string>
+  <string name="cd_record_audio_icon">Record audio</string>
   <string name="hold_down_to_talk" translatable="false">Hold to talk</string>
   <string name="input_history" translatable="false">Input history</string>
   <string name="instructions" translatable="false">Instructions</string>

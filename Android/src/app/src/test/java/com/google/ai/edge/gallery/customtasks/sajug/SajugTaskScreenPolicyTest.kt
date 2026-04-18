@@ -1,5 +1,6 @@
 package com.google.ai.edge.gallery.customtasks.sajug
 
+import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageText
 import com.google.ai.edge.gallery.ui.common.chat.ChatSide
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSnapshot
@@ -102,5 +103,37 @@ class SajugTaskScreenPolicyTest {
 
     assertEquals(1, mutation.replaceIndex)
     assertEquals("Updated after running show_today_fortune.", mutation.card.summary)
+  }
+
+  @Test
+  fun resolveFortuneChatModel_prefersUnifiedChatModelWhenRouteStillUsesRuntimeHost() {
+    val routeModel = Model(name = "UGOT Fortune MCP Runtime")
+    val currentSelectedModel = Model(name = routeModel.name)
+    val preferredChatModel = Model(name = "Gemma 4")
+
+    val resolved =
+      resolveFortuneChatModel(
+        routeModel = routeModel,
+        currentSelectedModel = currentSelectedModel,
+        preferredUnifiedChatModel = preferredChatModel,
+      )
+
+    assertEquals("Gemma 4", resolved.name)
+  }
+
+  @Test
+  fun resolveFortuneChatModel_keepsUserSelectedUnifiedChatModelOnceTheySwitch() {
+    val routeModel = Model(name = "UGOT Fortune MCP Runtime")
+    val currentSelectedModel = Model(name = "Gemma 3n")
+    val preferredChatModel = Model(name = "Gemma 4")
+
+    val resolved =
+      resolveFortuneChatModel(
+        routeModel = routeModel,
+        currentSelectedModel = currentSelectedModel,
+        preferredUnifiedChatModel = preferredChatModel,
+      )
+
+    assertEquals("Gemma 3n", resolved.name)
   }
 }

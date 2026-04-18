@@ -8,7 +8,8 @@ import org.junit.Test
 class UnifiedChatChromePolicyTest {
   @Test
   fun resolveUnifiedChatChromePolicy_movesHistoryToTopBarAndRemovesComposerHistoryEntry() {
-    val policy = resolveUnifiedChatChromePolicy(hasVisibleConnectors = true)
+    val policy =
+      resolveUnifiedChatChromePolicy(hasVisibleConnectors = true, supportsAudioInput = true)
 
     assertTrue(policy.showInputHistoryInTopBar)
     assertFalse(policy.showInputHistoryInComposerMenu)
@@ -17,11 +18,24 @@ class UnifiedChatChromePolicyTest {
 
   @Test
   fun resolveUnifiedChatChromePolicy_showsComposerConnectorLauncherOnlyWhenConnectorsExist() {
-    val withConnectors = resolveUnifiedChatChromePolicy(hasVisibleConnectors = true)
-    val withoutConnectors = resolveUnifiedChatChromePolicy(hasVisibleConnectors = false)
+    val withConnectors =
+      resolveUnifiedChatChromePolicy(hasVisibleConnectors = true, supportsAudioInput = false)
+    val withoutConnectors =
+      resolveUnifiedChatChromePolicy(hasVisibleConnectors = false, supportsAudioInput = false)
 
     assertTrue(withConnectors.showConnectorLauncherInComposer)
     assertFalse(withoutConnectors.showConnectorLauncherInComposer)
+  }
+
+  @Test
+  fun resolveUnifiedChatChromePolicy_showsStandaloneMicButtonWhenAudioInputIsSupported() {
+    val withAudio =
+      resolveUnifiedChatChromePolicy(hasVisibleConnectors = false, supportsAudioInput = true)
+    val withoutAudio =
+      resolveUnifiedChatChromePolicy(hasVisibleConnectors = false, supportsAudioInput = false)
+
+    assertTrue(withAudio.showStandaloneAudioRecordButtonInComposer)
+    assertFalse(withoutAudio.showStandaloneAudioRecordButtonInComposer)
   }
 
   @Test

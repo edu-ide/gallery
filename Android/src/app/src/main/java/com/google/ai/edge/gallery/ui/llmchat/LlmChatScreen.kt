@@ -109,6 +109,7 @@ fun LlmChatScreen(
   showImagePicker: Boolean = false,
   showAudioPicker: Boolean = false,
   showTopBar: Boolean = true,
+  selectedModelOverride: Model? = null,
   mcpWidgetHostState: McpWidgetHostState? = null,
   mcpUiSession: McpWidgetSessionHost? = null,
   onMcpWidgetHostStateChange: (McpWidgetHostState) -> Unit = {},
@@ -142,6 +143,7 @@ fun LlmChatScreen(
     showImagePicker = showImagePicker,
     showAudioPicker = showAudioPicker,
     showTopBar = showTopBar,
+    selectedModelOverride = selectedModelOverride,
     entryHint = entryHint,
     mcpWidgetHostState = mcpWidgetHostState,
     mcpUiSession = mcpUiSession,
@@ -247,6 +249,7 @@ fun ChatViewWrapper(
   showImagePicker: Boolean = false,
   showAudioPicker: Boolean = false,
   showTopBar: Boolean = true,
+  selectedModelOverride: Model? = null,
   entryHint: UnifiedChatEntryHint = UnifiedChatEntryHint(),
   mcpWidgetHostState: McpWidgetHostState? = null,
   mcpUiSession: McpWidgetSessionHost? = null,
@@ -268,10 +271,13 @@ fun ChatViewWrapper(
   val allowThinking = task.allowThinking()
   val chatUiState by viewModel.uiState.collectAsState()
   val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
-  val selectedModel = modelManagerUiState.selectedModel
+  val selectedModel = selectedModelOverride ?: modelManagerUiState.selectedModel
   val visibleConnectorIds = entryHint.activateMcpConnectorIds.distinct()
   val chromePolicy =
-    resolveUnifiedChatChromePolicy(hasVisibleConnectors = visibleConnectorIds.isNotEmpty())
+    resolveUnifiedChatChromePolicy(
+      hasVisibleConnectors = visibleConnectorIds.isNotEmpty(),
+      supportsAudioInput = showAudioPicker,
+    )
   // Foundation scope: only persist the text/MCP unified chat path for now.
   val canPersistUnifiedSession =
     taskId == BuiltInTaskId.LLM_CHAT && !entryHint.activateImage && !entryHint.activateAudio
@@ -552,7 +558,10 @@ fun ChatViewWrapper(
     onSystemPromptChanged = onSystemPromptChanged,
     sendMessageTrigger = sendMessageTrigger,
     showAudioPicker = showAudioPicker,
+    showStandaloneAudioRecordButtonInComposer =
+      chromePolicy.showStandaloneAudioRecordButtonInComposer,
     showTopBar = showTopBar,
+    selectedModelOverride = selectedModelOverride,
     showConversationHistoryButton = chromePolicy.showInputHistoryInTopBar,
     connectorBarContent = connectorBarContent,
     mcpWidgetHostState = mcpWidgetHostState,

@@ -80,8 +80,8 @@ class LlmChatTask @Inject constructor() : CustomTask {
     model.runtimeHelper.initialize(
       context = context,
       model = model,
-      supportImage = false,
-      supportAudio = false,
+      supportImage = true,
+      supportAudio = true,
       onDone = onDone,
       coroutineScope = coroutineScope,
     )
@@ -102,6 +102,8 @@ class LlmChatTask @Inject constructor() : CustomTask {
     LlmChatScreen(
       modelManagerViewModel = myData.modelManagerViewModel,
       navigateUp = myData.onNavUp,
+      showImagePicker = true,
+      showAudioPicker = true,
       emptyStateComposable = {
         Box(modifier = Modifier.fillMaxSize()) {
           Column(

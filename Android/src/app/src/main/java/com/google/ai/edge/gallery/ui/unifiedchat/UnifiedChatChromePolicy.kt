@@ -21,16 +21,19 @@ internal data class UnifiedChatChromePolicy(
   val showInputHistoryInComposerMenu: Boolean,
   val showConnectorLauncherInComposer: Boolean,
   val showInlineConnectorRowAboveComposer: Boolean,
+  val showStandaloneAudioRecordButtonInComposer: Boolean,
 )
 
 internal fun resolveUnifiedChatChromePolicy(
   hasVisibleConnectors: Boolean,
+  supportsAudioInput: Boolean = false,
 ): UnifiedChatChromePolicy =
   UnifiedChatChromePolicy(
     showInputHistoryInTopBar = true,
     showInputHistoryInComposerMenu = false,
     showConnectorLauncherInComposer = hasVisibleConnectors,
     showInlineConnectorRowAboveComposer = false,
+    showStandaloneAudioRecordButtonInComposer = supportsAudioInput,
   )
 
 internal fun buildConnectorLauncherLabel(activeConnectorCount: Int): String =

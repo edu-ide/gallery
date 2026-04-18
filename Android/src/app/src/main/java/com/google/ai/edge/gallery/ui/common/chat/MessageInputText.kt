@@ -171,6 +171,7 @@ fun MessageInputText(
   showSkillsPicker: Boolean = false,
   showImagePicker: Boolean = false,
   showAudioPicker: Boolean = false,
+  showStandaloneAudioRecordButton: Boolean = false,
   showStopButtonWhenInProgress: Boolean = false,
   onImageLimitExceeded: () -> Unit = {},
   extraTopContent: (@Composable () -> Unit)? = null,
@@ -519,38 +520,6 @@ fun MessageInputText(
                               verticalAlignment = Alignment.CenterVertically,
                               horizontalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
-                              Icon(Icons.Rounded.Mic, contentDescription = null)
-                              Text("Record audio clip")
-                            }
-                          },
-                          enabled = enableRecordAudioClipMenuItems,
-                          onClick = {
-                            // Check permission
-                            when (PackageManager.PERMISSION_GRANTED) {
-                              // Already got permission. Call the lambda.
-                              ContextCompat.checkSelfPermission(
-                                context,
-                                Manifest.permission.RECORD_AUDIO,
-                              ) -> {
-                                handleClickRecordAudioClip()
-                              }
-
-                              // Otherwise, ask for permission
-                              else -> {
-                                recordAudioClipsPermissionLauncher.launch(
-                                  Manifest.permission.RECORD_AUDIO
-                                )
-                              }
-                            }
-                          },
-                        )
-
-                        DropdownMenuItem(
-                          text = {
-                            Row(
-                              verticalAlignment = Alignment.CenterVertically,
-                              horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
                               Icon(Icons.Rounded.AudioFile, contentDescription = null)
                               Text("Pick wav file")
                             }
@@ -588,6 +557,39 @@ fun MessageInputText(
                       enabled = !inProgress && !isResettingSession && !modelInitializing,
                     ) {
                       Text(stringResource(R.string.skills))
+                    }
+                  }
+
+                  if (showStandaloneAudioRecordButton) {
+                    val enableRecordAudioClip =
+                      !inProgress &&
+                        !isResettingSession &&
+                        !modelInitializing &&
+                        (audioClipMessageCount + pickedAudioClips.size) < MAX_AUDIO_CLIP_COUNT
+                    OutlinedIconButton(
+                      enabled = enableRecordAudioClip,
+                      onClick = {
+                        when (PackageManager.PERMISSION_GRANTED) {
+                          ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.RECORD_AUDIO,
+                          ) -> {
+                            handleClickRecordAudioClip()
+                          }
+
+                          else -> {
+                            recordAudioClipsPermissionLauncher.launch(
+                              Manifest.permission.RECORD_AUDIO
+                            )
+                          }
+                        }
+                      },
+                    ) {
+                      Icon(
+                        Icons.Rounded.Mic,
+                        contentDescription = stringResource(R.string.cd_record_audio_icon),
+                        modifier = Modifier.size(20.dp),
+                      )
                     }
                   }
 
