@@ -47,6 +47,10 @@ import com.google.ai.edge.gallery.ui.common.chat.ChatView
 import com.google.ai.edge.gallery.ui.common.chat.SendMessageTrigger
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.gallery.ui.unifiedchat.UnifiedChatEntryHint
+import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetFullscreenOverlay
+import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetHostState
+import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSessionHost
+import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSnapshot
 import com.google.ai.edge.gallery.ui.theme.emptyStateContent
 import com.google.ai.edge.gallery.ui.theme.emptyStateTitle
 
@@ -72,6 +76,19 @@ fun LlmChatScreen(
   sendMessageTrigger: SendMessageTrigger? = null,
   showImagePicker: Boolean = false,
   showAudioPicker: Boolean = false,
+  mcpWidgetHostState: McpWidgetHostState? = null,
+  mcpUiSession: McpWidgetSessionHost? = null,
+  onMcpWidgetHostStateChange: (McpWidgetHostState) -> Unit = {},
+  mcpWidgetFullscreenOverlay:
+    @Composable
+    (snapshot: McpWidgetSnapshot, session: McpWidgetSessionHost, onClose: () -> Unit) -> Unit =
+      { snapshot, session, onClose ->
+        McpWidgetFullscreenOverlay(
+          snapshot = snapshot,
+          session = session,
+          onClose = onClose,
+        )
+      },
 ) {
   ChatViewWrapper(
     viewModel = viewModel,
@@ -91,6 +108,10 @@ fun LlmChatScreen(
     sendMessageTrigger = sendMessageTrigger,
     showImagePicker = showImagePicker,
     showAudioPicker = showAudioPicker,
+    mcpWidgetHostState = mcpWidgetHostState,
+    mcpUiSession = mcpUiSession,
+    onMcpWidgetHostStateChange = onMcpWidgetHostStateChange,
+    mcpWidgetFullscreenOverlay = mcpWidgetFullscreenOverlay,
   )
 }
 
@@ -188,6 +209,19 @@ fun ChatViewWrapper(
   sendMessageTrigger: SendMessageTrigger? = null,
   showImagePicker: Boolean = false,
   showAudioPicker: Boolean = false,
+  mcpWidgetHostState: McpWidgetHostState? = null,
+  mcpUiSession: McpWidgetSessionHost? = null,
+  onMcpWidgetHostStateChange: (McpWidgetHostState) -> Unit = {},
+  mcpWidgetFullscreenOverlay:
+    @Composable
+    (snapshot: McpWidgetSnapshot, session: McpWidgetSessionHost, onClose: () -> Unit) -> Unit =
+      { snapshot, session, onClose ->
+        McpWidgetFullscreenOverlay(
+          snapshot = snapshot,
+          session = session,
+          onClose = onClose,
+        )
+      },
 ) {
   val context = LocalContext.current
   val task = modelManagerViewModel.getTaskById(id = taskId)!!
@@ -289,5 +323,9 @@ fun ChatViewWrapper(
     onSystemPromptChanged = onSystemPromptChanged,
     sendMessageTrigger = sendMessageTrigger,
     showAudioPicker = showAudioPicker,
+    mcpWidgetHostState = mcpWidgetHostState,
+    mcpUiSession = mcpUiSession,
+    onMcpWidgetHostStateChange = onMcpWidgetHostStateChange,
+    mcpWidgetFullscreenOverlay = mcpWidgetFullscreenOverlay,
   )
 }

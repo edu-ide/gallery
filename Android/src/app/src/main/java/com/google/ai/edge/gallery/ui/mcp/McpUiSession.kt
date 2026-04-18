@@ -22,28 +22,30 @@ import io.modelcontextprotocol.kotlin.sdk.types.TextResourceContents
 import java.util.Locale
 import java.util.TimeZone
 import kotlinx.coroutines.runBlocking
+import android.content.Context
+import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSessionHost
 
 internal class McpUiSession private constructor(
   private val httpClient: HttpClient,
   private val client: Client,
   val widgetHtml: String,
   val widgetUri: String,
-  val widgetBaseUrl: String,
-) {
+  override val widgetBaseUrl: String,
+) : McpWidgetSessionHost {
   @Volatile private var toolName: String? = null
   @Volatile private var toolInputJson: String = "{}"
   @Volatile private var toolOutputJson: String = "null"
   @Volatile private var widgetStateJson: String = """{}"""
 
-  val injectedWidgetHtml: String by lazy {
-    McpUiHostUtils.injectHostBridge(
-      html = widgetHtml,
-      toolName = toolName,
-      toolInputJson = toolInputJson,
-      toolOutputJson = toolOutputJson,
-      widgetStateJson = widgetStateJson,
-    )
-  }
+  override val injectedWidgetHtml: String
+    get() =
+      McpUiHostUtils.injectHostBridge(
+        html = widgetHtml,
+        toolName = toolName,
+        toolInputJson = toolInputJson,
+        toolOutputJson = toolOutputJson,
+        widgetStateJson = widgetStateJson,
+      )
 
   companion object {
     private val gson = Gson()
@@ -114,6 +116,8 @@ internal class McpUiSession private constructor(
   fun setWidgetStateJson(nextStateJson: String) {
     widgetStateJson = nextStateJson.ifBlank { "{}" }
   }
+
+  override fun createJavascriptBridge(context: Context): Any = McpUiWebBridge(context, this)
 
   fun callToolJson(name: String, argsJson: String?): String {
     val arguments: Map<String, Any?> =

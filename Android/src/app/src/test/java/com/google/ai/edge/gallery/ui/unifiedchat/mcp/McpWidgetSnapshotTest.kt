@@ -19,4 +19,17 @@ class McpWidgetSnapshotTest {
 
     assertEquals(snapshot, decoded)
   }
+
+  @Test
+  fun activate_replacesPreviousLiveWidgetButKeepsSnapshotIdentity() {
+    val firstSnapshot = McpWidgetSnapshot("ugot_fortune", "UGOT Fortune", "A", "{}")
+    val secondSnapshot = McpWidgetSnapshot("calendar", "Calendar", "B", "{}")
+    val state = McpWidgetHostState()
+
+    val afterFirst = state.activate(firstSnapshot, fullscreen = false)
+    val afterSecond = afterFirst.activate(secondSnapshot, fullscreen = true)
+
+    assertEquals(secondSnapshot, afterSecond.activeSnapshot)
+    assertEquals(McpWidgetDisplayMode.FULLSCREEN, afterSecond.displayMode)
+  }
 }

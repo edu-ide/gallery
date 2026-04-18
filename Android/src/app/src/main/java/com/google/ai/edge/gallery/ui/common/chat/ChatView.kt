@@ -70,6 +70,11 @@ import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.ui.common.ModelPageAppBar
 import com.google.ai.edge.gallery.ui.modelmanager.ModelInitializationStatusType
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
+import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetDisplayMode
+import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetFullscreenOverlay
+import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetHostState
+import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSessionHost
+import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSnapshot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
@@ -110,10 +115,24 @@ fun ChatView(
   onSystemPromptChanged: (String) -> Unit = {},
   sendMessageTrigger: SendMessageTrigger? = null,
   connectorBarContent: (@Composable () -> Unit)? = null,
+  mcpWidgetHostState: McpWidgetHostState? = null,
+  mcpUiSession: McpWidgetSessionHost? = null,
+  onMcpWidgetHostStateChange: (McpWidgetHostState) -> Unit = {},
+  mcpWidgetFullscreenOverlay:
+    @Composable
+    (snapshot: McpWidgetSnapshot, session: McpWidgetSessionHost, onClose: () -> Unit) -> Unit =
+      { snapshot, session, onClose ->
+        McpWidgetFullscreenOverlay(
+          snapshot = snapshot,
+          session = session,
+          onClose = onClose,
+        )
+      },
 ) {
   val uiState by viewModel.uiState.collectAsState()
   val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
   val selectedModel = modelManagerUiState.selectedModel
+  val activeMcpWidgetSnapshot = mcpWidgetHostState?.activeSnapshot
 
   // Image viewer related.
   var selectedImageIndex by remember { mutableIntStateOf(-1) }
@@ -162,148 +181,162 @@ fun ChatView(
     }
   }
 
-  Scaffold(
-    modifier = modifier,
-    topBar = {
-      ModelPageAppBar(
-        task = task,
-        model = selectedModel,
-        modelManagerViewModel = modelManagerViewModel,
-        canShowResetSessionButton = true,
-        isResettingSession = uiState.isResettingSession,
-        inProgress = uiState.inProgress,
-        modelPreparing = uiState.preparing,
-        onResetSessionClicked = onResetSessionClicked,
-        onConfigChanged = { old, new ->
-          // Filter out config values that are not relevant to the task.
-          //
-          // - The "reset conversation turn count" is only valid for tiny garden task.
-          val filteredOld = old.toMutableMap()
-          val filteredNew = new.toMutableMap()
-          if (task.id != BuiltInTaskId.LLM_TINY_GARDEN) {
-            filteredOld.remove(ConfigKeys.RESET_CONVERSATION_TURN_COUNT.label)
-            filteredNew.remove(ConfigKeys.RESET_CONVERSATION_TURN_COUNT.label)
-          }
-          viewModel.addConfigChangedMessage(
-            oldConfigValues = filteredOld,
-            newConfigValues = filteredNew,
-            model = selectedModel,
-          )
-        },
-        onBackClicked = { handleNavigateUp() },
-        onModelSelected = { prevModel, curModel ->
-          if (prevModel.name != curModel.name) {
-            modelManagerViewModel.cleanupModel(context = context, task = task, model = prevModel)
-          }
-          modelManagerViewModel.selectModel(model = curModel)
-        },
-        allowEditingSystemPrompt = allowEditingSystemPrompt,
-        curSystemPrompt = curSystemPrompt,
-        onSystemPromptChanged = onSystemPromptChanged,
-      )
-    },
-  ) { innerPadding ->
-    Box {
-      val curModelDownloadStatus = modelManagerUiState.modelDownloadStatus[selectedModel.name]
+  Box(modifier = modifier.fillMaxSize()) {
+    Scaffold(
+      modifier = Modifier.fillMaxSize(),
+      topBar = {
+        ModelPageAppBar(
+          task = task,
+          model = selectedModel,
+          modelManagerViewModel = modelManagerViewModel,
+          canShowResetSessionButton = true,
+          isResettingSession = uiState.isResettingSession,
+          inProgress = uiState.inProgress,
+          modelPreparing = uiState.preparing,
+          onResetSessionClicked = onResetSessionClicked,
+          onConfigChanged = { old, new ->
+            // Filter out config values that are not relevant to the task.
+            //
+            // - The "reset conversation turn count" is only valid for tiny garden task.
+            val filteredOld = old.toMutableMap()
+            val filteredNew = new.toMutableMap()
+            if (task.id != BuiltInTaskId.LLM_TINY_GARDEN) {
+              filteredOld.remove(ConfigKeys.RESET_CONVERSATION_TURN_COUNT.label)
+              filteredNew.remove(ConfigKeys.RESET_CONVERSATION_TURN_COUNT.label)
+            }
+            viewModel.addConfigChangedMessage(
+              oldConfigValues = filteredOld,
+              newConfigValues = filteredNew,
+              model = selectedModel,
+            )
+          },
+          onBackClicked = { handleNavigateUp() },
+          onModelSelected = { prevModel, curModel ->
+            if (prevModel.name != curModel.name) {
+              modelManagerViewModel.cleanupModel(context = context, task = task, model = prevModel)
+            }
+            modelManagerViewModel.selectModel(model = curModel)
+          },
+          allowEditingSystemPrompt = allowEditingSystemPrompt,
+          curSystemPrompt = curSystemPrompt,
+          onSystemPromptChanged = onSystemPromptChanged,
+        )
+      },
+    ) { innerPadding ->
+      Box {
+        val curModelDownloadStatus = modelManagerUiState.modelDownloadStatus[selectedModel.name]
 
-      composableBelowMessageList(selectedModel)
+        composableBelowMessageList(selectedModel)
 
-      Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
-        AnimatedContent(
-          targetState = curModelDownloadStatus?.status == ModelDownloadStatusType.SUCCEEDED
-        ) { targetState ->
-          when (targetState) {
-            // Main UI when model is downloaded.
-            true ->
-              ChatPanel(
-                modelManagerViewModel = modelManagerViewModel,
-                task = task,
-                selectedModel = selectedModel,
-                viewModel = viewModel,
-                innerPadding = innerPadding,
-                navigateUp = navigateUp,
-                onSendMessage = { model, messages -> onSendMessage(model, messages) },
-                onRunAgainClicked = onRunAgainClicked,
-                onBenchmarkClicked = onBenchmarkClicked,
-                onStreamImageMessage = onStreamImageMessage,
-                onStreamEnd = { averageFps ->
-                  viewModel.addMessage(
-                    model = selectedModel,
-                    message =
-                      ChatMessageInfo(
-                        content = "Live camera session ended. Average FPS: $averageFps"
-                      ),
-                  )
-                },
-                onStopButtonClicked = { onStopButtonClicked(selectedModel) },
-                onImageSelected = { bitmaps, selectedBitmapIndex ->
-                  selectedImageIndex = selectedBitmapIndex
-                  allImageViewerImages = bitmaps
-                  showImageViewer = true
-                },
-                onSkillClicked = onSkillClicked,
-                modifier = Modifier.weight(1f),
-                showStopButtonInInputWhenInProgress = showStopButtonInInputWhenInProgress,
-                showImagePicker = showImagePicker,
-                showAudioPicker = showAudioPicker,
-                emptyStateComposable = emptyStateComposable,
-                connectorBarContent = connectorBarContent,
-              )
-            // Model download
-            false ->
-              ModelDownloadStatusInfoPanel(
-                model = selectedModel,
-                task = task,
-                modelManagerViewModel = modelManagerViewModel,
-              )
+        Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
+          AnimatedContent(
+            targetState = curModelDownloadStatus?.status == ModelDownloadStatusType.SUCCEEDED
+          ) { targetState ->
+            when (targetState) {
+              // Main UI when model is downloaded.
+              true ->
+                ChatPanel(
+                  modelManagerViewModel = modelManagerViewModel,
+                  task = task,
+                  selectedModel = selectedModel,
+                  viewModel = viewModel,
+                  innerPadding = innerPadding,
+                  navigateUp = navigateUp,
+                  onSendMessage = { model, messages -> onSendMessage(model, messages) },
+                  onRunAgainClicked = onRunAgainClicked,
+                  onBenchmarkClicked = onBenchmarkClicked,
+                  onStreamImageMessage = onStreamImageMessage,
+                  onStreamEnd = { averageFps ->
+                    viewModel.addMessage(
+                      model = selectedModel,
+                      message =
+                        ChatMessageInfo(
+                          content = "Live camera session ended. Average FPS: $averageFps"
+                        ),
+                    )
+                  },
+                  onStopButtonClicked = { onStopButtonClicked(selectedModel) },
+                  onImageSelected = { bitmaps, selectedBitmapIndex ->
+                    selectedImageIndex = selectedBitmapIndex
+                    allImageViewerImages = bitmaps
+                    showImageViewer = true
+                  },
+                  onSkillClicked = onSkillClicked,
+                  modifier = Modifier.weight(1f),
+                  showStopButtonInInputWhenInProgress = showStopButtonInInputWhenInProgress,
+                  showImagePicker = showImagePicker,
+                  showAudioPicker = showAudioPicker,
+                  emptyStateComposable = emptyStateComposable,
+                  connectorBarContent = connectorBarContent,
+                )
+              // Model download
+              false ->
+                ModelDownloadStatusInfoPanel(
+                  model = selectedModel,
+                  task = task,
+                  modelManagerViewModel = modelManagerViewModel,
+                )
+            }
           }
         }
-      }
 
-      // Image viewer.
-      AnimatedVisibility(
-        visible = showImageViewer,
-        enter = slideInVertically(initialOffsetY = { fullHeight -> fullHeight }) + fadeIn(),
-        exit = slideOutVertically(targetOffsetY = { fullHeight -> fullHeight }) + fadeOut(),
-      ) {
-        val pagerState =
-          rememberPagerState(
-            pageCount = { allImageViewerImages.size },
-            initialPage = selectedImageIndex,
-          )
-        val scrollEnabled = remember { mutableStateOf(true) }
-        Box(modifier = Modifier.fillMaxSize().padding(top = innerPadding.calculateTopPadding())) {
-          HorizontalPager(
-            state = pagerState,
-            userScrollEnabled = scrollEnabled.value,
-            modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.95f)),
-          ) { page ->
-            allImageViewerImages[page].let { image ->
-              ZoomableImage(
-                bitmap = image.asImageBitmap(),
-                pagerState = pagerState,
-                modifier = Modifier.fillMaxSize(),
+        // Image viewer.
+        AnimatedVisibility(
+          visible = showImageViewer,
+          enter = slideInVertically(initialOffsetY = { fullHeight -> fullHeight }) + fadeIn(),
+          exit = slideOutVertically(targetOffsetY = { fullHeight -> fullHeight }) + fadeOut(),
+        ) {
+          val pagerState =
+            rememberPagerState(
+              pageCount = { allImageViewerImages.size },
+              initialPage = selectedImageIndex,
+            )
+          val scrollEnabled = remember { mutableStateOf(true) }
+          Box(modifier = Modifier.fillMaxSize().padding(top = innerPadding.calculateTopPadding())) {
+            HorizontalPager(
+              state = pagerState,
+              userScrollEnabled = scrollEnabled.value,
+              modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.95f)),
+            ) { page ->
+              allImageViewerImages[page].let { image ->
+                ZoomableImage(
+                  bitmap = image.asImageBitmap(),
+                  pagerState = pagerState,
+                  modifier = Modifier.fillMaxSize(),
+                )
+              }
+            }
+
+            // Close button.
+            IconButton(
+              onClick = { showImageViewer = false },
+              colors =
+                IconButtonDefaults.iconButtonColors(
+                  containerColor = MaterialTheme.colorScheme.surfaceVariant
+                ),
+              modifier = Modifier.offset(x = (-8).dp, y = 8.dp).align(Alignment.TopEnd),
+            ) {
+              Icon(
+                Icons.Rounded.Close,
+                contentDescription = stringResource(R.string.cd_close_image_viewer_icon),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
               )
             }
           }
-
-          // Close button.
-          IconButton(
-            onClick = { showImageViewer = false },
-            colors =
-              IconButtonDefaults.iconButtonColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
-              ),
-            modifier = Modifier.offset(x = (-8).dp, y = 8.dp).align(Alignment.TopEnd),
-          ) {
-            Icon(
-              Icons.Rounded.Close,
-              contentDescription = stringResource(R.string.cd_close_image_viewer_icon),
-              tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
         }
       }
+    }
+
+    if (
+      activeMcpWidgetSnapshot != null &&
+        mcpWidgetHostState?.displayMode == McpWidgetDisplayMode.FULLSCREEN &&
+        mcpUiSession != null
+    ) {
+      mcpWidgetFullscreenOverlay(
+        activeMcpWidgetSnapshot,
+        mcpUiSession,
+        { onMcpWidgetHostStateChange(mcpWidgetHostState.close()) },
+      )
     }
   }
 }
