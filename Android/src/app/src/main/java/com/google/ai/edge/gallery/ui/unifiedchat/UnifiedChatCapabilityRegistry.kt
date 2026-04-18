@@ -27,10 +27,16 @@ class UnifiedChatCapabilityRegistry(
         .filter { (_, provider) -> provider.isEnabled(model, entryHint) }
         .map { it.key }
         .toSet()
+    val enabledCapabilities = enabled + UnifiedChatCapability.TEXT
 
     return UnifiedChatCapabilityResolution(
-      enabledCapabilities = enabled + UnifiedChatCapability.TEXT,
-      activeConnectorIds = entryHint.activateMcpConnectorIds,
+      enabledCapabilities = enabledCapabilities,
+      activeConnectorIds =
+        if (enabledCapabilities.contains(UnifiedChatCapability.MCP_CONNECTOR)) {
+          entryHint.activateMcpConnectorIds
+        } else {
+          emptyList()
+        },
     )
   }
 }

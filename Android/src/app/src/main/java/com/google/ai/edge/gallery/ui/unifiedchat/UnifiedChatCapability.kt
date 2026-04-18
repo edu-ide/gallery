@@ -16,6 +16,8 @@
 
 package com.google.ai.edge.gallery.ui.unifiedchat
 
+import com.google.ai.edge.gallery.data.Model
+
 enum class UnifiedChatCapability {
   TEXT,
   IMAGE,
@@ -28,3 +30,15 @@ data class UnifiedChatCapabilityResolution(
   val enabledCapabilities: Set<UnifiedChatCapability>,
   val activeConnectorIds: List<String>,
 )
+
+internal fun Model.supportsUnifiedChatCapability(
+  requiredCapability: UnifiedChatCapability
+): Boolean {
+  return when (requiredCapability) {
+    UnifiedChatCapability.TEXT,
+    UnifiedChatCapability.SKILLS,
+    UnifiedChatCapability.MCP_CONNECTOR -> true
+    UnifiedChatCapability.IMAGE -> llmSupportImage
+    UnifiedChatCapability.AUDIO -> llmSupportAudio
+  }
+}

@@ -58,6 +58,7 @@ import com.google.ai.edge.gallery.proto.ImportedModel
 import com.google.ai.edge.gallery.proto.Theme
 import com.google.ai.edge.gallery.runtime.aicore.AICoreModelHelper
 import com.google.ai.edge.gallery.ui.unifiedchat.UnifiedChatCapability
+import com.google.ai.edge.gallery.ui.unifiedchat.supportsUnifiedChatCapability
 import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -255,11 +256,7 @@ constructor(
     currentTaskId: String,
   ): Model? {
     return getTaskById(currentTaskId)?.models?.firstOrNull { model ->
-      when (requiredCapability) {
-        UnifiedChatCapability.IMAGE -> model.llmSupportImage
-        UnifiedChatCapability.AUDIO -> model.llmSupportAudio
-        else -> true
-      }
+      model.supportsUnifiedChatCapability(requiredCapability)
     }
   }
 
