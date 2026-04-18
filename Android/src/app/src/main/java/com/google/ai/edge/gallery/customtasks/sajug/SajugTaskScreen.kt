@@ -109,7 +109,7 @@ internal fun SajugTaskScreen(
         )
       }
     },
-    showTopBar = false,
+    showTopBar = true,
     mcpWidgetHostState = hostState,
     mcpUiSession = session,
     onMcpWidgetHostStateChange = { hostState = it },

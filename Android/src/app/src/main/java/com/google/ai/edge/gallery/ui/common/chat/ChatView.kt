@@ -117,6 +117,7 @@ fun ChatView(
   sendMessageTrigger: SendMessageTrigger? = null,
   connectorBarContent: (@Composable () -> Unit)? = null,
   showTopBar: Boolean = true,
+  showConversationHistoryButton: Boolean = false,
   mcpWidgetHostState: McpWidgetHostState? = null,
   mcpUiSession: McpWidgetSessionHost? = null,
   onMcpWidgetHostStateChange: (McpWidgetHostState) -> Unit = {},
@@ -144,6 +145,7 @@ fun ChatView(
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
   var navigatingUp by remember { mutableStateOf(false) }
+  var showTextInputHistorySheet by remember { mutableStateOf(false) }
 
   val handleNavigateUp = {
     navigatingUp = true
@@ -223,6 +225,8 @@ fun ChatView(
             allowEditingSystemPrompt = allowEditingSystemPrompt,
             curSystemPrompt = curSystemPrompt,
             onSystemPromptChanged = onSystemPromptChanged,
+            showHistoryButton = showConversationHistoryButton,
+            onHistoryClicked = { showTextInputHistorySheet = true },
           )
         }
       },
@@ -343,6 +347,20 @@ fun ChatView(
           }
         }
       }
+    }
+
+    if (showTextInputHistorySheet) {
+      TextInputHistorySheet(
+        history = modelManagerUiState.textInputHistory,
+        onDismissed = { showTextInputHistorySheet = false },
+        onHistoryItemClicked = { item ->
+          showTextInputHistorySheet = false
+          onSendMessage(selectedModel, listOf(ChatMessageText(content = item, side = ChatSide.USER)))
+          modelManagerViewModel.promoteTextInputHistoryItem(item)
+        },
+        onHistoryItemDeleted = { item -> modelManagerViewModel.deleteTextInputHistory(item) },
+        onHistoryItemsDeleteAll = { modelManagerViewModel.clearTextInputHistory() },
+      )
     }
 
     if (

@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.MapsUgc
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -82,6 +83,8 @@ fun ModelPageAppBar(
   allowEditingSystemPrompt: Boolean = false,
   curSystemPrompt: String = "",
   onSystemPromptChanged: (String) -> Unit = {},
+  showHistoryButton: Boolean = false,
+  onHistoryClicked: () -> Unit = {},
 ) {
   var showConfigDialog by remember { mutableStateOf(false) }
   val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
@@ -133,10 +136,23 @@ fun ModelPageAppBar(
     // The back button.
     navigationIcon = {
       val enableBackButton = !isModelInitializing && !inProgress
-      IconButton(onClick = onBackClicked, enabled = enableBackButton) {
+      IconButton(
+        onClick = {
+          if (showHistoryButton) {
+            onHistoryClicked()
+          } else {
+            onBackClicked()
+          }
+        },
+        enabled = enableBackButton,
+      ) {
         Icon(
-          imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-          contentDescription = stringResource(R.string.cd_navigate_back_icon),
+          imageVector =
+            if (showHistoryButton) Icons.Rounded.History else Icons.AutoMirrored.Rounded.ArrowBack,
+          contentDescription =
+            stringResource(
+              if (showHistoryButton) R.string.cd_show_history else R.string.cd_navigate_back_icon
+            ),
         )
       }
     },

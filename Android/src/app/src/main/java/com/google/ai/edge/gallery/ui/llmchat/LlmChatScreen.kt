@@ -57,8 +57,10 @@ import com.google.ai.edge.gallery.ui.common.chat.ChatSide
 import com.google.ai.edge.gallery.ui.common.chat.SendMessageTrigger
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.gallery.ui.unifiedchat.ConnectorBar
+import com.google.ai.edge.gallery.ui.unifiedchat.ConnectorBarDisplayMode
 import com.google.ai.edge.gallery.ui.unifiedchat.ConnectorBarState
 import com.google.ai.edge.gallery.ui.unifiedchat.UnifiedChatEntryHint
+import com.google.ai.edge.gallery.ui.unifiedchat.resolveUnifiedChatChromePolicy
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetFullscreenOverlay
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetHostState
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSessionHost
@@ -268,6 +270,8 @@ fun ChatViewWrapper(
   val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
   val selectedModel = modelManagerUiState.selectedModel
   val visibleConnectorIds = entryHint.activateMcpConnectorIds.distinct()
+  val chromePolicy =
+    resolveUnifiedChatChromePolicy(hasVisibleConnectors = visibleConnectorIds.isNotEmpty())
   // Foundation scope: only persist the text/MCP unified chat path for now.
   val canPersistUnifiedSession =
     taskId == BuiltInTaskId.LLM_CHAT && !entryHint.activateImage && !entryHint.activateAudio
@@ -426,7 +430,7 @@ fun ChatViewWrapper(
   }
 
   val connectorBarContent: (@Composable () -> Unit)? =
-    if (visibleConnectorIds.isNotEmpty()) {
+    if (chromePolicy.showConnectorLauncherInComposer) {
       {
         val connectorBarState =
           ConnectorBarState(
@@ -442,6 +446,7 @@ fun ChatViewWrapper(
             setActiveConnectorIds(connectorBarState.toggle(connectorId).activeConnectorIds.toList())
           },
           onOpenConnectorSheet = {},
+          displayMode = ConnectorBarDisplayMode.ComposerLauncher,
         )
       }
     } else {
@@ -548,6 +553,7 @@ fun ChatViewWrapper(
     sendMessageTrigger = sendMessageTrigger,
     showAudioPicker = showAudioPicker,
     showTopBar = showTopBar,
+    showConversationHistoryButton = chromePolicy.showInputHistoryInTopBar,
     connectorBarContent = connectorBarContent,
     mcpWidgetHostState = mcpWidgetHostState,
     mcpUiSession = mcpUiSession,

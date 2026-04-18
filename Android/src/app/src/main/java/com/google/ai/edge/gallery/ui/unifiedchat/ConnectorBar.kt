@@ -16,14 +16,24 @@
 
 package com.google.ai.edge.gallery.ui.unifiedchat
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -37,6 +47,11 @@ private fun defaultConnectorLabel(connectorId: String): String =
       token.lowercase().replaceFirstChar { firstChar -> firstChar.titlecase() }
     }
 
+enum class ConnectorBarDisplayMode {
+  InlineRow,
+  ComposerLauncher,
+}
+
 @Composable
 fun ConnectorBar(
   state: ConnectorBarState,
@@ -44,7 +59,40 @@ fun ConnectorBar(
   onOpenConnectorSheet: () -> Unit,
   modifier: Modifier = Modifier,
   connectorLabel: (String) -> String = ::defaultConnectorLabel,
+  displayMode: ConnectorBarDisplayMode = ConnectorBarDisplayMode.InlineRow,
 ) {
+  if (displayMode == ConnectorBarDisplayMode.ComposerLauncher) {
+    var showConnectorMenu by remember { mutableStateOf(false) }
+    Box(modifier = modifier) {
+      AssistChip(
+        onClick = { showConnectorMenu = true },
+        label = { Text(buildConnectorLauncherLabel(state.activeConnectorIds.size)) },
+      )
+
+      DropdownMenu(
+        expanded = showConnectorMenu,
+        onDismissRequest = { showConnectorMenu = false },
+      ) {
+        state.visibleConnectorIds.forEach { connectorId ->
+          val selected = state.activeConnectorIds.contains(connectorId)
+          DropdownMenuItem(
+            text = { Text(connectorLabel(connectorId)) },
+            trailingIcon = {
+              if (selected) {
+                Icon(Icons.Rounded.Check, contentDescription = null)
+              }
+            },
+            onClick = {
+              onConnectorClicked(connectorId)
+              showConnectorMenu = false
+            },
+          )
+        }
+      }
+    }
+    return
+  }
+
   Row(
     modifier = modifier.horizontalScroll(rememberScrollState()),
     horizontalArrangement = Arrangement.spacedBy(8.dp),

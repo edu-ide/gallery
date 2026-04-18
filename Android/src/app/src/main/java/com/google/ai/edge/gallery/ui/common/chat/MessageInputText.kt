@@ -71,7 +71,6 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.rounded.AudioFile
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.FlipCameraAndroid
-import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Photo
 import androidx.compose.material.icons.rounded.PhotoCamera
@@ -181,7 +180,6 @@ fun MessageInputText(
   val scope = rememberCoroutineScope()
   val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
   var showAddContentMenu by remember { mutableStateOf(false) }
-  var showTextInputHistorySheet by remember { mutableStateOf(false) }
   var showCameraCaptureBottomSheet by remember { mutableStateOf(false) }
   val cameraCaptureSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
   var showAudioRecorder by remember { mutableStateOf(false) }
@@ -306,8 +304,6 @@ fun MessageInputText(
   }
 
   Column {
-    extraTopContent?.invoke()
-
     // A preview panel for the selected images and audio clips.
     if (pickedImages.isNotEmpty() || pickedAudioClips.isNotEmpty()) {
       Row(
@@ -582,23 +578,6 @@ fun MessageInputText(
                           },
                         )
                       }
-
-                      // Prompt history.
-                      DropdownMenuItem(
-                        text = {
-                          Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                          ) {
-                            Icon(Icons.Rounded.History, contentDescription = null)
-                            Text("Input history")
-                          }
-                        },
-                        onClick = {
-                          showAddContentMenu = false
-                          showTextInputHistorySheet = true
-                        },
-                      )
                     }
                   }
 
@@ -611,6 +590,8 @@ fun MessageInputText(
                       Text(stringResource(R.string.skills))
                     }
                   }
+
+                  extraTopContent?.invoke()
                 }
 
                 // Stop button.
@@ -690,28 +671,6 @@ fun MessageInputText(
         }
       }
     }
-  }
-
-  // A bottom sheet to show the text input history to pick from.
-  if (showTextInputHistorySheet) {
-    TextInputHistorySheet(
-      history = modelManagerUiState.textInputHistory,
-      onDismissed = { showTextInputHistorySheet = false },
-      onHistoryItemClicked = { item ->
-        onSendMessage(
-          createMessagesToSend(
-            pickedImages = pickedImages,
-            audioClips = pickedAudioClips,
-            text = item,
-          )
-        )
-        pickedImages = listOf()
-        pickedAudioClips = listOf()
-        modelManagerViewModel.promoteTextInputHistoryItem(item)
-      },
-      onHistoryItemDeleted = { item -> modelManagerViewModel.deleteTextInputHistory(item) },
-      onHistoryItemsDeleteAll = { modelManagerViewModel.clearTextInputHistory() },
-    )
   }
 
   if (showCameraCaptureBottomSheet) {
