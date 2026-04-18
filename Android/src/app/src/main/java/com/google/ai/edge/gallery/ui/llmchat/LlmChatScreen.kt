@@ -17,6 +17,7 @@
 package com.google.ai.edge.gallery.ui.llmchat
 
 import android.graphics.Bitmap
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -44,17 +52,39 @@ import com.google.ai.edge.gallery.ui.common.chat.ChatMessageAudioClip
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageImage
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageText
 import com.google.ai.edge.gallery.ui.common.chat.ChatView
+import com.google.ai.edge.gallery.ui.common.chat.ChatMessage
+import com.google.ai.edge.gallery.ui.common.chat.ChatSide
 import com.google.ai.edge.gallery.ui.common.chat.SendMessageTrigger
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
+import com.google.ai.edge.gallery.ui.unifiedchat.ConnectorBar
+import com.google.ai.edge.gallery.ui.unifiedchat.ConnectorBarState
 import com.google.ai.edge.gallery.ui.unifiedchat.UnifiedChatEntryHint
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetFullscreenOverlay
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetHostState
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSessionHost
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSnapshot
+import com.google.ai.edge.gallery.ui.unifiedchat.messages.ChatMessageMcpWidgetCard
+import com.google.ai.edge.gallery.ui.unifiedchat.session.UnifiedChatPersistedSession
+import com.google.ai.edge.gallery.ui.unifiedchat.session.UnifiedChatSessionFileStore
+import com.google.ai.edge.gallery.ui.unifiedchat.session.decodePersistedChatMessage
+import com.google.ai.edge.gallery.ui.unifiedchat.session.encodePersistableChatMessage
 import com.google.ai.edge.gallery.ui.theme.emptyStateContent
 import com.google.ai.edge.gallery.ui.theme.emptyStateTitle
+import java.io.File
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val TAG = "AGLlmChatScreen"
+private const val UNIFIED_CHAT_SESSION_SAVE_DEBOUNCE_MS = 300L
+
+private data class PendingUnifiedSessionSnapshot(
+  val messages: List<ChatMessage> = emptyList(),
+  val activeConnectorIds: List<String> = emptyList(),
+  val sessionRestored: Boolean = false,
+)
 
 @Composable
 fun LlmChatScreen(
@@ -108,6 +138,7 @@ fun LlmChatScreen(
     sendMessageTrigger = sendMessageTrigger,
     showImagePicker = showImagePicker,
     showAudioPicker = showAudioPicker,
+    entryHint = entryHint,
     mcpWidgetHostState = mcpWidgetHostState,
     mcpUiSession = mcpUiSession,
     onMcpWidgetHostStateChange = onMcpWidgetHostStateChange,
@@ -209,6 +240,7 @@ fun ChatViewWrapper(
   sendMessageTrigger: SendMessageTrigger? = null,
   showImagePicker: Boolean = false,
   showAudioPicker: Boolean = false,
+  entryHint: UnifiedChatEntryHint = UnifiedChatEntryHint(),
   mcpWidgetHostState: McpWidgetHostState? = null,
   mcpUiSession: McpWidgetSessionHost? = null,
   onMcpWidgetHostStateChange: (McpWidgetHostState) -> Unit = {},
@@ -224,14 +256,201 @@ fun ChatViewWrapper(
       },
 ) {
   val context = LocalContext.current
+  val appContext = context.applicationContext
   val task = modelManagerViewModel.getTaskById(id = taskId)!!
   val allowThinking = task.allowThinking()
+  val chatUiState by viewModel.uiState.collectAsState()
+  val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
+  val selectedModel = modelManagerUiState.selectedModel
+  val visibleConnectorIds = entryHint.activateMcpConnectorIds.distinct()
+  // Foundation scope: only persist the text/MCP unified chat path for now.
+  val canPersistUnifiedSession =
+    taskId == BuiltInTaskId.LLM_CHAT && !entryHint.activateImage && !entryHint.activateAudio
+  val currentMessages = chatUiState.messagesByModel[selectedModel.name]?.toList().orEmpty()
+  val sessionFileStore =
+    remember(appContext) {
+      UnifiedChatSessionFileStore(File(appContext.filesDir, "unified_chat_sessions"))
+    }
+  val sessionId =
+    buildUnifiedChatSessionId(
+      taskId = taskId,
+      modelName = selectedModel.name,
+      entryHint = entryHint,
+    )
+  val restoredSessionIds = remember { mutableStateMapOf<String, Boolean>() }
+  val pendingSnapshotsBySession = remember { mutableStateMapOf<String, PendingUnifiedSessionSnapshot>() }
+  val (sessionRestored, setSessionRestored) = remember(sessionId) { mutableStateOf(false) }
+  val (activeConnectorIds, setActiveConnectorIds) =
+    remember(sessionId) { mutableStateOf(visibleConnectorIds) }
+  val latestCanPersistUnifiedSession by rememberUpdatedState(canPersistUnifiedSession)
+  val latestSessionId by rememberUpdatedState(sessionId)
+  val latestSessionRestored by rememberUpdatedState(sessionRestored)
+  val latestActiveConnectorIds by rememberUpdatedState(activeConnectorIds.toList())
+  val latestSelectedModelName by rememberUpdatedState(selectedModel.name)
+  val messagesAtComposition = currentMessages.toList()
+  val activeConnectorIdsAtComposition = activeConnectorIds.toList()
+  val sessionRestoredAtComposition = sessionRestored
+
+  LaunchedEffect(sessionId, visibleConnectorIds) {
+    setSessionRestored(false)
+    setActiveConnectorIds(visibleConnectorIds)
+  }
+
+  LaunchedEffect(sessionId, canPersistUnifiedSession) {
+    if (!canPersistUnifiedSession) {
+      restoredSessionIds[sessionId] = true
+      setSessionRestored(true)
+      return@LaunchedEffect
+    }
+
+    if (restoredSessionIds[sessionId] == true) {
+      restoredSessionIds[sessionId] = true
+      setSessionRestored(true)
+      return@LaunchedEffect
+    }
+
+    val restoredSession = withContext(Dispatchers.IO) { sessionFileStore.load(sessionId) }
+    restoredSessionIds[sessionId] = true
+    if (restoredSession == null) {
+      setSessionRestored(true)
+      return@LaunchedEffect
+    }
+
+    val currentMessagesBeforeRestore =
+      viewModel.uiState.value.messagesByModel[selectedModel.name]?.toList().orEmpty()
+    if (
+      !shouldRestorePersistedUnifiedSession(
+        hasHandledRestoreForSession = false,
+        currentMessages = currentMessagesBeforeRestore,
+      )
+    ) {
+      setSessionRestored(true)
+      return@LaunchedEffect
+    }
+
+    val restoredMessages = restoredSession.messagesJson.mapNotNull(::decodePersistedChatMessage)
+    val restoredSnapshotsInTranscript =
+      restoredMessages.filterIsInstance<ChatMessageMcpWidgetCard>().map { it.snapshot }.toSet()
+    val synthesizedWidgetCards =
+      restoredSession.widgetSnapshots
+        .filterNot(restoredSnapshotsInTranscript::contains)
+        .map(::createDormantWidgetCard)
+
+    viewModel.clearAllMessages(selectedModel)
+    (restoredMessages + synthesizedWidgetCards).forEach { restoredMessage ->
+      viewModel.addMessage(model = selectedModel, message = restoredMessage)
+    }
+    setActiveConnectorIds(restoredSession.activeConnectorIds.distinct())
+    setSessionRestored(true)
+  }
+
+  LaunchedEffect(
+    sessionId,
+    canPersistUnifiedSession,
+    sessionRestored,
+    currentMessages,
+    activeConnectorIds,
+  ) {
+    pendingSnapshotsBySession[sessionId] =
+      PendingUnifiedSessionSnapshot(
+        messages = currentMessages.toList(),
+        activeConnectorIds = activeConnectorIds.toList(),
+        sessionRestored = sessionRestored,
+      )
+
+    if (!canPersistUnifiedSession || !sessionRestored) {
+      return@LaunchedEffect
+    }
+
+    val messagesToPersist = currentMessages.toList()
+    val connectorIdsToPersist = activeConnectorIds.toList()
+    delay(UNIFIED_CHAT_SESSION_SAVE_DEBOUNCE_MS)
+
+    withContext(Dispatchers.IO) {
+      persistUnifiedSessionSnapshot(
+        sessionFileStore = sessionFileStore,
+        sessionId = sessionId,
+        messages = messagesToPersist,
+        activeConnectorIds = connectorIdsToPersist,
+      )
+    }
+  }
+
+  DisposableEffect(sessionFileStore) {
+    onDispose {
+      if (!latestCanPersistUnifiedSession || !latestSessionRestored) {
+        return@onDispose
+      }
+
+      val pendingSnapshot = pendingSnapshotsBySession[latestSessionId]
+      val messagesToPersist =
+        pendingSnapshot?.messages
+          ?: viewModel.uiState.value.messagesByModel[latestSelectedModelName]?.toList().orEmpty()
+      val connectorIdsToPersist =
+        pendingSnapshot?.activeConnectorIds ?: latestActiveConnectorIds.toList()
+      CoroutineScope(Dispatchers.IO).launch {
+        persistUnifiedSessionSnapshot(
+          sessionFileStore = sessionFileStore,
+          sessionId = latestSessionId,
+          messages = messagesToPersist,
+          activeConnectorIds = connectorIdsToPersist,
+        )
+      }
+    }
+  }
+
+  DisposableEffect(sessionId, sessionFileStore) {
+    onDispose {
+      val pendingSnapshot = pendingSnapshotsBySession[sessionId]
+      if (
+        !canPersistUnifiedSession ||
+          !(pendingSnapshot?.sessionRestored ?: sessionRestoredAtComposition)
+      ) {
+        return@onDispose
+      }
+
+      CoroutineScope(Dispatchers.IO).launch {
+        persistUnifiedSessionSnapshot(
+          sessionFileStore = sessionFileStore,
+          sessionId = sessionId,
+          messages = pendingSnapshot?.messages ?: messagesAtComposition,
+          activeConnectorIds = pendingSnapshot?.activeConnectorIds ?: activeConnectorIdsAtComposition,
+        )
+      }
+    }
+  }
+
+  val connectorBarContent: (@Composable () -> Unit)? =
+    if (visibleConnectorIds.isNotEmpty()) {
+      {
+        val connectorBarState =
+          ConnectorBarState(
+            visibleConnectorIds = visibleConnectorIds,
+            activeConnectorIds = activeConnectorIds.toSet(),
+          )
+        ConnectorBar(
+          state = connectorBarState,
+          onConnectorClicked = { connectorId ->
+            if (!sessionRestored) {
+              return@ConnectorBar
+            }
+            setActiveConnectorIds(connectorBarState.toggle(connectorId).activeConnectorIds.toList())
+          },
+          onOpenConnectorSheet = {},
+        )
+      }
+    } else {
+      null
+    }
 
   ChatView(
     task = task,
     viewModel = viewModel,
     modelManagerViewModel = modelManagerViewModel,
     onSendMessage = { model, messages ->
+      if (!sessionRestored) {
+        return@ChatView
+      }
       for (message in messages) {
         viewModel.addMessage(model = model, message = message)
       }
@@ -323,9 +542,94 @@ fun ChatViewWrapper(
     onSystemPromptChanged = onSystemPromptChanged,
     sendMessageTrigger = sendMessageTrigger,
     showAudioPicker = showAudioPicker,
+    connectorBarContent = connectorBarContent,
     mcpWidgetHostState = mcpWidgetHostState,
     mcpUiSession = mcpUiSession,
     onMcpWidgetHostStateChange = onMcpWidgetHostStateChange,
     mcpWidgetFullscreenOverlay = mcpWidgetFullscreenOverlay,
   )
 }
+
+private fun buildUnifiedChatSessionId(
+  taskId: String,
+  modelName: String,
+  entryHint: UnifiedChatEntryHint,
+): String = "$taskId::$modelName::${entryHint.toPersistenceKey()}"
+
+internal fun shouldRestorePersistedUnifiedSession(
+  hasHandledRestoreForSession: Boolean,
+  currentMessages: List<ChatMessage>,
+): Boolean = !hasHandledRestoreForSession && currentMessages.isEmpty()
+
+private fun UnifiedChatEntryHint.toPersistenceKey(): String =
+  buildString {
+    append("image=")
+    append(activateImage)
+    append(";audio=")
+    append(activateAudio)
+    append(";skills=")
+    append(activateSkills)
+    append(";mcp=")
+    append(activateMcpConnectorIds.sorted().joinToString(","))
+  }
+
+private fun persistUnifiedSessionSnapshot(
+  sessionFileStore: UnifiedChatSessionFileStore,
+  sessionId: String,
+  messages: List<ChatMessage>,
+  activeConnectorIds: List<String>,
+) {
+  val persistedWidgetSnapshots = messages.collectPersistedWidgetSnapshots()
+  val encodedMessages = messages.mapNotNull(::encodePersistableChatMessage)
+  if (
+    encodedMessages.isEmpty() &&
+      activeConnectorIds.isEmpty() &&
+      persistedWidgetSnapshots.isEmpty()
+  ) {
+    sessionFileStore.delete(sessionId)
+    return
+  }
+
+  sessionFileStore.save(
+    UnifiedChatPersistedSession(
+      id = sessionId,
+      title = deriveConversationTitle(messages),
+      activeConnectorIds = activeConnectorIds,
+      messagesJson = encodedMessages,
+      widgetSnapshots = persistedWidgetSnapshots,
+    )
+  )
+}
+
+private fun deriveConversationTitle(messages: List<ChatMessage>): String {
+  val firstUserText =
+    messages
+      .filterIsInstance<ChatMessageText>()
+      .firstOrNull { it.side == ChatSide.USER && it.content.isNotBlank() }
+      ?.content
+      ?.lineSequence()
+      ?.firstOrNull()
+      ?.trim()
+  if (!firstUserText.isNullOrEmpty()) {
+    return firstUserText.take(60)
+  }
+
+  val firstWidgetTitle =
+    messages.filterIsInstance<ChatMessageMcpWidgetCard>().firstOrNull()?.title?.trim()
+  if (!firstWidgetTitle.isNullOrEmpty()) {
+    return firstWidgetTitle.take(60)
+  }
+
+  return "New chat"
+}
+
+private fun List<ChatMessage>.collectPersistedWidgetSnapshots(): List<McpWidgetSnapshot> =
+  filterIsInstance<ChatMessageMcpWidgetCard>().map { it.snapshot }.distinct()
+
+private fun createDormantWidgetCard(snapshot: McpWidgetSnapshot): ChatMessageMcpWidgetCard =
+  ChatMessageMcpWidgetCard(
+    connectorId = snapshot.connectorId,
+    title = snapshot.title,
+    summary = snapshot.summary,
+    snapshot = snapshot,
+  )
