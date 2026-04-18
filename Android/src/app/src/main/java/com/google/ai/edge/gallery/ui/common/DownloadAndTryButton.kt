@@ -77,7 +77,6 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.common.UgotAuthConfig
 import com.google.ai.edge.gallery.data.Model
-import com.google.ai.edge.gallery.data.ModelDownloadStatus
 import com.google.ai.edge.gallery.data.ModelDownloadStatusType
 import com.google.ai.edge.gallery.data.RuntimeType
 import com.google.ai.edge.gallery.data.Task
@@ -129,7 +128,8 @@ fun DownloadAndTryButton(
   task: Task?,
   model: Model,
   enabled: Boolean,
-  downloadStatus: ModelDownloadStatus?,
+  downloadStatus: ModelDownloadStatusType?,
+  downloadProgress: Float,
   modelManagerViewModel: ModelManagerViewModel,
   onClicked: () -> Unit,
   modifier: Modifier = Modifier,
@@ -137,6 +137,7 @@ fun DownloadAndTryButton(
   modifierWhenExpanded: Modifier = Modifier,
   compact: Boolean = false,
   canShowTryIt: Boolean = true,
+  downloadButtonBackgroundColor: Color = MaterialTheme.colorScheme.surfaceContainer,
 ) {
   val scope = rememberCoroutineScope()
   val context = LocalContext.current
@@ -149,15 +150,15 @@ fun DownloadAndTryButton(
   val sheetState = rememberModalBottomSheetState()
 
   val needToDownloadFirst =
-    (downloadStatus?.status == ModelDownloadStatusType.NOT_DOWNLOADED ||
-      downloadStatus?.status == ModelDownloadStatusType.FAILED) &&
-      model.localFileRelativeDirPathOverride.isEmpty()
-  val inProgress = downloadStatus?.status == ModelDownloadStatusType.IN_PROGRESS
-  val downloadSucceeded = downloadStatus?.status == ModelDownloadStatusType.SUCCEEDED
-  val isPartiallyDownloaded = downloadStatus?.status == ModelDownloadStatusType.PARTIALLY_DOWNLOADED
+    (downloadStatus == ModelDownloadStatusType.NOT_DOWNLOADED ||
+      downloadStatus == ModelDownloadStatusType.FAILED) &&
+      model.localFileRelativeDirPathOverride.isEmpty() &&
+      model.runtimeType != RuntimeType.AICORE
+  val inProgress = downloadStatus == ModelDownloadStatusType.IN_PROGRESS
+  val downloadSucceeded = downloadStatus == ModelDownloadStatusType.SUCCEEDED
+  val isPartiallyDownloaded = downloadStatus == ModelDownloadStatusType.PARTIALLY_DOWNLOADED
   val showDownloadProgress =
     !downloadSucceeded && (downloadStarted || checkingToken || inProgress || isPartiallyDownloaded)
-  var curDownloadProgress: Float
 
   // A launcher for requesting notification permission.
   val permissionLauncher =
@@ -388,8 +389,7 @@ fun DownloadAndTryButton(
               (!downloadSucceeded || !canShowTryIt) &&
                 model.localFileRelativeDirPathOverride.isEmpty()
             ) {
-
-              MaterialTheme.colorScheme.surfaceContainer
+              downloadButtonBackgroundColor
             } else if (task != null) {
               getTaskBgGradientColors(task = task)[1]
             } else {
@@ -462,11 +462,6 @@ fun DownloadAndTryButton(
   }
   // Download progress.
   else {
-    curDownloadProgress =
-      downloadStatus!!.receivedBytes.toFloat() / downloadStatus.totalBytes.toFloat()
-    if (curDownloadProgress.isNaN()) {
-      curDownloadProgress = 0f
-    }
     val animatedProgress = remember { Animatable(0f) }
 
     var downloadProgressModifier: Modifier = modifier
@@ -490,7 +485,7 @@ fun DownloadAndTryButton(
         )
       } else {
         Text(
-          "${(curDownloadProgress * 100).toInt()}%",
+          "${(downloadProgress * 100).toInt()}%",
           style =
             MaterialTheme.typography.bodyMedium.copy(
               // This stops numbers from "jumping around" when being updated.
@@ -530,8 +525,8 @@ fun DownloadAndTryButton(
         }
       }
     }
-    LaunchedEffect(curDownloadProgress) {
-      animatedProgress.animateTo(curDownloadProgress, animationSpec = tween(150))
+    LaunchedEffect(downloadProgress) {
+      animatedProgress.animateTo(downloadProgress, animationSpec = tween(150))
     }
   }
 

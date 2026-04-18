@@ -36,8 +36,8 @@ android {
     applicationId = "com.ugot.chat"
     minSdk = 31
     targetSdk = 35
-    versionCode = 23
-    versionName = "1.0.11"
+    versionCode = 26
+    versionName = "1.0.12"
 
     manifestPlaceholders["appAuthRedirectScheme"] = "com.ugot.chat"
     manifestPlaceholders["applicationName"] = "com.google.ai.edge.gallery.GalleryApplication"
@@ -121,6 +121,7 @@ dependencies {
   debugImplementation(libs.androidx.ui.tooling)
   debugImplementation(libs.androidx.ui.test.manifest)
   ksp(libs.moshi.kotlin.codegen)
+  implementation(libs.mlkit.genai.prompt)
 }
 
 protobuf {

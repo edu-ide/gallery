@@ -35,6 +35,17 @@ data class PromptTemplate(val title: String, val description: String, val prompt
 enum class RuntimeType {
   @SerializedName("unknown") UNKNOWN,
   @SerializedName("litert_lm") LITERT_LM,
+  @SerializedName("aicore") AICORE,
+}
+
+enum class AICoreModelReleaseStage {
+  @SerializedName("stable") STABLE,
+  @SerializedName("preview") PREVIEW,
+}
+
+enum class AICoreModelPreference {
+  @SerializedName("fast") FAST,
+  @SerializedName("full") FULL,
 }
 
 /**
@@ -158,6 +169,23 @@ data class Model(
 
   /** Whether the model is LLM or not. */
   val isLlm: Boolean = false,
+
+  /** The release stage of the AICore model. */
+  val aicoreReleaseStage: AICoreModelReleaseStage? = null,
+
+  /** The preference of the AICore model. */
+  val aicorePreference: AICoreModelPreference? = null,
+
+  /**
+   * The name of the parent model that this model is a variant of.
+   *
+   * If set, this model will be displayed as a variant (an item in a list) of the parent model's
+   * model card,
+   */
+  val parentModelName: String? = null,
+
+  /** The label of the model variant. */
+  val variantLabel: String? = null,
 
   // End of model download related fields.
   //////////////////////////////////////////////////////////////////////////////////////////////////
