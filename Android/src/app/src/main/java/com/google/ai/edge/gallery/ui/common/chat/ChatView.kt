@@ -73,6 +73,7 @@ import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetDisplayMode
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetFullscreenOverlay
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetHostState
+import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetInlinePanel
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSessionHost
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSnapshot
 import kotlinx.coroutines.Dispatchers
@@ -115,6 +116,7 @@ fun ChatView(
   onSystemPromptChanged: (String) -> Unit = {},
   sendMessageTrigger: SendMessageTrigger? = null,
   connectorBarContent: (@Composable () -> Unit)? = null,
+  showTopBar: Boolean = true,
   mcpWidgetHostState: McpWidgetHostState? = null,
   mcpUiSession: McpWidgetSessionHost? = null,
   onMcpWidgetHostStateChange: (McpWidgetHostState) -> Unit = {},
@@ -185,42 +187,44 @@ fun ChatView(
     Scaffold(
       modifier = Modifier.fillMaxSize(),
       topBar = {
-        ModelPageAppBar(
-          task = task,
-          model = selectedModel,
-          modelManagerViewModel = modelManagerViewModel,
-          canShowResetSessionButton = true,
-          isResettingSession = uiState.isResettingSession,
-          inProgress = uiState.inProgress,
-          modelPreparing = uiState.preparing,
-          onResetSessionClicked = onResetSessionClicked,
-          onConfigChanged = { old, new ->
-            // Filter out config values that are not relevant to the task.
-            //
-            // - The "reset conversation turn count" is only valid for tiny garden task.
-            val filteredOld = old.toMutableMap()
-            val filteredNew = new.toMutableMap()
-            if (task.id != BuiltInTaskId.LLM_TINY_GARDEN) {
-              filteredOld.remove(ConfigKeys.RESET_CONVERSATION_TURN_COUNT.label)
-              filteredNew.remove(ConfigKeys.RESET_CONVERSATION_TURN_COUNT.label)
-            }
-            viewModel.addConfigChangedMessage(
-              oldConfigValues = filteredOld,
-              newConfigValues = filteredNew,
-              model = selectedModel,
-            )
-          },
-          onBackClicked = { handleNavigateUp() },
-          onModelSelected = { prevModel, curModel ->
-            if (prevModel.name != curModel.name) {
-              modelManagerViewModel.cleanupModel(context = context, task = task, model = prevModel)
-            }
-            modelManagerViewModel.selectModel(model = curModel)
-          },
-          allowEditingSystemPrompt = allowEditingSystemPrompt,
-          curSystemPrompt = curSystemPrompt,
-          onSystemPromptChanged = onSystemPromptChanged,
-        )
+        if (showTopBar) {
+          ModelPageAppBar(
+            task = task,
+            model = selectedModel,
+            modelManagerViewModel = modelManagerViewModel,
+            canShowResetSessionButton = true,
+            isResettingSession = uiState.isResettingSession,
+            inProgress = uiState.inProgress,
+            modelPreparing = uiState.preparing,
+            onResetSessionClicked = onResetSessionClicked,
+            onConfigChanged = { old, new ->
+              // Filter out config values that are not relevant to the task.
+              //
+              // - The "reset conversation turn count" is only valid for tiny garden task.
+              val filteredOld = old.toMutableMap()
+              val filteredNew = new.toMutableMap()
+              if (task.id != BuiltInTaskId.LLM_TINY_GARDEN) {
+                filteredOld.remove(ConfigKeys.RESET_CONVERSATION_TURN_COUNT.label)
+                filteredNew.remove(ConfigKeys.RESET_CONVERSATION_TURN_COUNT.label)
+              }
+              viewModel.addConfigChangedMessage(
+                oldConfigValues = filteredOld,
+                newConfigValues = filteredNew,
+                model = selectedModel,
+              )
+            },
+            onBackClicked = { handleNavigateUp() },
+            onModelSelected = { prevModel, curModel ->
+              if (prevModel.name != curModel.name) {
+                modelManagerViewModel.cleanupModel(context = context, task = task, model = prevModel)
+              }
+              modelManagerViewModel.selectModel(model = curModel)
+            },
+            allowEditingSystemPrompt = allowEditingSystemPrompt,
+            curSystemPrompt = curSystemPrompt,
+            onSystemPromptChanged = onSystemPromptChanged,
+          )
+        }
       },
     ) { innerPadding ->
       Box {
@@ -268,6 +272,20 @@ fun ChatView(
                   showAudioPicker = showAudioPicker,
                   emptyStateComposable = emptyStateComposable,
                   connectorBarContent = connectorBarContent,
+                  onMcpWidgetResumeClicked = { message ->
+                    if (mcpWidgetHostState != null && mcpUiSession != null) {
+                      onMcpWidgetHostStateChange(
+                        mcpWidgetHostState.activate(message.snapshot, fullscreen = false)
+                      )
+                    }
+                  },
+                  onMcpWidgetExpandClicked = { message ->
+                    if (mcpWidgetHostState != null && mcpUiSession != null) {
+                      onMcpWidgetHostStateChange(
+                        mcpWidgetHostState.activate(message.snapshot, fullscreen = true)
+                      )
+                    }
+                  },
                 )
               // Model download
               false ->
@@ -324,6 +342,23 @@ fun ChatView(
             }
           }
         }
+      }
+    }
+
+    if (
+      activeMcpWidgetSnapshot != null &&
+        mcpWidgetHostState?.displayMode == McpWidgetDisplayMode.INLINE &&
+        mcpUiSession != null
+    ) {
+      Box(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 88.dp),
+        contentAlignment = Alignment.BottomCenter,
+      ) {
+        McpWidgetInlinePanel(
+          snapshot = activeMcpWidgetSnapshot,
+          session = mcpUiSession,
+          onClose = { onMcpWidgetHostStateChange(mcpWidgetHostState.close()) },
+        )
       }
     }
 

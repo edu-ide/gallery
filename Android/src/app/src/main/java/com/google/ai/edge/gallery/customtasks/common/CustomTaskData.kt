@@ -38,6 +38,7 @@ data class CustomTaskData(
   val modelManagerViewModel: ModelManagerViewModel,
   val selectedModel: Model? = null,
   val bottomPadding: Dp = 0.dp,
+  val onNavigateUp: () -> Unit = {},
   val setAppBarControlsDisabled: (Boolean) -> Unit = {},
   val setTopBarVisible: (Boolean) -> Unit = {},
   val setCustomNavigateUpCallback: ((() -> Unit)?) -> Unit = {},

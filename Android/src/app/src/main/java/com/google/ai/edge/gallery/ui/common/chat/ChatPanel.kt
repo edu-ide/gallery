@@ -124,6 +124,8 @@ fun ChatPanel(
   showAudioPicker: Boolean = false,
   emptyStateComposable: @Composable (Model) -> Unit = {},
   connectorBarContent: (@Composable () -> Unit)? = null,
+  onMcpWidgetResumeClicked: (ChatMessageMcpWidgetCard) -> Unit = {},
+  onMcpWidgetExpandClicked: (ChatMessageMcpWidgetCard) -> Unit = {},
 ) {
   val uiState by viewModel.uiState.collectAsState()
   val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
@@ -433,8 +435,8 @@ fun ChatPanel(
                       is ChatMessageMcpWidgetCard ->
                         MessageBodyMcpWidgetCard(
                           message = message,
-                          onExpandClicked = {},
-                          onResumeClicked = {},
+                          onExpandClicked = onMcpWidgetExpandClicked,
+                          onResumeClicked = onMcpWidgetResumeClicked,
                         )
 
                       // Collapsable progress panel.

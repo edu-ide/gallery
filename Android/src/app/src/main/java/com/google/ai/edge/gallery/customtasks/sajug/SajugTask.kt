@@ -17,7 +17,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
-private const val UGOT_FORTUNE_TASK_ID = "ugot_fortune_mcp_ui"
+internal const val UGOT_FORTUNE_TASK_ID = "ugot_fortune_mcp_ui"
 private const val UGOT_FORTUNE_MCP_ENDPOINT = "https://fortune.ugot.uk/stateless/messages"
 private const val UGOT_FORTUNE_WIDGET_BASE_URL = "https://fortune.ugot.uk/"
 
@@ -29,8 +29,8 @@ internal class SajugTask(
       id = UGOT_FORTUNE_TASK_ID,
       label = "UGOT Fortune",
       description =
-        "Connects to the hosted UGOT Fortune MCP server and renders its standard MCP app widget inside Gallery.",
-      shortDescription = "Run Fortune MCP UI",
+        "Open the shared local AI chat shell with the hosted UGOT Fortune MCP widget connected.",
+      shortDescription = "Shared chat with Fortune connector",
       docUrl = "https://modelcontextprotocol.io/",
       sourceCodeUrl = "https://fortune.ugot.uk/",
       category = Category.EXPERIMENTAL,
@@ -102,7 +102,8 @@ internal class SajugTask(
     SajugTaskScreen(
       modelManagerViewModel = customTaskData.modelManagerViewModel,
       selectedModel = customTaskData.selectedModel,
-      bottomPadding = customTaskData.bottomPadding,
+      onNavigateUp = customTaskData.onNavigateUp,
+      setTopBarVisible = customTaskData.setTopBarVisible,
     )
   }
 }

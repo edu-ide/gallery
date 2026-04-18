@@ -769,6 +769,11 @@ private fun ModelPageScreen(
                   modelManagerViewModel = modelManagerViewModel,
                   selectedModel = initialModel,
                   bottomPadding = bottomPadding,
+                  onNavigateUp = {
+                    onEnableModelListAnimationChange(false)
+                    onLastNavigatedModelNameChange("")
+                    navController.navigateUp()
+                  },
                   setAppBarControlsDisabled = { disableAppBarControls = it },
                   setTopBarVisible = { hideTopBar = !it },
                   setCustomNavigateUpCallback = { customNavigateUpCallback = it },
