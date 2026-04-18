@@ -16,6 +16,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.google.ai.edge.gallery.ui.common.GalleryWebView
+import com.google.ai.edge.gallery.ui.mcp.McpUiSession
+import com.google.ai.edge.gallery.ui.mcp.McpUiWebBridge
 import com.google.ai.edge.gallery.ui.modelmanager.ModelInitializationStatusType
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 
@@ -27,9 +29,9 @@ internal fun SajugTaskScreen(
   val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
   val selectedModel = modelManagerUiState.selectedModel
   val initializationStatus = modelManagerUiState.modelInitializationStatus[selectedModel.name]?.status
-  val session = selectedModel.instance as? SajugMcpSession
+  val session = selectedModel.instance as? McpUiSession
   val context = LocalContext.current
-  val bridge = remember(session, context) { session?.let { SajugWebBridge(context = context, session = it) } }
+  val bridge = remember(session, context) { session?.let { McpUiWebBridge(context = context, session = it) } }
 
   Box(
     modifier =
@@ -42,11 +44,11 @@ internal fun SajugTaskScreen(
         GalleryWebView(
           modifier = Modifier.fillMaxSize(),
           initialHtml = session.injectedWidgetHtml,
-          htmlBaseUrl = SajugMcpSession.WIDGET_BASE_URL,
+          htmlBaseUrl = session.widgetBaseUrl,
           preventParentScrolling = true,
           allowRequestPermission = true,
           onWebViewCreated = { webView ->
-            webView.addJavascriptInterface(bridge, "SajugMcp")
+            webView.addJavascriptInterface(bridge, "McpUiHost")
           },
         )
       }
@@ -57,7 +59,7 @@ internal fun SajugTaskScreen(
 
       else -> {
         Text(
-          text = "Demo MCP session is not ready.",
+          text = "UGOT Fortune MCP session is not ready.",
           modifier = Modifier.align(Alignment.Center).padding(24.dp),
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
