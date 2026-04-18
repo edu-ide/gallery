@@ -16,6 +16,7 @@
 
 package com.google.ai.edge.gallery.ui.navigation
 
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.compose.BackHandler
@@ -53,6 +54,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -70,6 +72,7 @@ import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.navArgument
 import com.google.ai.edge.gallery.BuildConfig
 import com.google.ai.edge.gallery.GalleryEvent
@@ -153,6 +156,63 @@ private fun AnimatedContentTransitionScope<*>.slideDownExit(): ExitTransition {
   )
 }
 
+private fun resolveDeepLinkRoute(
+  data: Uri?,
+  modelManagerViewModel: ModelManagerViewModel,
+): String? {
+  if (data == null) {
+    return null
+  }
+
+  val deepLink = data.toString()
+  return when {
+    deepLink.startsWith("com.google.ai.edge.gallery://model/") -> {
+      if (data.pathSegments.size < 2) {
+        Log.e(TAG, "Malformed deep link URI received: $data")
+        null
+      } else {
+        val taskId = data.pathSegments[data.pathSegments.size - 2]
+        val modelName = data.pathSegments.last()
+        modelManagerViewModel.getModelByName(name = modelName)?.let { "$ROUTE_MODEL/$taskId/${it.name}" }
+      }
+    }
+    deepLink == "com.google.ai.edge.gallery://global_model_manager" -> ROUTE_MODEL_MANAGER
+    else -> null
+  }
+}
+
+internal fun resolveStartupRoute(
+  authStatus: UgotTokenStatus,
+  loadingModelAllowlist: Boolean,
+  deepLinkRoute: String?,
+  chatTaskId: String?,
+  initialModelName: String?,
+  enableDeveloperGallery: Boolean,
+  navigationHandled: Boolean,
+): String? {
+  if (navigationHandled) {
+    return null
+  }
+
+  if (authStatus != UgotTokenStatus.NOT_EXPIRED) {
+    return ROUTE_AUTH_LOGIN
+  }
+
+  if (loadingModelAllowlist) {
+    return null
+  }
+
+  if (deepLinkRoute != null) {
+    return deepLinkRoute
+  }
+
+  if (chatTaskId != null && initialModelName != null) {
+    return "$ROUTE_MODEL/$chatTaskId/$initialModelName"
+  }
+
+  return if (enableDeveloperGallery) ROUTE_DEVELOPER_HOME else ROUTE_HOMESCREEN
+}
+
 /** Navigation routes. */
 @Composable
 fun GalleryNavHost(
@@ -167,6 +227,9 @@ fun GalleryNavHost(
   var enableModelListAnimation by remember { mutableStateOf(true) }
   var lastNavigatedModelName = remember { "" }
   val enableDeveloperGallery = BuildConfig.DEBUG
+  val intent = androidx.activity.compose.LocalActivity.current?.intent
+  val currentBackStackEntry by navController.currentBackStackEntryAsState()
+  val currentRoute = currentBackStackEntry?.destination?.route
 
   // Track whether app is in foreground.
   DisposableEffect(lifecycleOwner) {
@@ -201,38 +264,58 @@ fun GalleryNavHost(
       val uiState by modelManagerViewModel.uiState.collectAsState()
       val chatTask = modelManagerViewModel.getTaskById(BuiltInTaskId.LLM_CHAT)
       val initialModel = modelManagerViewModel.getPreferredModelForTask(BuiltInTaskId.LLM_CHAT)
+      var startupNavigationHandled by rememberSaveable { mutableStateOf(false) }
 
-      LaunchedEffect(uiState.loadingModelAllowlist, chatTask?.id, initialModel?.name) {
+      LaunchedEffect(
+        uiState.loadingModelAllowlist,
+        chatTask?.id,
+        initialModel?.name,
+        intent?.dataString,
+        startupNavigationHandled,
+      ) {
         val authStatus = modelManagerViewModel.getUgotTokenStatusAndData().status
+        val deepLinkRoute =
+          resolveDeepLinkRoute(data = intent?.data, modelManagerViewModel = modelManagerViewModel)
+        val startupRoute =
+          resolveStartupRoute(
+            authStatus = authStatus,
+            loadingModelAllowlist = uiState.loadingModelAllowlist,
+            deepLinkRoute = deepLinkRoute,
+            chatTaskId = chatTask?.id,
+            initialModelName = initialModel?.name,
+            enableDeveloperGallery = enableDeveloperGallery,
+            navigationHandled = startupNavigationHandled,
+          )
         Log.d(
           TAG,
-          "startup: loading=${uiState.loadingModelAllowlist}, auth=$authStatus, chatTask=${chatTask?.id}, model=${initialModel?.name}",
+          "startup: loading=${uiState.loadingModelAllowlist}, auth=$authStatus, chatTask=${chatTask?.id}, model=${initialModel?.name}, handled=$startupNavigationHandled",
         )
-        if (authStatus != UgotTokenStatus.NOT_EXPIRED) {
-          navController.navigate(ROUTE_AUTH_LOGIN) {
-            popUpTo(ROUTE_STARTUP) { inclusive = true }
-          }
-        } else if (!uiState.loadingModelAllowlist) {
+        startupRoute?.let { route ->
+          startupNavigationHandled = true
           when {
-            chatTask != null && initialModel != null -> {
+            route == ROUTE_AUTH_LOGIN -> {
+              navController.navigate(route) { popUpTo(ROUTE_STARTUP) { inclusive = true } }
+            }
+            deepLinkRoute != null && route == deepLinkRoute -> {
+              Log.d(TAG, "startup: handling initial deep link route=$route")
+              intent?.data = null
+              navController.navigate(route) { popUpTo(ROUTE_STARTUP) { inclusive = true } }
+            }
+            chatTask != null &&
+              initialModel != null &&
+              route == "$ROUTE_MODEL/${chatTask.id}/${initialModel.name}" -> {
               Log.d(TAG, "startup: navigating directly to chat model ${initialModel.name}")
               pickedTask = chatTask
               lastNavigatedModelName = ""
-              navController.navigate("$ROUTE_MODEL/${chatTask.id}/${initialModel.name}") {
-                popUpTo(ROUTE_STARTUP) { inclusive = true }
-              }
+              navController.navigate(route) { popUpTo(ROUTE_STARTUP) { inclusive = true } }
             }
-            enableDeveloperGallery -> {
+            route == ROUTE_DEVELOPER_HOME -> {
               Log.d(TAG, "startup: no chat model, opening developer home")
-              navController.navigate(ROUTE_DEVELOPER_HOME) {
-                popUpTo(ROUTE_STARTUP) { inclusive = true }
-              }
+              navController.navigate(route) { popUpTo(ROUTE_STARTUP) { inclusive = true } }
             }
             else -> {
               Log.d(TAG, "startup: no chat model, opening fallback home")
-              navController.navigate(ROUTE_HOMESCREEN) {
-                popUpTo(ROUTE_STARTUP) { inclusive = true }
-              }
+              navController.navigate(route) { popUpTo(ROUTE_STARTUP) { inclusive = true } }
             }
           }
         }
@@ -466,6 +549,7 @@ fun GalleryNavHost(
                 data =
                   CustomTaskData(
                     modelManagerViewModel = modelManagerViewModel,
+                    selectedModel = initialModel,
                     bottomPadding = bottomPadding,
                     setAppBarControlsDisabled = { disableAppBarControls = it },
                     setTopBarVisible = { hideTopBar = !it },
@@ -544,23 +628,12 @@ fun GalleryNavHost(
   }
 
   // Handle incoming intents for deep links
-  val intent = androidx.activity.compose.LocalActivity.current?.intent
   val data = intent?.data
-  if (data != null) {
-    intent.data = null
-    Log.d(TAG, "navigation link clicked: $data")
-    if (data.toString().startsWith("com.google.ai.edge.gallery://model/")) {
-      if (data.pathSegments.size >= 2) {
-        val taskId = data.pathSegments.get(data.pathSegments.size - 2)
-        val modelName = data.pathSegments.last()
-        modelManagerViewModel.getModelByName(name = modelName)?.let { model ->
-          navController.navigate("$ROUTE_MODEL/${taskId}/${model.name}")
-        }
-      } else {
-        Log.e(TAG, "Malformed deep link URI received: $data")
-      }
-    } else if (data.toString() == "com.google.ai.edge.gallery://global_model_manager") {
-      navController.navigate(ROUTE_MODEL_MANAGER)
+  if (data != null && currentRoute != null && currentRoute != ROUTE_STARTUP) {
+    resolveDeepLinkRoute(data = data, modelManagerViewModel = modelManagerViewModel)?.let { route ->
+      intent.data = null
+      Log.d(TAG, "navigation link clicked: $data")
+      navController.navigate(route)
     }
   }
 }
@@ -577,11 +650,16 @@ private fun CustomTaskScreen(
 ) {
   val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
   val selectedModel = modelManagerUiState.selectedModel
+  val activeModel = task.models.find { it.name == selectedModel.name } ?: task.models.firstOrNull()
   val scope = rememberCoroutineScope()
   val context = LocalContext.current
   var navigatingUp by remember { mutableStateOf(false) }
   var showErrorDialog by remember { mutableStateOf(false) }
   var appBarHeight by remember { mutableIntStateOf(0) }
+
+  if (activeModel == null) {
+    return
+  }
 
   val handleNavigateUp = {
     navigatingUp = true
@@ -592,20 +670,20 @@ private fun CustomTaskScreen(
   BackHandler { handleNavigateUp() }
 
   // Initialize model when model/download state changes.
-  val curDownloadStatus = modelManagerUiState.modelDownloadStatus[selectedModel.name]
-  LaunchedEffect(curDownloadStatus, selectedModel.name) {
+  val curDownloadStatus = modelManagerUiState.modelDownloadStatus[activeModel.name]
+  LaunchedEffect(curDownloadStatus, activeModel.name) {
     if (!navigatingUp) {
       if (curDownloadStatus?.status == ModelDownloadStatusType.SUCCEEDED) {
         Log.d(
           TAG,
-          "Initializing model '${selectedModel.name}' from CustomTaskScreen launched effect",
+          "Initializing model '${activeModel.name}' from CustomTaskScreen launched effect",
         )
-        modelManagerViewModel.initializeModel(context, task = task, model = selectedModel)
+        modelManagerViewModel.initializeModel(context, task = task, model = activeModel)
       }
     }
   }
 
-  val modelInitializationStatus = modelManagerUiState.modelInitializationStatus[selectedModel.name]
+  val modelInitializationStatus = modelManagerUiState.modelInitializationStatus[activeModel.name]
   LaunchedEffect(modelInitializationStatus) {
     showErrorDialog = modelInitializationStatus?.status == ModelInitializationStatusType.ERROR
   }
@@ -619,7 +697,7 @@ private fun CustomTaskScreen(
       ) {
         ModelPageAppBar(
           task = task,
-          model = selectedModel,
+          model = activeModel,
           modelManagerViewModel = modelManagerViewModel,
           inProgress = disableAppBarControls,
           modelPreparing = disableAppBarControls,
@@ -677,7 +755,7 @@ private fun CustomTaskScreen(
           end = innerPadding.calculateStartPadding(LocalLayoutDirection.current),
         )
     ) {
-      val curModelDownloadStatus = modelManagerUiState.modelDownloadStatus[selectedModel.name]
+      val curModelDownloadStatus = modelManagerUiState.modelDownloadStatus[activeModel.name]
       AnimatedContent(
         targetState = curModelDownloadStatus?.status == ModelDownloadStatusType.SUCCEEDED
       ) { targetState ->
@@ -687,7 +765,7 @@ private fun CustomTaskScreen(
           // Model download
           false ->
             ModelDownloadStatusInfoPanel(
-              model = selectedModel,
+              model = activeModel,
               task = task,
               modelManagerViewModel = modelManagerViewModel,
             )

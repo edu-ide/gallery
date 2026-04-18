@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.ui.common.GalleryWebView
 import com.google.ai.edge.gallery.ui.mcp.McpUiSession
 import com.google.ai.edge.gallery.ui.mcp.McpUiWebBridge
@@ -24,12 +25,13 @@ import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 @Composable
 internal fun SajugTaskScreen(
   modelManagerViewModel: ModelManagerViewModel,
+  selectedModel: Model?,
   bottomPadding: Dp,
 ) {
   val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
-  val selectedModel = modelManagerUiState.selectedModel
-  val initializationStatus = modelManagerUiState.modelInitializationStatus[selectedModel.name]?.status
-  val session = selectedModel.instance as? McpUiSession
+  val routeModel = selectedModel ?: modelManagerUiState.selectedModel
+  val initializationStatus = modelManagerUiState.modelInitializationStatus[routeModel.name]?.status
+  val session = routeModel.instance as? McpUiSession
   val context = LocalContext.current
   val bridge = remember(session, context) { session?.let { McpUiWebBridge(context = context, session = it) } }
 

@@ -101,6 +101,7 @@ internal class SajugTask(
     val customTaskData = data as CustomTaskData
     SajugTaskScreen(
       modelManagerViewModel = customTaskData.modelManagerViewModel,
+      selectedModel = customTaskData.selectedModel,
       bottomPadding = customTaskData.bottomPadding,
     )
   }
