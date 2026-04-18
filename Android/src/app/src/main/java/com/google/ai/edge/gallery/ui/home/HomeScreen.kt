@@ -731,7 +731,7 @@ private fun TryGm4IntroText(enableAnimation: Boolean) {
   }
 
   Text(
-    "Gemma 4 E2B & E4B are here! Try them in AI Chat, Agent Skills, or the use cases below.",
+    "Gemma 4 E2B & E4B are here. Start in the shared local AI chat shell, then branch into the use cases below.",
     style = MaterialTheme.typography.bodyMedium,
     modifier =
       Modifier.graphicsLayer {
@@ -861,10 +861,12 @@ private fun TaskList(
     ) {
       val chatToDescription =
         mapOf(
-          BuiltInTaskId.LLM_CHAT to "Chat with the latest Gemma 4 model today",
+          BuiltInTaskId.LLM_CHAT to
+            "One local AI chat for text, images, audio, tools, and connectors",
           // use "\u00a0" to make sure the word before and after it should always be together when
           // wrapping lines.
-          BuiltInTaskId.LLM_AGENT_CHAT to "Have Gemma 4 complete agentic tasks for\u00A0you",
+          BuiltInTaskId.LLM_AGENT_CHAT to
+            "Open the same chat shell with skills already enabled",
         )
       for (task in
         listOf(

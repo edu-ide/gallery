@@ -161,6 +161,7 @@ fun LlmAskImageScreen(
     modifier = modifier,
     showImagePicker = true,
     showAudioPicker = false,
+    entryHint = UnifiedChatEntryHint(activateImage = true),
     emptyStateComposable = { model ->
       Box(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -200,6 +201,7 @@ fun LlmAskAudioScreen(
     modifier = modifier,
     showImagePicker = false,
     showAudioPicker = true,
+    entryHint = UnifiedChatEntryHint(activateAudio = true),
     emptyStateComposable = {
       Box(modifier = Modifier.fillMaxSize()) {
         Column(

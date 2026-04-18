@@ -63,8 +63,8 @@ class LlmChatTask @Inject constructor() : CustomTask {
       category = Category.LLM,
       icon = Icons.Outlined.Forum,
       models = mutableListOf(),
-      description = "Chat with on-device large language models",
-      shortDescription = "Chat with an on-device LLM",
+      description = "One shared local AI chat for text, images, audio, skills, and connectors",
+      shortDescription = "One shared local AI chat shell",
       docUrl = "https://github.com/google-ai-edge/LiteRT-LM/blob/main/kotlin/README.md",
       sourceCodeUrl =
         "https://github.com/google-ai-edge/gallery/blob/main/Android/src/app/src/main/java/com/google/ai/edge/gallery/ui/llmchat/LlmChatModelHelper.kt",
@@ -145,8 +145,8 @@ class LlmAskImageTask @Inject constructor() : CustomTask {
       category = Category.LLM,
       icon = Icons.Outlined.Mms,
       models = mutableListOf(),
-      description = "Ask questions about images with on-device large language models",
-      shortDescription = "Ask questions about images",
+      description = "Open the shared local AI chat shell with image input ready",
+      shortDescription = "Shared chat with image input ready",
       docUrl = "https://github.com/google-ai-edge/LiteRT-LM/blob/main/kotlin/README.md",
       sourceCodeUrl =
         "https://github.com/google-ai-edge/gallery/blob/main/Android/src/app/src/main/java/com/google/ai/edge/gallery/ui/llmchat/LlmChatModelHelper.kt",
@@ -209,9 +209,8 @@ class LlmAskAudioTask @Inject constructor() : CustomTask {
       category = Category.LLM,
       icon = Icons.Outlined.Mic,
       models = mutableListOf(),
-      description =
-        "Instantly transcribe and/or translate audio clips using on-device large language models",
-      shortDescription = "Transcribe and translate audio",
+      description = "Open the shared local AI chat shell with audio transcription ready",
+      shortDescription = "Shared chat with audio input ready",
       docUrl = "https://github.com/google-ai-edge/LiteRT-LM/blob/main/kotlin/README.md",
       sourceCodeUrl =
         "https://github.com/google-ai-edge/gallery/blob/main/Android/src/app/src/main/java/com/google/ai/edge/gallery/ui/llmchat/LlmChatModelHelper.kt",

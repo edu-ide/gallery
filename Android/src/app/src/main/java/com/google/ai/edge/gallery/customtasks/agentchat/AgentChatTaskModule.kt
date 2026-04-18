@@ -46,8 +46,8 @@ class AgentChatTask @Inject constructor() : CustomTask {
       iconVectorResourceId = R.drawable.agent,
       newFeature = true,
       models = mutableListOf(),
-      description = "Chat with on-device large language models with skills and tools",
-      shortDescription = "Complete agentic tasks with chat",
+      description = "Open the shared local AI chat shell with skills and tools enabled",
+      shortDescription = "Shared chat with skills enabled",
       docUrl = "https://github.com/google-ai-edge/LiteRT-LM/blob/main/kotlin/README.md",
       sourceCodeUrl =
         "https://github.com/google-ai-edge/gallery/blob/main/Android/src/app/src/main/java/com/google/ai/edge/gallery/customtasks/agentchat/",

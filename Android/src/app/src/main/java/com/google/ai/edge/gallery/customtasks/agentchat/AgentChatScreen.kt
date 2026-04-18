@@ -97,6 +97,7 @@ import com.google.ai.edge.gallery.ui.llmchat.LlmChatScreen
 import com.google.ai.edge.gallery.ui.llmchat.LlmChatViewModel
 import com.google.ai.edge.gallery.ui.modelmanager.ModelInitializationStatusType
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
+import com.google.ai.edge.gallery.ui.unifiedchat.UnifiedChatEntryHint
 import com.google.ai.edge.litertlm.tool
 import java.lang.Exception
 import kotlin.coroutines.resume
@@ -140,6 +141,7 @@ fun AgentChatScreen(
     modelManagerViewModel = modelManagerViewModel,
     taskId = BuiltInTaskId.LLM_AGENT_CHAT,
     navigateUp = navigateUp,
+    entryHint = UnifiedChatEntryHint(activateSkills = true),
     onFirstToken = { model ->
       updateProgressPanel(viewModel = viewModel, model = model, agentTools = agentTools)
     },
