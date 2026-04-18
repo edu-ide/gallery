@@ -28,11 +28,15 @@ import com.google.ai.edge.gallery.ui.modelmanager.ModelInitializationStatusType
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.gallery.ui.unifiedchat.UnifiedChatEntryHint
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetHostState
+import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSnapshot
 import com.google.ai.edge.gallery.ui.unifiedchat.messages.ChatMessageMcpWidgetCard
+import kotlinx.coroutines.flow.collect
 
 private const val UGOT_FORTUNE_CONNECTOR_ID = "ugot_fortune"
 private const val UGOT_FORTUNE_BOOTSTRAP_SUMMARY =
   "Hosted Fortune MCP widget connected in the shared chat shell."
+private const val UGOT_FORTUNE_DEFAULT_TOOL_SUMMARY =
+  "Updated after a Fortune MCP tool call."
 
 @Composable
 internal fun SajugTaskScreen(
@@ -61,6 +65,25 @@ internal fun SajugTaskScreen(
   LaunchedEffect(routeModel.name, messages) {
     if (shouldClearBootstrapOnlyFortuneTranscript(messages)) {
       viewModel.clearAllMessages(routeModel)
+    }
+  }
+
+  LaunchedEffect(session, routeModel.name) {
+    if (session == null) {
+      return@LaunchedEffect
+    }
+
+    session.toolCallEvents.collect { event ->
+      val mutation =
+        createFortuneToolCallMutation(
+          messages = viewModel.uiState.value.messagesByModel[routeModel.name].orEmpty(),
+          toolName = event.toolName,
+          widgetStateJson = event.widgetStateJson,
+        )
+      mutation.replaceIndex?.let { index ->
+        viewModel.replaceMessage(routeModel, index, mutation.card)
+      } ?: viewModel.addMessage(routeModel, mutation.card)
+      hostState = hostState.activate(mutation.card.snapshot, fullscreen = false)
     }
   }
 
@@ -108,3 +131,44 @@ internal fun shouldClearBootstrapOnlyFortuneTranscript(messages: List<ChatMessag
     onlyMessage.summary == UGOT_FORTUNE_BOOTSTRAP_SUMMARY &&
     onlyMessage.side == ChatSide.AGENT
 }
+
+internal data class FortuneToolCallMutation(
+  val card: ChatMessageMcpWidgetCard,
+  val replaceIndex: Int?,
+)
+
+internal fun createFortuneToolCallMutation(
+  messages: List<ChatMessage>,
+  toolName: String?,
+  widgetStateJson: String,
+): FortuneToolCallMutation {
+  val snapshot =
+    McpWidgetSnapshot(
+      connectorId = UGOT_FORTUNE_CONNECTOR_ID,
+      title = "UGOT Fortune",
+      summary = summarizeFortuneToolCall(toolName),
+      widgetStateJson = widgetStateJson,
+    )
+  val card =
+    ChatMessageMcpWidgetCard(
+      connectorId = snapshot.connectorId,
+      title = snapshot.title,
+      summary = snapshot.summary,
+      snapshot = snapshot,
+      side = ChatSide.AGENT,
+    )
+  return FortuneToolCallMutation(card = card, replaceIndex = findFortuneWidgetCardIndex(messages))
+}
+
+private fun summarizeFortuneToolCall(toolName: String?): String {
+  val sanitizedToolName = toolName?.trim().orEmpty()
+  if (sanitizedToolName.isEmpty()) {
+    return UGOT_FORTUNE_DEFAULT_TOOL_SUMMARY
+  }
+  return "Updated after running $sanitizedToolName."
+}
+
+private fun findFortuneWidgetCardIndex(messages: List<ChatMessage>): Int? =
+  messages.indexOfLast {
+    it is ChatMessageMcpWidgetCard && it.connectorId == UGOT_FORTUNE_CONNECTOR_ID
+  }.takeIf { it >= 0 }

@@ -24,6 +24,14 @@ import java.util.TimeZone
 import kotlinx.coroutines.runBlocking
 import android.content.Context
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSessionHost
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+
+internal data class McpUiToolCallEvent(
+  val toolName: String,
+  val widgetStateJson: String,
+)
 
 internal class McpUiSession private constructor(
   private val httpClient: HttpClient,
@@ -36,6 +44,8 @@ internal class McpUiSession private constructor(
   @Volatile private var toolInputJson: String = "{}"
   @Volatile private var toolOutputJson: String = "null"
   @Volatile private var widgetStateJson: String = """{}"""
+  private val _toolCallEvents = MutableSharedFlow<McpUiToolCallEvent>(extraBufferCapacity = 1)
+  val toolCallEvents: SharedFlow<McpUiToolCallEvent> = _toolCallEvents.asSharedFlow()
 
   override val injectedWidgetHtml: String
     get() =
@@ -152,6 +162,12 @@ internal class McpUiSession private constructor(
     val encoded = McpJson.encodeToString(result)
     toolOutputJson = encoded
     widgetStateJson = mergeLastToolOutput(widgetStateJson, encoded)
+    _toolCallEvents.tryEmit(
+      McpUiToolCallEvent(
+        toolName = name,
+        widgetStateJson = widgetStateJson,
+      )
+    )
     return encoded
   }
 
