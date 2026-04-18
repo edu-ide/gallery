@@ -57,6 +57,7 @@ import com.google.ai.edge.gallery.proto.AccessTokenData
 import com.google.ai.edge.gallery.proto.ImportedModel
 import com.google.ai.edge.gallery.proto.Theme
 import com.google.ai.edge.gallery.runtime.aicore.AICoreModelHelper
+import com.google.ai.edge.gallery.ui.unifiedchat.UnifiedChatCapability
 import com.google.gson.Gson
 import com.google.gson.JsonSyntaxException
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -247,6 +248,19 @@ constructor(
     return task.models.find { model -> preferredModelNames.contains(model.name) }
       ?: task.models.find { it.bestForTaskIds.contains(task.id) }
       ?: task.models.firstOrNull()
+  }
+
+  fun recommendCompatibleModel(
+    requiredCapability: UnifiedChatCapability,
+    currentTaskId: String,
+  ): Model? {
+    return getTaskById(currentTaskId)?.models?.firstOrNull { model ->
+      when (requiredCapability) {
+        UnifiedChatCapability.IMAGE -> model.llmSupportImage
+        UnifiedChatCapability.AUDIO -> model.llmSupportAudio
+        else -> true
+      }
+    }
   }
 
   fun getCustomTaskByTaskId(id: String): CustomTask? {
