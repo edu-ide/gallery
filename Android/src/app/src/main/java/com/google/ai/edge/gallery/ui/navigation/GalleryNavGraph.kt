@@ -36,13 +36,16 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -57,13 +60,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -76,6 +83,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.navArgument
 import com.google.ai.edge.gallery.BuildConfig
 import com.google.ai.edge.gallery.GalleryEvent
+import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.customtasks.common.CustomTaskData
 import com.google.ai.edge.gallery.customtasks.common.CustomTaskDataForBuiltinTask
 import com.google.ai.edge.gallery.data.BuiltInTaskId
@@ -92,21 +100,30 @@ import com.google.ai.edge.gallery.ui.common.chat.ModelDownloadStatusInfoPanel
 import com.google.ai.edge.gallery.ui.home.HomeScreen
 import com.google.ai.edge.gallery.ui.home.PromoScreenGm4
 import com.google.ai.edge.gallery.ui.home.UgotHomeScreen
+import com.google.ai.edge.gallery.ui.llmchat.LlmChatScreen
 import com.google.ai.edge.gallery.ui.modelmanager.GlobalModelManager
 import com.google.ai.edge.gallery.ui.modelmanager.ModelInitializationStatusType
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManager
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
+import com.google.ai.edge.gallery.ui.unifiedchat.UnifiedChatEntryHint
+import com.google.ai.edge.gallery.ui.unifiedchat.buildUnifiedChatRoute
+import com.google.ai.edge.gallery.ui.unifiedchat.decodeUnifiedChatEntryHint
+import com.google.ai.edge.gallery.ui.theme.emptyStateContent
+import com.google.ai.edge.gallery.ui.theme.emptyStateTitle
+import java.net.URI
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private const val TAG = "AGGalleryNavGraph"
+private const val LEGACY_APP_DEEP_LINK_SCHEME = "com.google.ai.edge.gallery"
 private const val ROUTE_STARTUP = "startup"
 private const val ROUTE_AUTH_LOGIN = "auth_login"
 private const val ROUTE_HOMESCREEN = "homepage"
 private const val ROUTE_DEVELOPER_HOME = "developer_home"
 private const val ROUTE_MODEL_LIST = "model_list"
 private const val ROUTE_MODEL = "route_model"
+private const val ROUTE_UNIFIED_MODEL = "model"
 private const val ROUTE_BENCHMARK = "benchmark"
 private const val ROUTE_MODEL_MANAGER = "model_manager"
 private const val ENTER_ANIMATION_DURATION_MS = 500
@@ -156,28 +173,64 @@ private fun AnimatedContentTransitionScope<*>.slideDownExit(): ExitTransition {
   )
 }
 
+internal sealed interface DeepLinkDestination {
+  data class Model(val taskId: String, val modelName: String) : DeepLinkDestination
+
+  data object GlobalModelManager : DeepLinkDestination
+}
+
+internal fun resolveDeepLinkDestination(deepLink: String?): DeepLinkDestination? {
+  if (deepLink == null) {
+    return null
+  }
+
+  val uri =
+    try {
+      URI.create(deepLink)
+    } catch (_: IllegalArgumentException) {
+      Log.e(TAG, "Malformed deep link URI received: $deepLink")
+      return null
+    }
+
+  val scheme = uri.scheme ?: return null
+  if (scheme != BuildConfig.APPLICATION_ID && scheme != LEGACY_APP_DEEP_LINK_SCHEME) {
+    return null
+  }
+
+  val host = uri.host ?: uri.authority
+  return when (host) {
+    "model" -> {
+      val pathSegments =
+        uri.path
+          ?.split('/')
+          ?.filter { it.isNotEmpty() }
+          .orEmpty()
+      if (pathSegments.size < 2) {
+        Log.e(TAG, "Malformed deep link URI received: $deepLink")
+        null
+      } else {
+        DeepLinkDestination.Model(
+          taskId = pathSegments[pathSegments.size - 2],
+          modelName = pathSegments.last(),
+        )
+      }
+    }
+    "global_model_manager" -> DeepLinkDestination.GlobalModelManager
+    else -> null
+  }
+}
+
 private fun resolveDeepLinkRoute(
   data: Uri?,
   modelManagerViewModel: ModelManagerViewModel,
 ): String? {
-  if (data == null) {
-    return null
-  }
-
-  val deepLink = data.toString()
-  return when {
-    deepLink.startsWith("com.google.ai.edge.gallery://model/") -> {
-      if (data.pathSegments.size < 2) {
-        Log.e(TAG, "Malformed deep link URI received: $data")
-        null
-      } else {
-        val taskId = data.pathSegments[data.pathSegments.size - 2]
-        val modelName = data.pathSegments.last()
-        modelManagerViewModel.getModelByName(name = modelName)?.let { "$ROUTE_MODEL/$taskId/${it.name}" }
-      }
-    }
-    deepLink == "com.google.ai.edge.gallery://global_model_manager" -> ROUTE_MODEL_MANAGER
-    else -> null
+  return when (val destination = resolveDeepLinkDestination(data?.toString())) {
+    is DeepLinkDestination.Model ->
+      modelManagerViewModel
+        .getModelByName(name = destination.modelName)
+        ?.let { buildUnifiedChatRoute(destination.taskId, it.name, UnifiedChatEntryHint()) }
+    DeepLinkDestination.GlobalModelManager -> ROUTE_MODEL_MANAGER
+    null -> null
   }
 }
 
@@ -478,88 +531,63 @@ fun GalleryNavHost(
 
     // Model page.
     composable(
-      route = "$ROUTE_MODEL/{taskId}/{modelName}",
+      route = "$ROUTE_MODEL/{taskId}/{modelName}?entry_hint={entry_hint}",
       arguments =
         listOf(
           navArgument("taskId") { type = NavType.StringType },
           navArgument("modelName") { type = NavType.StringType },
+          navArgument("entry_hint") {
+            type = NavType.StringType
+            nullable = true
+            defaultValue = ""
+          },
         ),
       enterTransition = { slideEnter() },
       exitTransition = { slideExit() },
     ) { backStackEntry ->
       val modelName = backStackEntry.arguments?.getString("modelName") ?: ""
       val taskId = backStackEntry.arguments?.getString("taskId") ?: ""
-      val scope = rememberCoroutineScope()
-      val context = LocalContext.current
+      val entryHint = decodeUnifiedChatEntryHint(backStackEntry.arguments?.getString("entry_hint"))
+      ModelPageScreen(
+        navController = navController,
+        modelManagerViewModel = modelManagerViewModel,
+        taskId = taskId,
+        modelName = modelName,
+        entryHint = entryHint,
+        lastNavigatedModelName = lastNavigatedModelName,
+        onLastNavigatedModelNameChange = { lastNavigatedModelName = it },
+        onEnableModelListAnimationChange = { enableModelListAnimation = it },
+      )
+    }
 
-      modelManagerViewModel.getModelByName(name = modelName)?.let { initialModel ->
-        if (lastNavigatedModelName != modelName) {
-          modelManagerViewModel.selectModel(initialModel)
-          lastNavigatedModelName = modelName
-        }
-
-        val customTask = modelManagerViewModel.getCustomTaskByTaskId(id = taskId)
-        if (customTask != null) {
-          if (isLegacyTasks(customTask.task.id)) {
-            customTask.MainScreen(
-              data =
-                CustomTaskDataForBuiltinTask(
-                  modelManagerViewModel = modelManagerViewModel,
-                  onNavUp = {
-                    enableModelListAnimation = false
-                    lastNavigatedModelName = ""
-                    navController.navigateUp()
-                  },
-                )
-            )
-          } else {
-            var disableAppBarControls by remember { mutableStateOf(false) }
-            var hideTopBar by remember { mutableStateOf(false) }
-            var customNavigateUpCallback by remember { mutableStateOf<(() -> Unit)?>(null) }
-            CustomTaskScreen(
-              task = customTask.task,
-              modelManagerViewModel = modelManagerViewModel,
-              onNavigateUp = {
-                if (customNavigateUpCallback != null) {
-                  customNavigateUpCallback?.invoke()
-                } else {
-                  enableModelListAnimation = false
-                  lastNavigatedModelName = ""
-                  navController.navigateUp()
-
-                  // clean up all models.
-                  for (curModel in customTask.task.models) {
-                    val instanceToCleanUp = curModel.instance
-                    scope.launch(Dispatchers.Default) {
-                      modelManagerViewModel.cleanupModel(
-                        context = context,
-                        task = customTask.task,
-                        model = curModel,
-                        instanceToCleanUp = instanceToCleanUp,
-                      )
-                    }
-                  }
-                }
-              },
-              disableAppBarControls = disableAppBarControls,
-              hideTopBar = hideTopBar,
-              useThemeColor = customTask.task.useThemeColor,
-            ) { bottomPadding ->
-              customTask.MainScreen(
-                data =
-                  CustomTaskData(
-                    modelManagerViewModel = modelManagerViewModel,
-                    selectedModel = initialModel,
-                    bottomPadding = bottomPadding,
-                    setAppBarControlsDisabled = { disableAppBarControls = it },
-                    setTopBarVisible = { hideTopBar = !it },
-                    setCustomNavigateUpCallback = { customNavigateUpCallback = it },
-                  )
-              )
-            }
-          }
-        }
-      }
+    composable(
+      route = "$ROUTE_UNIFIED_MODEL/{taskId}/{modelName}?entry_hint={entry_hint}",
+      arguments =
+        listOf(
+          navArgument("taskId") { type = NavType.StringType },
+          navArgument("modelName") { type = NavType.StringType },
+          navArgument("entry_hint") {
+            type = NavType.StringType
+            nullable = true
+            defaultValue = ""
+          },
+        ),
+      enterTransition = { slideEnter() },
+      exitTransition = { slideExit() },
+    ) { backStackEntry ->
+      val modelName = backStackEntry.arguments?.getString("modelName") ?: ""
+      val taskId = backStackEntry.arguments?.getString("taskId") ?: ""
+      val entryHint = decodeUnifiedChatEntryHint(backStackEntry.arguments?.getString("entry_hint"))
+      ModelPageScreen(
+        navController = navController,
+        modelManagerViewModel = modelManagerViewModel,
+        taskId = taskId,
+        modelName = modelName,
+        entryHint = entryHint,
+        lastNavigatedModelName = lastNavigatedModelName,
+        onLastNavigatedModelNameChange = { lastNavigatedModelName = it },
+        onEnableModelListAnimationChange = { enableModelListAnimation = it },
+      )
     }
 
     // Global model manager page.
@@ -634,6 +662,121 @@ fun GalleryNavHost(
       intent.data = null
       Log.d(TAG, "navigation link clicked: $data")
       navController.navigate(route)
+    }
+  }
+}
+
+@Composable
+private fun ModelPageScreen(
+  navController: NavHostController,
+  modelManagerViewModel: ModelManagerViewModel,
+  taskId: String,
+  modelName: String,
+  entryHint: UnifiedChatEntryHint,
+  lastNavigatedModelName: String,
+  onLastNavigatedModelNameChange: (String) -> Unit,
+  onEnableModelListAnimationChange: (Boolean) -> Unit,
+) {
+  val scope = rememberCoroutineScope()
+  val context = LocalContext.current
+
+  modelManagerViewModel.getModelByName(name = modelName)?.let { initialModel ->
+    if (lastNavigatedModelName != modelName) {
+      modelManagerViewModel.selectModel(initialModel)
+      onLastNavigatedModelNameChange(modelName)
+    }
+
+    if (taskId == BuiltInTaskId.LLM_CHAT) {
+      LlmChatScreen(
+        modelManagerViewModel = modelManagerViewModel,
+        navigateUp = {
+          onEnableModelListAnimationChange(false)
+          onLastNavigatedModelNameChange("")
+          navController.navigateUp()
+        },
+        taskId = taskId,
+        entryHint = entryHint,
+        emptyStateComposable = {
+          Box(modifier = Modifier.fillMaxSize()) {
+            Column(
+              modifier =
+                Modifier.align(Alignment.Center).padding(horizontal = 48.dp).padding(bottom = 48.dp),
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+              Text(stringResource(R.string.aichat_emptystate_title), style = emptyStateTitle)
+              Text(
+                stringResource(R.string.aichat_emptystate_content),
+                style = emptyStateContent,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+              )
+            }
+          }
+        },
+      )
+    } else {
+      val customTask = modelManagerViewModel.getCustomTaskByTaskId(id = taskId)
+      if (customTask != null) {
+        if (isLegacyTasks(customTask.task.id)) {
+          customTask.MainScreen(
+            data =
+              CustomTaskDataForBuiltinTask(
+                modelManagerViewModel = modelManagerViewModel,
+                onNavUp = {
+                  onEnableModelListAnimationChange(false)
+                  onLastNavigatedModelNameChange("")
+                  navController.navigateUp()
+                },
+              )
+          )
+        } else {
+          var disableAppBarControls by remember { mutableStateOf(false) }
+          var hideTopBar by remember { mutableStateOf(false) }
+          var customNavigateUpCallback by remember { mutableStateOf<(() -> Unit)?>(null) }
+          CustomTaskScreen(
+            task = customTask.task,
+            modelManagerViewModel = modelManagerViewModel,
+            onNavigateUp = {
+              if (customNavigateUpCallback != null) {
+                customNavigateUpCallback?.invoke()
+              } else {
+                onEnableModelListAnimationChange(false)
+                onLastNavigatedModelNameChange("")
+                navController.navigateUp()
+
+                // clean up all models.
+                for (curModel in customTask.task.models) {
+                  val instanceToCleanUp = curModel.instance
+                  scope.launch(Dispatchers.Default) {
+                    modelManagerViewModel.cleanupModel(
+                      context = context,
+                      task = customTask.task,
+                      model = curModel,
+                      instanceToCleanUp = instanceToCleanUp,
+                    )
+                  }
+                }
+              }
+            },
+            disableAppBarControls = disableAppBarControls,
+            hideTopBar = hideTopBar,
+            useThemeColor = customTask.task.useThemeColor,
+          ) { bottomPadding ->
+            customTask.MainScreen(
+              data =
+                CustomTaskData(
+                  modelManagerViewModel = modelManagerViewModel,
+                  selectedModel = initialModel,
+                  bottomPadding = bottomPadding,
+                  setAppBarControlsDisabled = { disableAppBarControls = it },
+                  setTopBarVisible = { hideTopBar = !it },
+                  setCustomNavigateUpCallback = { customNavigateUpCallback = it },
+                )
+            )
+          }
+        }
+      }
     }
   }
 }
