@@ -54,9 +54,9 @@ struct GalleryHomeView: View {
     VStack(alignment: .leading, spacing: 16) {
       HStack(alignment: .top) {
         VStack(alignment: .leading, spacing: 8) {
-          Text("UGOT Local AI")
+          Text("UGOT AI")
             .font(.largeTitle.bold())
-          Text("Private, on-device chat powered by Gemma and LiteRT-LM.")
+          Text("A private assistant for everyday questions, notes, and tools.")
             .font(.body)
             .foregroundStyle(.secondary)
         }
@@ -70,11 +70,11 @@ struct GalleryHomeView: View {
 
       HStack(spacing: 10) {
         CapabilityBadge(title: "Private", symbol: "lock")
-        CapabilityBadge(title: selectedModel.shortName, symbol: "cpu")
-        CapabilityBadge(title: "On-device", symbol: "bolt")
+        CapabilityBadge(title: "Fast", symbol: "bolt")
+        CapabilityBadge(title: "Personal", symbol: "person.crop.circle")
       }
 
-      Text("Your messages stay on this iPhone. Tools connect only when you choose them.")
+      Text("Start a chat, add photos or audio when helpful, and use connected tools when you choose.")
         .font(.caption)
         .foregroundStyle(.secondary)
         .padding(10)
@@ -112,14 +112,14 @@ struct GalleryHomeView: View {
               .font(.title2)
               .foregroundStyle(Color.accentColor)
           }
-          Text("\(selectedModel.shortName) • local inference • optional Fortune connector")
+          Text("Ask anything, attach context, and continue privately.")
             .font(.subheadline)
             .foregroundStyle(.secondary)
           HStack(spacing: 8) {
             CapabilityBadge(title: "Text chat", symbol: "text.bubble")
-            if selectedModel.supportsImage { CapabilityBadge(title: "Vision ready", symbol: "photo") }
-            if selectedModel.supportsAudio { CapabilityBadge(title: "Audio ready", symbol: "waveform") }
-            CapabilityBadge(title: "Fortune MCP", symbol: "sparkles")
+            if selectedModel.supportsImage { CapabilityBadge(title: "Photos", symbol: "photo") }
+            if selectedModel.supportsAudio { CapabilityBadge(title: "Audio", symbol: "waveform") }
+            CapabilityBadge(title: "Tools", symbol: "sparkles")
           }
         }
         .padding(18)
@@ -398,7 +398,7 @@ private struct RecentSessionRow: View {
     HStack(spacing: 12) {
       VStack(alignment: .leading, spacing: 5) {
         Text(session.title).font(.headline).lineLimit(1)
-        Text("\(session.modelName) • \(session.messageCount) messages")
+        Text("\(session.messageCount) messages")
           .font(.caption)
           .foregroundStyle(.secondary)
         if !session.activeConnectorIds.isEmpty {

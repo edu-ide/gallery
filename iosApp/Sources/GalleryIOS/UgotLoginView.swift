@@ -22,7 +22,7 @@ struct UgotLoginView: View {
           Text("Sign in to UGOT Chat")
             .font(.largeTitle.bold())
             .multilineTextAlignment(.center)
-          Text("Use native Google sign-in to keep chat, MCP tools, and model downloads tied to your UGOT session.")
+          Text("Sign in to keep your chats and connected tools available across your UGOT experience.")
             .font(.body)
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
