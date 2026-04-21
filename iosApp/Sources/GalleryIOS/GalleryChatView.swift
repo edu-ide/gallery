@@ -14,11 +14,17 @@ struct GalleryChatView: View {
   @State private var streamingAssistantText = ""
   @FocusState private var isComposerFocused: Bool
 
-  init(model: GalleryModel, connectors: [GalleryConnector], entryHint: UnifiedChatEntryHint) {
+  init(
+    model: GalleryModel,
+    connectors: [GalleryConnector],
+    entryHint: UnifiedChatEntryHint,
+    sessionIdOverride: String? = nil,
+    restoreExistingSession: Bool = true
+  ) {
     self.model = model
     self.connectors = connectors
     self.entryHint = entryHint
-    let computedSessionId = UnifiedChatPersistedSessionKt.buildUnifiedChatSessionId(
+    let computedSessionId = sessionIdOverride ?? GallerySessionStore.makeSessionId(
       taskId: model.taskId,
       modelName: model.name,
       entryHint: entryHint
@@ -34,7 +40,7 @@ struct GalleryChatView: View {
       initialDraft: ""
     )
     let store = GallerySessionStore()
-    if let persisted = store.load(id: computedSessionId) {
+    if restoreExistingSession, let persisted = store.load(id: computedSessionId) {
       _sessionState = State(initialValue: initialState.restoring(persisted))
     } else {
       _sessionState = State(initialValue: initialState)

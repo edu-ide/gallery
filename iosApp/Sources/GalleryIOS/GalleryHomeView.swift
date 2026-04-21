@@ -8,6 +8,7 @@ struct GalleryHomeView: View {
   @State private var imageEnabled = false
   @State private var audioEnabled = false
   @State private var toolsEnabled = true
+  @State private var newChatSessionId: String?
 
   private let models = GalleryModel.samples
   private let connectors = GalleryConnector.samples
@@ -32,6 +33,7 @@ struct GalleryHomeView: View {
         VStack(alignment: .leading, spacing: 24) {
           heroCard
           startChatSection
+          controlsSection
           recentSessionsSection
         }
         .padding()
@@ -88,8 +90,12 @@ struct GalleryHomeView: View {
   private var startChatSection: some View {
     VStack(alignment: .leading, spacing: 12) {
       SectionTitle("Chat")
-      NavigationLink {
-        chatDestination(model: selectedModel, hint: currentEntryHint)
+      Button {
+        newChatSessionId = GallerySessionStore.makeNewSessionId(
+          taskId: selectedModel.taskId,
+          modelName: selectedModel.name,
+          entryHint: currentEntryHint
+        )
       } label: {
         VStack(alignment: .leading, spacing: 14) {
           HStack {
@@ -105,6 +111,8 @@ struct GalleryHomeView: View {
             .foregroundStyle(.secondary)
           HStack(spacing: 8) {
             CapabilityBadge(title: "Text chat", symbol: "text.bubble")
+            if imageEnabled && selectedModel.supportsImage { CapabilityBadge(title: "Vision", symbol: "photo") }
+            if audioEnabled && selectedModel.supportsAudio { CapabilityBadge(title: "Audio", symbol: "waveform") }
             if toolsEnabled { CapabilityBadge(title: "Fortune MCP", symbol: "sparkles") }
           }
         }
@@ -113,6 +121,26 @@ struct GalleryHomeView: View {
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 22))
       }
       .buttonStyle(.plain)
+      .navigationDestination(
+        isPresented: Binding(
+          get: { newChatSessionId != nil },
+          set: { isPresented in
+            if !isPresented {
+              newChatSessionId = nil
+              refreshRecentSessions()
+            }
+          }
+        )
+      ) {
+        if let sessionId = newChatSessionId {
+          chatDestination(
+            model: selectedModel,
+            hint: currentEntryHint,
+            sessionId: sessionId,
+            restoreExistingSession: false
+          )
+        }
+      }
     }
   }
 
@@ -137,7 +165,12 @@ struct GalleryHomeView: View {
       } else {
         ForEach(recentSessions.prefix(4)) { session in
           NavigationLink {
-            chatDestination(model: modelForSession(session), hint: hintForSession(session))
+            chatDestination(
+              model: modelForSession(session),
+              hint: hintForSession(session),
+              sessionId: session.id,
+              restoreExistingSession: true
+            )
           } label: {
             RecentSessionRow(session: session) {
               sessionStore.delete(id: session.id)
@@ -152,7 +185,7 @@ struct GalleryHomeView: View {
 
   private var controlsSection: some View {
     VStack(alignment: .leading, spacing: 16) {
-      SectionTitle("Chat setup")
+      SectionTitle("AI Chat capabilities")
       modelPicker
       capabilityToggles
       connectorPicker
@@ -261,8 +294,19 @@ struct GalleryHomeView: View {
     }
   }
 
-  private func chatDestination(model: GalleryModel, hint: UnifiedChatEntryHint) -> some View {
-    GalleryChatView(model: model, connectors: connectors, entryHint: hint)
+  private func chatDestination(
+    model: GalleryModel,
+    hint: UnifiedChatEntryHint,
+    sessionId: String? = nil,
+    restoreExistingSession: Bool = true
+  ) -> some View {
+    GalleryChatView(
+      model: model,
+      connectors: connectors,
+      entryHint: hint,
+      sessionIdOverride: sessionId,
+      restoreExistingSession: restoreExistingSession
+    )
   }
 
   private func refreshRecentSessions() {

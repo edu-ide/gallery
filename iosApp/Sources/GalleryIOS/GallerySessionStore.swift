@@ -23,6 +23,18 @@ struct GallerySessionStore {
     try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
   }
 
+  static func makeSessionId(taskId: String, modelName: String, entryHint: UnifiedChatEntryHint) -> String {
+    UnifiedChatPersistedSessionKt.buildUnifiedChatSessionId(
+      taskId: taskId,
+      modelName: modelName,
+      entryHint: entryHint
+    )
+  }
+
+  static func makeNewSessionId(taskId: String, modelName: String, entryHint: UnifiedChatEntryHint) -> String {
+    "\(makeSessionId(taskId: taskId, modelName: modelName, entryHint: entryHint))::session=\(UUID().uuidString)"
+  }
+
   func load(id: String) -> UnifiedChatPersistedSession? {
     let url = fileURL(id: id)
     return load(url: url)
@@ -39,7 +51,7 @@ struct GallerySessionStore {
       .filter { $0.pathExtension == "json" }
       .compactMap { url -> GallerySessionSummary? in
         guard let session = load(url: url),
-              let key = UnifiedChatPersistedSessionKt.parseUnifiedChatSessionId(id: session.id) else {
+              let key = parseSessionKey(id: session.id) else {
           return nil
         }
         let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
@@ -75,6 +87,18 @@ struct GallerySessionStore {
 
   func delete(id: String) {
     try? FileManager.default.removeItem(at: fileURL(id: id))
+  }
+
+  private func parseSessionKey(id: String) -> UnifiedChatSessionKey? {
+    if let key = UnifiedChatPersistedSessionKt.parseUnifiedChatSessionId(id: id) {
+      return key
+    }
+    let parts = id.components(separatedBy: "::")
+    if parts.count > 3 {
+      let baseId = parts.prefix(3).joined(separator: "::")
+      return UnifiedChatPersistedSessionKt.parseUnifiedChatSessionId(id: baseId)
+    }
+    return nil
   }
 
   private func load(url: URL) -> UnifiedChatPersistedSession? {
