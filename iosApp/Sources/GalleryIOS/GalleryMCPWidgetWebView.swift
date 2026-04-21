@@ -520,8 +520,82 @@ private struct GalleryMCPWidgetPayload {
         onHostContextChanged(callback) { if (typeof callback === 'function') callback(hostContext); },
         onTeardown(callback) {},
       };
+      function postJsonRpc(message) {
+        window.postMessage(Object.assign({ jsonrpc: '2.0' }, message || {}), '*');
+      }
+      function notifySelf(method, params) {
+        postJsonRpc({ method, params: params || {} });
+      }
+      function sendInitialToolData() {
+        notifySelf('ui/notifications/host-context-changed', hostContext);
+        notifySelf('ui/notifications/tool-input', { arguments: host.toolInput || {} });
+        if (host.toolOutput != null) notifySelf('ui/notifications/tool-result', host.toolOutput || {});
+      }
+      function respond(id, result) { postJsonRpc({ id, result: result || {} }); }
+      function respondError(id, error) {
+        postJsonRpc({ id, error: { code: -32603, message: String(error && error.message || error || 'MCP Apps host error') } });
+      }
+      function handleHostRequest(message) {
+        const id = message.id;
+        const params = message.params || {};
+        switch (message.method) {
+          case 'ui/initialize':
+            respond(id, {
+              protocolVersion: '2026-01-26',
+              hostInfo: { name: 'gallery-ios', version: '0.1.0' },
+              hostCapabilities: {
+                openLinks: {},
+                serverTools: { listChanged: false },
+                serverResources: { listChanged: false },
+                logging: {},
+                updateModelContext: { text: {}, image: {}, audio: {}, resource: {}, resourceLink: {}, structuredContent: {} },
+                message: { text: {}, image: {}, audio: {}, structuredContent: {} }
+              },
+              hostContext
+            });
+            setTimeout(sendInitialToolData, 0);
+            break;
+          case 'tools/call':
+          case 'tools/list':
+          case 'resources/list':
+          case 'resources/read':
+            nativeRequest(message.method, params).then((result) => {
+              if (message.method === 'tools/call') {
+                host.toolOutput = result || {};
+                notifySelf('ui/notifications/tool-result', host.toolOutput);
+              }
+              respond(id, result);
+            }).catch((error) => respondError(id, error));
+            break;
+          case 'ui/open-link':
+            if (params.url) postNative({ type: 'openExternal', url: params.url });
+            respond(id, {});
+            break;
+          case 'ui/request-display-mode':
+            host.displayMode = params.mode === 'fullscreen' ? 'fullscreen' : 'inline';
+            hostContext.displayMode = host.displayMode;
+            notifySelf('ui/notifications/host-context-changed', { displayMode: host.displayMode });
+            respond(id, { mode: host.displayMode });
+            break;
+          case 'ui/update-model-context':
+            host.modelContext = params;
+            respond(id, {});
+            break;
+          case 'ui/message':
+            host.lastMessage = params;
+            respond(id, {});
+            break;
+          case 'ui/resource-teardown':
+          case 'ping':
+            respond(id, {});
+            break;
+          default:
+            respondError(id, 'Unsupported MCP Apps method: ' + message.method);
+        }
+      }
       window.addEventListener('message', (event) => {
-        if (event.source !== window.parent) return;
+        const expectedSource = window.parent && window.parent !== window ? window.parent : window;
+        if (event.source !== expectedSource) return;
         const message = event.data;
         if (!message || message.jsonrpc !== '2.0') return;
         if (message.id != null && pending[message.id]) {
@@ -531,7 +605,15 @@ private struct GalleryMCPWidgetPayload {
           else item.resolve(message.result || {});
           return;
         }
-        if (message.method === 'ui/notifications/tool-input') {
+        if (message.id != null && message.method) {
+          handleHostRequest(message);
+          return;
+        }
+        if (message.method === 'ui/notifications/initialized') {
+          sendInitialToolData();
+        } else if (message.method === 'ui/notifications/size-changed' && message.params && message.params.height) {
+          host.maxHeight = message.params.height;
+        } else if (message.method === 'ui/notifications/tool-input') {
           host.toolInput = message.params && message.params.arguments || {};
           dispatchGlobals({ toolInput: host.toolInput });
         } else if (message.method === 'ui/notifications/tool-result') {
