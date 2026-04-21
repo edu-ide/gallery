@@ -39,12 +39,18 @@ enum GalleryFortuneActionRunner {
   }
 }
 
-private struct GalleryFortuneMCPResponse {
+struct GalleryFortuneMCPResponse {
   let message: String
   let snapshot: McpWidgetSnapshot
 }
 
-private final class GalleryFortuneMCPClient {
+private struct GalleryMCPWidgetResource {
+  let uri: String
+  let mimeType: String?
+  let html: String
+}
+
+final class GalleryFortuneMCPClient {
   private let endpoint = URL(string: GalleryConnector.fortuneMcpEndpoint)!
   private let accessToken: String
   private var sessionId: String?
@@ -58,6 +64,7 @@ private final class GalleryFortuneMCPClient {
     try await initialize()
     let tools = try await listTools()
     let toolName = pickTodayFortuneTool(from: tools)
+    let widgetResource = try? await loadWidgetResource(tools: tools, toolName: toolName)
     let result = try await callTool(
       name: toolName,
       arguments: [
@@ -68,8 +75,13 @@ private final class GalleryFortuneMCPClient {
     let message = renderToolResult(result, toolName: toolName)
     return GalleryFortuneMCPResponse(
       message: message,
-      snapshot: makeSnapshot(toolName: toolName, message: message, result: result)
+      snapshot: makeSnapshot(toolName: toolName, message: message, result: result, widgetResource: widgetResource)
     )
+  }
+
+  func callToolForWidget(name: String, arguments: [String: Any]) async throws -> [String: Any] {
+    try await initialize()
+    return try await callTool(name: name, arguments: arguments)
   }
 
   private func initialize() async throws {
@@ -112,6 +124,79 @@ private final class GalleryFortuneMCPClient {
     )
     guard let result = response?["result"] as? [String: Any] else { return [] }
     return result["tools"] as? [[String: Any]] ?? []
+  }
+
+  private func listResources() async throws -> [[String: Any]] {
+    let response = try await send(
+      payload: [
+        "jsonrpc": "2.0",
+        "id": nextRequestId(),
+        "method": "resources/list",
+        "params": [:],
+      ],
+      expectsResponse: true
+    )
+    guard let result = response?["result"] as? [String: Any] else { return [] }
+    return result["resources"] as? [[String: Any]] ?? []
+  }
+
+  private func readResource(uri: String) async throws -> GalleryMCPWidgetResource? {
+    let response = try await send(
+      payload: [
+        "jsonrpc": "2.0",
+        "id": nextRequestId(),
+        "method": "resources/read",
+        "params": ["uri": uri],
+      ],
+      expectsResponse: true
+    )
+    guard let result = response?["result"] as? [String: Any],
+          let contents = result["contents"] as? [[String: Any]] else {
+      return nil
+    }
+
+    for item in contents {
+      guard let text = item["text"] as? String, !text.isEmpty else { continue }
+      let mimeType = item["mimeType"] as? String
+      let itemURI = item["uri"] as? String ?? uri
+      if isSupportedWidgetMime(mimeType) || text.localizedCaseInsensitiveContains("<html") {
+        return GalleryMCPWidgetResource(uri: itemURI, mimeType: mimeType, html: text)
+      }
+    }
+    return nil
+  }
+
+  private func loadWidgetResource(tools: [[String: Any]], toolName: String) async throws -> GalleryMCPWidgetResource? {
+    var candidateURIs: [String] = []
+
+    if let tool = tools.first(where: { ($0["name"] as? String) == toolName }),
+       let uri = outputTemplateURI(from: tool) {
+      candidateURIs.append(uri)
+    }
+
+    let resources = (try? await listResources()) ?? []
+    let preferredResources = resources
+      .compactMap { resource -> (uri: String, mimeType: String?)? in
+        guard let uri = resource["uri"] as? String else { return nil }
+        return (uri, resource["mimeType"] as? String)
+      }
+      .filter { isSupportedWidgetMime($0.mimeType) }
+      .sorted { lhs, rhs in
+        if mimePriority(lhs.mimeType) != mimePriority(rhs.mimeType) {
+          return mimePriority(lhs.mimeType) > mimePriority(rhs.mimeType)
+        }
+        return lhs.uri.contains("?v=") && !rhs.uri.contains("?v=")
+      }
+      .map(\.uri)
+    candidateURIs.append(contentsOf: preferredResources)
+
+    var seen = Set<String>()
+    for uri in candidateURIs where seen.insert(uri).inserted {
+      if let resource = try? await readResource(uri: uri) {
+        return resource
+      }
+    }
+    return nil
   }
 
   private func callTool(name: String, arguments: [String: Any]) async throws -> [String: Any] {
@@ -227,16 +312,32 @@ private final class GalleryFortuneMCPClient {
     return "Fortune MCP에서 \(toolName)을 실행했어요. 위젯 응답을 받았지만 표시할 텍스트가 없어요."
   }
 
-  private func makeSnapshot(toolName: String, message: String, result: [String: Any]) -> McpWidgetSnapshot {
-    let state: [String: Any] = [
+  private func makeSnapshot(
+    toolName: String,
+    message: String,
+    result: [String: Any],
+    widgetResource: GalleryMCPWidgetResource?
+  ) -> McpWidgetSnapshot {
+    var state: [String: Any] = [
       "kind": "fortune",
       "connectorId": GalleryConnector.fortuneMcpId,
       "endpoint": GalleryConnector.fortuneMcpEndpoint,
       "toolName": toolName,
+      "toolInput": [
+        "lang": "ko",
+        "target_date": todayString(),
+      ],
+      "toolOutput": result,
       "targetDate": todayString(),
       "contentMarkdown": message,
       "rawResult": result,
     ]
+    if let widgetResource {
+      state["widgetUri"] = widgetResource.uri
+      state["widgetMimeType"] = widgetResource.mimeType ?? ""
+      state["widgetBaseUrl"] = widgetBaseURL(for: widgetResource.uri)
+      state["widgetHtmlBase64"] = Data(widgetResource.html.utf8).base64EncodedString()
+    }
     let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
     let json = data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
     return McpWidgetSnapshot(
@@ -267,6 +368,44 @@ private final class GalleryFortuneMCPClient {
   private func nextRequestId() -> Int {
     defer { nextId += 1 }
     return nextId
+  }
+
+  private func outputTemplateURI(from tool: [String: Any]) -> String? {
+    if let uri = tool["outputTemplate"] as? String {
+      return uri
+    }
+    if let meta = tool["_meta"] as? [String: Any] {
+      return meta["openai/outputTemplate"] as? String ??
+        meta["openai/output_template"] as? String ??
+        meta["outputTemplate"] as? String
+    }
+    return nil
+  }
+
+  private func isSupportedWidgetMime(_ mimeType: String?) -> Bool {
+    mimeType == "text/html;profile=mcp-app" || mimeType == "text/html+skybridge"
+  }
+
+  private func mimePriority(_ mimeType: String?) -> Int {
+    switch mimeType {
+    case "text/html;profile=mcp-app": return 2
+    case "text/html+skybridge": return 1
+    default: return 0
+    }
+  }
+
+  private func widgetBaseURL(for uri: String) -> String {
+    if let url = URL(string: uri), let scheme = url.scheme, scheme.hasPrefix("http") {
+      var components = URLComponents()
+      components.scheme = url.scheme
+      components.host = url.host
+      components.port = url.port
+      return components.url?.absoluteString ?? GalleryConnector.fortuneMcpEndpoint
+    }
+    var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
+    components?.path = "/"
+    components?.query = nil
+    return components?.url?.absoluteString ?? GalleryConnector.fortuneMcpEndpoint
   }
 
   private enum MCPError: LocalizedError {

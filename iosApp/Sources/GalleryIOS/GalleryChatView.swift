@@ -722,7 +722,12 @@ private struct WidgetPreview: View {
       Text(snapshot.summary)
         .font(.subheadline)
         .foregroundStyle(.secondary)
-      if let content = snapshot.fortuneContentMarkdown {
+      if snapshot.hasMcpWidgetHTML {
+        GalleryMCPWidgetWebView(snapshot: snapshot)
+          .frame(maxWidth: .infinity, minHeight: 320, maxHeight: 420)
+          .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+          .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.orange.opacity(0.18)))
+      } else if let content = snapshot.fortuneContentMarkdown {
         AssistantMarkdownText(text: content)
           .font(.body)
           .lineLimit(8)
@@ -741,6 +746,16 @@ private struct WidgetPreview: View {
 }
 
 private extension McpWidgetSnapshot {
+  var hasMcpWidgetHTML: Bool {
+    guard let data = widgetStateJson.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let htmlBase64 = object["widgetHtmlBase64"] as? String,
+          Data(base64Encoded: htmlBase64) != nil else {
+      return false
+    }
+    return true
+  }
+
   var fortuneContentMarkdown: String? {
     guard connectorId == GalleryConnector.fortuneMcpId,
           let data = widgetStateJson.data(using: .utf8),
