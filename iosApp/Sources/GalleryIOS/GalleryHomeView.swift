@@ -4,12 +4,26 @@ import GallerySharedCore
 struct GalleryHomeView: View {
   @State private var selectedConnectorIds: Set<String> = ["github"]
   @State private var recentSessions: [GallerySessionSummary] = []
+  @State private var selectedModelId: String = GalleryModel.samples[0].id
+  @State private var imageEnabled = false
+  @State private var audioEnabled = false
+  @State private var toolsEnabled = true
+
   private let models = GalleryModel.samples
   private let connectors = GalleryConnector.samples
   private let sessionStore = GallerySessionStore()
 
-  private var tasks: [GalleryTask] {
-    GalleryTask.samples(selectedConnectorIds: selectedConnectorIds, models: models)
+  private var selectedModel: GalleryModel {
+    models.first { $0.id == selectedModelId } ?? models[0]
+  }
+
+  private var currentEntryHint: UnifiedChatEntryHint {
+    UnifiedChatEntryHint(
+      activateImage: imageEnabled && selectedModel.supportsImage,
+      activateAudio: audioEnabled && selectedModel.supportsAudio,
+      activateSkills: toolsEnabled,
+      activateMcpConnectorIds: Array(selectedConnectorIds)
+    )
   }
 
   var body: some View {
@@ -17,15 +31,15 @@ struct GalleryHomeView: View {
       ScrollView {
         VStack(alignment: .leading, spacing: 24) {
           heroCard
-          taskGridSection
-          modelManagerSection
+          startChatSection
           recentSessionsSection
-          connectorSection
+          controlsSection
+          localModelsSection
           runtimeSection
         }
         .padding()
       }
-      .navigationTitle("Gallery")
+      .navigationTitle("Local AI")
       .background(Color(.systemGroupedBackground))
       .onAppear { refreshRecentSessions() }
     }
@@ -35,24 +49,24 @@ struct GalleryHomeView: View {
     VStack(alignment: .leading, spacing: 16) {
       HStack(alignment: .top) {
         VStack(alignment: .leading, spacing: 8) {
-          Text("Google AI Edge Gallery")
+          Text("Local AI Chat")
             .font(.largeTitle.bold())
-          Text("On-device AI playground for chat, multimodal prompts, skills, and model management.")
+          Text("A ChatGPT-style local assistant shell. Model, tools, image, audio, and session history all flow through one unified chat.")
             .font(.body)
             .foregroundStyle(.secondary)
         }
         Spacer()
-        Image(systemName: "sparkles")
-          .font(.system(size: 34, weight: .bold))
+        Image(systemName: "message.and.waveform.fill")
+          .font(.system(size: 32, weight: .bold))
           .foregroundStyle(.white)
           .frame(width: 62, height: 62)
           .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
       }
 
       HStack(spacing: 10) {
-        CapabilityBadge(title: "KMP shared", symbol: "link")
-        CapabilityBadge(title: "Session history", symbol: "clock.arrow.circlepath")
-        CapabilityBadge(title: "Runtime seam", symbol: "cpu")
+        CapabilityBadge(title: "Unified chat", symbol: "bubble.left.and.bubble.right")
+        CapabilityBadge(title: selectedModel.shortName, symbol: "cpu")
+        CapabilityBadge(title: GalleryRuntimeFactory.defaultRuntime().displayName, symbol: "bolt")
       }
 
       Text(GalleryRuntimeFactory.runtimeStatusSummary())
@@ -66,7 +80,7 @@ struct GalleryHomeView: View {
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(
       LinearGradient(
-        colors: [Color.blue.opacity(0.26), Color.purple.opacity(0.18), Color.cyan.opacity(0.16)],
+        colors: [Color.indigo.opacity(0.25), Color.blue.opacity(0.18), Color.cyan.opacity(0.14)],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
       ),
@@ -74,62 +88,43 @@ struct GalleryHomeView: View {
     )
   }
 
-  private var taskGridSection: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      SectionTitle("Tasks")
-      LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-        ForEach(tasks) { task in
-          NavigationLink {
-            chatDestination(model: task.model, hint: task.entryHint)
-          } label: {
-            TaskTile(task: task)
-          }
-          .buttonStyle(.plain)
-        }
-      }
-    }
-  }
-
-  private var modelManagerSection: some View {
+  private var startChatSection: some View {
     VStack(alignment: .leading, spacing: 12) {
-      HStack {
-        SectionTitle("Model management")
-        Spacer()
-        NavigationLink("View all") {
-          GalleryModelManagerView(
-            models: models,
-            connectors: connectors,
-            selectedConnectorIds: selectedConnectorIds
-          )
-        }
-        .font(.caption.weight(.semibold))
-      }
-      VStack(spacing: 10) {
-        ForEach(models.prefix(2)) { model in
-          NavigationLink {
-            GalleryChatView(
-              model: model,
-              connectors: connectors,
-              entryHint: UnifiedChatEntryHint(
-                activateImage: model.supportsImage,
-                activateAudio: false,
-                activateSkills: model.id == "functiongemma",
-                activateMcpConnectorIds: Array(selectedConnectorIds)
-              )
-            )
-          } label: {
-            CompactModelCard(model: model)
+      SectionTitle("Chat")
+      NavigationLink {
+        chatDestination(model: selectedModel, hint: currentEntryHint)
+      } label: {
+        VStack(alignment: .leading, spacing: 14) {
+          HStack {
+            Label("Start new local chat", systemImage: "plus.message.fill")
+              .font(.title3.bold())
+            Spacer()
+            Image(systemName: "arrow.right.circle.fill")
+              .font(.title2)
+              .foregroundStyle(Color.accentColor)
           }
-          .buttonStyle(.plain)
+          Text("Uses \(selectedModel.shortName) with your selected local capabilities and connectors.")
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+          HStack(spacing: 8) {
+            CapabilityBadge(title: imageEnabled && selectedModel.supportsImage ? "Image on" : "Text", symbol: imageEnabled && selectedModel.supportsImage ? "photo" : "text.bubble")
+            if audioEnabled && selectedModel.supportsAudio { CapabilityBadge(title: "Audio on", symbol: "waveform") }
+            if toolsEnabled { CapabilityBadge(title: "Tools on", symbol: "hammer") }
+            CapabilityBadge(title: "\(selectedConnectorIds.count) connectors", symbol: "link")
+          }
         }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 22))
       }
+      .buttonStyle(.plain)
     }
   }
 
   private var recentSessionsSection: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack {
-        SectionTitle("Recent sessions")
+        SectionTitle("Continue")
         Spacer()
         if !recentSessions.isEmpty {
           Button("Refresh") { refreshRecentSessions() }
@@ -138,7 +133,7 @@ struct GalleryHomeView: View {
       }
 
       if recentSessions.isEmpty {
-        Text("Start a chat and send a message to save a session here.")
+        Text("Send a message in Local AI Chat and it will appear here.")
           .font(.footnote)
           .foregroundStyle(.secondary)
           .padding(14)
@@ -160,15 +155,61 @@ struct GalleryHomeView: View {
     }
   }
 
-  private var connectorSection: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      let label = UnifiedChatChromePolicyKt.buildConnectorLauncherLabel(
-        activeConnectorCount: Int32(selectedConnectorIds.count)
-      )
-      SectionTitle(label)
-      Text("Connector choices seed the shared connector bar state in chat.")
-        .font(.footnote)
-        .foregroundStyle(.secondary)
+  private var controlsSection: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      SectionTitle("Chat setup")
+      modelPicker
+      capabilityToggles
+      connectorPicker
+    }
+    .padding(16)
+    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 22))
+  }
+
+  private var modelPicker: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text("Model")
+        .font(.subheadline.weight(.semibold))
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 10) {
+          ForEach(models) { model in
+            Button {
+              selectedModelId = model.id
+              if !model.supportsImage { imageEnabled = false }
+              if !model.supportsAudio { audioEnabled = false }
+            } label: {
+              VStack(alignment: .leading, spacing: 4) {
+                Text(model.shortName).font(.caption.weight(.bold))
+                Text(model.downloadState.rawValue).font(.caption2)
+              }
+              .padding(.horizontal, 12)
+              .padding(.vertical, 10)
+              .background(selectedModelId == model.id ? Color.accentColor.opacity(0.16) : Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+              .overlay(RoundedRectangle(cornerRadius: 14).stroke(selectedModelId == model.id ? Color.accentColor : Color.clear))
+            }
+            .buttonStyle(.plain)
+          }
+        }
+      }
+    }
+  }
+
+  private var capabilityToggles: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text("Capabilities")
+        .font(.subheadline.weight(.semibold))
+      Toggle("Image input", isOn: Binding(get: { imageEnabled && selectedModel.supportsImage }, set: { imageEnabled = $0 && selectedModel.supportsImage }))
+        .disabled(!selectedModel.supportsImage)
+      Toggle("Audio input", isOn: Binding(get: { audioEnabled && selectedModel.supportsAudio }, set: { audioEnabled = $0 && selectedModel.supportsAudio }))
+        .disabled(!selectedModel.supportsAudio)
+      Toggle("Tools / connectors", isOn: $toolsEnabled)
+    }
+  }
+
+  private var connectorPicker: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text(UnifiedChatChromePolicyKt.buildConnectorLauncherLabel(activeConnectorCount: Int32(selectedConnectorIds.count)))
+        .font(.subheadline.weight(.semibold))
       FlowLayout(spacing: 10) {
         ForEach(connectors) { connector in
           Button { toggle(connector.id) } label: {
@@ -177,7 +218,7 @@ struct GalleryHomeView: View {
               .padding(.horizontal, 12)
               .padding(.vertical, 9)
               .background(
-                selectedConnectorIds.contains(connector.id) ? Color.accentColor.opacity(0.16) : Color(.secondarySystemGroupedBackground),
+                selectedConnectorIds.contains(connector.id) ? Color.accentColor.opacity(0.16) : Color(.tertiarySystemGroupedBackground),
                 in: Capsule()
               )
               .overlay(Capsule().stroke(selectedConnectorIds.contains(connector.id) ? Color.accentColor : Color.clear))
@@ -188,19 +229,32 @@ struct GalleryHomeView: View {
     }
   }
 
+  private var localModelsSection: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack {
+        SectionTitle("Local models")
+        Spacer()
+        NavigationLink("Manage") {
+          GalleryModelManagerView(
+            models: models,
+            connectors: connectors,
+            selectedConnectorIds: selectedConnectorIds
+          )
+        }
+        .font(.caption.weight(.semibold))
+      }
+      ForEach(models.prefix(2)) { model in
+        CompactModelCard(model: model)
+      }
+    }
+  }
+
   private var runtimeSection: some View {
-    let encoded = UnifiedChatEntryHintKt.encodeUnifiedChatEntryHint(
-      entryHint: UnifiedChatEntryHint(
-        activateImage: true,
-        activateAudio: false,
-        activateSkills: false,
-        activateMcpConnectorIds: Array(selectedConnectorIds)
-      )
-    )
+    let encoded = UnifiedChatEntryHintKt.encodeUnifiedChatEntryHint(entryHint: currentEntryHint)
     return VStack(alignment: .leading, spacing: 10) {
       SectionTitle("Runtime + shared core")
       RuntimeStatusCard()
-      Text("Encoded entry hint")
+      Text("Current chat entry hint")
         .font(.caption)
         .foregroundStyle(.secondary)
       Text(encoded)
@@ -242,31 +296,6 @@ struct GalleryHomeView: View {
   }
 }
 
-private struct TaskTile: View {
-  let task: GalleryTask
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Image(systemName: task.symbol)
-        .font(.title2)
-        .foregroundStyle(.white)
-        .frame(width: 44, height: 44)
-        .background(task.tint, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-      Text(task.title)
-        .font(.headline)
-        .foregroundStyle(.primary)
-      Text(task.subtitle)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .lineLimit(3)
-      Spacer(minLength: 0)
-    }
-    .frame(maxWidth: .infinity, minHeight: 158, alignment: .topLeading)
-    .padding(14)
-    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-  }
-}
-
 private struct CompactModelCard: View {
   let model: GalleryModel
 
@@ -274,8 +303,7 @@ private struct CompactModelCard: View {
     HStack(spacing: 14) {
       VStack(alignment: .leading, spacing: 5) {
         HStack {
-          Text(model.shortName)
-            .font(.headline)
+          Text(model.shortName).font(.headline)
           Text(model.parameterLabel)
             .font(.caption2.weight(.bold))
             .padding(.horizontal, 7)
@@ -317,6 +345,42 @@ private struct RuntimeStatusCard: View {
   }
 }
 
+private struct RecentSessionRow: View {
+  let session: GallerySessionSummary
+  let onDelete: () -> Void
+
+  var body: some View {
+    HStack(spacing: 12) {
+      VStack(alignment: .leading, spacing: 5) {
+        Text(session.title).font(.headline).lineLimit(1)
+        Text("\(session.modelName) • \(session.messageCount) messages")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        if !session.activeConnectorIds.isEmpty {
+          Text("Connectors: \(session.activeConnectorIds.joined(separator: ", "))")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
+      }
+      Spacer()
+      Button(role: .destructive) { onDelete() } label: {
+        Image(systemName: "trash")
+          .font(.subheadline.weight(.semibold))
+          .foregroundStyle(.red)
+          .frame(width: 34, height: 34)
+          .background(Color.red.opacity(0.1), in: Circle())
+      }
+      .buttonStyle(.plain)
+      Image(systemName: "chevron.right")
+        .font(.footnote.weight(.bold))
+        .foregroundStyle(.tertiary)
+    }
+    .padding(16)
+    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
+  }
+}
+
 private struct SectionTitle: View {
   let title: String
   init(_ title: String) { self.title = title }
@@ -336,46 +400,6 @@ private struct CapabilityBadge: View {
       .padding(.horizontal, 10)
       .padding(.vertical, 7)
       .background(.regularMaterial, in: Capsule())
-  }
-}
-
-private struct RecentSessionRow: View {
-  let session: GallerySessionSummary
-  let onDelete: () -> Void
-
-  var body: some View {
-    HStack(spacing: 12) {
-      VStack(alignment: .leading, spacing: 5) {
-        Text(session.title)
-          .font(.headline)
-          .lineLimit(1)
-        Text("\(session.modelName) • \(session.messageCount) messages")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        if !session.activeConnectorIds.isEmpty {
-          Text("Connectors: \(session.activeConnectorIds.joined(separator: ", "))")
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-        }
-      }
-      Spacer()
-      Button(role: .destructive) {
-        onDelete()
-      } label: {
-        Image(systemName: "trash")
-          .font(.subheadline.weight(.semibold))
-          .foregroundStyle(.red)
-          .frame(width: 34, height: 34)
-          .background(Color.red.opacity(0.1), in: Circle())
-      }
-      .buttonStyle(.plain)
-      Image(systemName: "chevron.right")
-        .font(.footnote.weight(.bold))
-        .foregroundStyle(.tertiary)
-    }
-    .padding(16)
-    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
   }
 }
 
