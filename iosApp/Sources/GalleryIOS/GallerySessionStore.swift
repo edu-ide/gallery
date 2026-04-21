@@ -168,7 +168,7 @@ extension UnifiedChatSessionState {
 
 private extension UnifiedChatPersistedMessageEnvelope {
   func toUnifiedMessage(id: String) -> UnifiedChatMessage? {
-    let textValue = content ?? title ?? summary ?? ""
+    let textValue = (content ?? title ?? summary ?? "").removingRuntimeDisplayPrefix()
     switch type {
     case .text:
       return UnifiedChatMessage(id: id, role: side.unifiedRole, text: textValue)
@@ -224,6 +224,20 @@ private extension Optional where Wrapped == String {
 }
 
 private extension String {
+  func removingRuntimeDisplayPrefix() -> String {
+    let knownPrefixes = ["[litert-lm-ios]", "[stub]", "[litert-lm]", "[LiteRT-LM iOS]"]
+    let trimmedLeading = drop(while: { $0.isWhitespace || $0.isNewline })
+    for prefix in knownPrefixes {
+      if trimmedLeading.hasPrefix(prefix) {
+        return trimmedLeading
+          .dropFirst(prefix.count)
+          .drop(while: { $0.isWhitespace || $0.isNewline })
+          .description
+      }
+    }
+    return self
+  }
+
   func prefixString(_ count: Int) -> String {
     String(prefix(count))
   }
