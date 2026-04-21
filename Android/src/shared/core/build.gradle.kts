@@ -15,6 +15,7 @@
  */
 
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
 
 plugins {
   alias(libs.plugins.kotlin.multiplatform)
@@ -28,8 +29,18 @@ kotlin {
       jvmTarget.set(JvmTarget.JVM_11)
     }
   }
-  iosArm64()
-  iosSimulatorArm64()
+
+  val sharedCoreXcframework = XCFramework("GallerySharedCore")
+  listOf(
+    iosArm64(),
+    iosSimulatorArm64(),
+  ).forEach { iosTarget ->
+    iosTarget.binaries.framework {
+      baseName = "GallerySharedCore"
+      isStatic = true
+      sharedCoreXcframework.add(this)
+    }
+  }
 
   sourceSets {
     commonMain.dependencies {
