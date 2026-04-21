@@ -58,6 +58,16 @@ Command-line signed install requires an Xcode account/provisioning profile for `
 
 - `GalleryInferenceRuntime` protocol
 - `StubGalleryInferenceRuntime` for local shell development
-- `LiteRTLMGalleryInferenceRuntime` placeholder for the official LiteRT-LM Swift API
+- `LiteRTLMGalleryInferenceRuntime` as the selected iOS runtime path
 
-As of April 21, 2026, the public LiteRT-LM repository marks Swift as In Dev / Coming Soon. The iOS shell therefore compiles and runs with the stub runtime while keeping a dedicated LiteRT-LM adapter boundary ready for the future API.
+The iOS app targets LiteRT-LM for Gemma `.litertlm` execution. The adapter loads
+the LiteRT-LM C API dynamically, so the app still builds without committing a
+signed vendor framework into this repository. To enable real generation, bundle
+a signed LiteRT-LM iOS framework/dylib that exports symbols such as
+`litert_lm_engine_create` and put model files in one of:
+
+- app resources, e.g. `gemma-4-E2B-it.litertlm`
+- `Documents/GalleryModels/`
+- `Application Support/GalleryModels/`
+
+The default MCP connector is `https://fortune.ugot.uk/mcp`.

@@ -39,7 +39,7 @@ class UnifiedChatCapabilityRegistryTest {
             activateImage = true,
             activateAudio = true,
             activateSkills = true,
-            activateMcpConnectorIds = listOf("ugot_fortune"),
+            activateMcpConnectorIds = listOf("fortune.ugot.uk/mcp"),
           ),
       )
 
@@ -53,7 +53,7 @@ class UnifiedChatCapabilityRegistryTest {
       ),
       result.enabledCapabilities,
     )
-    assertEquals(listOf("ugot_fortune"), result.activeConnectorIds)
+    assertEquals(listOf("fortune.ugot.uk/mcp"), result.activeConnectorIds)
   }
 
   @Test
@@ -67,7 +67,7 @@ class UnifiedChatCapabilityRegistryTest {
         modelCapabilities = model.toUnifiedChatModelCapabilities(),
         entryHint =
           UnifiedChatEntryHint(
-            activateMcpConnectorIds = listOf("ugot_fortune"),
+            activateMcpConnectorIds = listOf("fortune.ugot.uk/mcp"),
           ),
       )
 

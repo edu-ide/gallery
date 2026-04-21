@@ -40,12 +40,16 @@ import androidx.compose.ui.unit.dp
 import com.google.ai.edge.gallery.R
 
 private fun defaultConnectorLabel(connectorId: String): String =
-  connectorId
-    .split('_', '-')
-    .filter { it.isNotBlank() }
-    .joinToString(" ") { token ->
-      token.lowercase().replaceFirstChar { firstChar -> firstChar.titlecase() }
-    }
+  when (connectorId) {
+    "fortune.ugot.uk/mcp" -> "UGOT Fortune"
+    else ->
+      connectorId
+        .split('_', '-')
+        .filter { it.isNotBlank() }
+        .joinToString(" ") { token ->
+          token.lowercase().replaceFirstChar { firstChar -> firstChar.titlecase() }
+        }
+  }
 
 enum class ConnectorBarDisplayMode {
   InlineRow,

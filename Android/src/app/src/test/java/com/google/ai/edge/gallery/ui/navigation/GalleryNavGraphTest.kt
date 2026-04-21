@@ -76,12 +76,12 @@ class GalleryNavGraphTest {
             activateImage = false,
             activateAudio = false,
             activateSkills = false,
-            activateMcpConnectorIds = listOf("ugot_fortune"),
+            activateMcpConnectorIds = listOf("fortune.ugot.uk/mcp"),
           ),
       )
 
     assertEquals(
-      "model/llm_chat/Gemma 4?entry_hint=%7B%22activateImage%22%3Afalse%2C%22activateAudio%22%3Afalse%2C%22activateSkills%22%3Afalse%2C%22activateMcpConnectorIds%22%3A%5B%22ugot_fortune%22%5D%7D",
+      "model/llm_chat/Gemma 4?entry_hint=%7B%22activateImage%22%3Afalse%2C%22activateAudio%22%3Afalse%2C%22activateSkills%22%3Afalse%2C%22activateMcpConnectorIds%22%3A%5B%22fortune.ugot.uk%2Fmcp%22%5D%7D",
       route,
     )
   }

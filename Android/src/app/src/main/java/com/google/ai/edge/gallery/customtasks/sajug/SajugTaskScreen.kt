@@ -35,7 +35,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
-private const val UGOT_FORTUNE_CONNECTOR_ID = "ugot_fortune"
+internal const val UGOT_FORTUNE_CONNECTOR_ID = "fortune.ugot.uk/mcp"
 private const val UGOT_FORTUNE_BOOTSTRAP_SUMMARY =
   "Hosted Fortune MCP widget connected in the shared chat shell."
 private const val UGOT_FORTUNE_DEFAULT_TOOL_SUMMARY =

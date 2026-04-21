@@ -2,7 +2,7 @@ import SwiftUI
 import GallerySharedCore
 
 struct GalleryHomeView: View {
-  @State private var selectedConnectorIds: Set<String> = ["github"]
+  @State private var selectedConnectorIds: Set<String> = Set(GalleryConnector.defaultSelectedIds)
   @State private var recentSessions: [GallerySessionSummary] = []
   @State private var selectedModelId: String = GalleryModel.samples[0].id
   @State private var imageEnabled = false

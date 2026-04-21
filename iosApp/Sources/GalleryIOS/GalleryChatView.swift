@@ -204,6 +204,7 @@ struct GalleryChatView: View {
     let request = GalleryInferenceRequest(
       modelName: sessionState.modelName,
       modelDisplayName: sessionState.modelDisplayName,
+      modelFileName: model.modelFileName,
       prompt: prompt,
       route: sessionState.route(),
       activeConnectorIds: Array(sessionState.connectorBarState.activeConnectorIds).sorted(),
@@ -243,7 +244,7 @@ struct GalleryChatView: View {
 
   private func activateDemoWidget(fullscreen: Bool) {
     let snapshot = McpWidgetSnapshot(
-      connectorId: sessionState.connectorBarState.activeConnectorIds.first ?? "github",
+      connectorId: sessionState.connectorBarState.activeConnectorIds.first ?? GalleryConnector.fortuneMcpId,
       title: fullscreen ? "Fullscreen MCP Widget" : "Inline MCP Widget",
       summary: "This is a SwiftUI placeholder for future MCP Apps rendering.",
       widgetStateJson: "{\"route\":\"\(sessionState.route())\"}"
@@ -310,7 +311,7 @@ private struct WidgetPreview: View {
     GalleryChatView(
       model: GalleryModel.samples[0],
       connectors: GalleryConnector.samples,
-      entryHint: UnifiedChatEntryHint(activateImage: true, activateAudio: false, activateSkills: false, activateMcpConnectorIds: ["github"])
+      entryHint: UnifiedChatEntryHint(activateImage: true, activateAudio: false, activateSkills: false, activateMcpConnectorIds: GalleryConnector.defaultSelectedIds)
     )
   }
 }

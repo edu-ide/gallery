@@ -16,7 +16,7 @@ class SajugTaskScreenPolicyTest {
   fun shouldClearBootstrapOnlyFortuneTranscript_returnsTrueForLegacyAutoSeededCard() {
     val widgetSnapshot =
       McpWidgetSnapshot(
-        connectorId = "ugot_fortune",
+        connectorId = "fortune.ugot.uk/mcp",
         title = "UGOT Fortune",
         summary = "Hosted Fortune MCP widget connected in the shared chat shell.",
         widgetStateJson = "{}",
@@ -40,7 +40,7 @@ class SajugTaskScreenPolicyTest {
   fun shouldClearBootstrapOnlyFortuneTranscript_returnsFalseOnceConversationExists() {
     val widgetSnapshot =
       McpWidgetSnapshot(
-        connectorId = "ugot_fortune",
+        connectorId = "fortune.ugot.uk/mcp",
         title = "UGOT Fortune",
         summary = "Hosted Fortune MCP widget connected in the shared chat shell.",
         widgetStateJson = "{}",
@@ -79,7 +79,7 @@ class SajugTaskScreenPolicyTest {
   fun createFortuneToolCallMutation_replacesExistingFortuneCard() {
     val existingSnapshot =
       McpWidgetSnapshot(
-        connectorId = "ugot_fortune",
+        connectorId = "fortune.ugot.uk/mcp",
         title = "UGOT Fortune",
         summary = "Updated after running show_birth_input_form.",
         widgetStateJson = "{}",

@@ -19,6 +19,7 @@ struct GalleryModel: Identifiable, Hashable {
   let recommendedPrompt: String
   let parameterLabel: String
   let estimatedSize: String
+  let modelFileName: String
   let downloadState: DownloadState
 
   var capabilities: UnifiedChatModelCapabilities {
@@ -42,6 +43,7 @@ extension GalleryModel {
       recommendedPrompt: "Draft a short launch checklist for the iOS KMP shell.",
       parameterLabel: "E2B",
       estimatedSize: "~3.1 GB",
+      modelFileName: "gemma-4-E2B-it.litertlm",
       downloadState: .loaded
     ),
     GalleryModel(
@@ -55,6 +57,7 @@ extension GalleryModel {
       recommendedPrompt: "Compare local mobile inference runtime options.",
       parameterLabel: "E4B",
       estimatedSize: "~5.8 GB",
+      modelFileName: "gemma-4-E4B-it.litertlm",
       downloadState: .notDownloaded
     ),
     GalleryModel(
@@ -68,6 +71,7 @@ extension GalleryModel {
       recommendedPrompt: "Turn on a connector and call a demo tool.",
       parameterLabel: "270M",
       estimatedSize: "~350 MB",
+      modelFileName: "functiongemma-270m-it.litertlm",
       downloadState: .downloaded
     ),
   ]
@@ -183,24 +187,16 @@ struct GalleryConnector: Identifiable, Hashable {
 }
 
 extension GalleryConnector {
+  static let fortuneMcpId = "fortune.ugot.uk/mcp"
+  static let fortuneMcpEndpoint = "https://fortune.ugot.uk/mcp"
+  static let defaultSelectedIds = [fortuneMcpId]
+
   static let samples: [GalleryConnector] = [
     GalleryConnector(
-      id: "github",
-      title: "GitHub",
-      symbol: "chevron.left.forwardslash.chevron.right",
-      summary: "Review PRs, issues, and repository context."
-    ),
-    GalleryConnector(
-      id: "gmail",
-      title: "Gmail",
-      symbol: "envelope",
-      summary: "Summarize mail threads and draft replies."
-    ),
-    GalleryConnector(
-      id: "canva",
-      title: "Canva",
-      symbol: "rectangle.on.rectangle.angled",
-      summary: "Generate or edit visual designs."
+      id: fortuneMcpId,
+      title: "UGOT Fortune",
+      symbol: "sparkles",
+      summary: "MCP endpoint: \(fortuneMcpEndpoint)"
     ),
   ]
 }

@@ -18,7 +18,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 internal const val UGOT_FORTUNE_TASK_ID = "ugot_fortune_mcp_ui"
-private const val UGOT_FORTUNE_MCP_ENDPOINT = "https://fortune.ugot.uk/stateless/messages"
+internal const val UGOT_FORTUNE_MCP_ENDPOINT = "https://fortune.ugot.uk/mcp"
 private const val UGOT_FORTUNE_WIDGET_BASE_URL = "https://fortune.ugot.uk/"
 
 internal class SajugTask(

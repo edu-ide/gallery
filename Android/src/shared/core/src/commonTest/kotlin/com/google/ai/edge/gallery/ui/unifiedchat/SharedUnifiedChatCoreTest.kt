@@ -42,7 +42,7 @@ class SharedUnifiedChatCoreTest {
         activateImage = true,
         activateAudio = true,
         activateSkills = true,
-        activateMcpConnectorIds = listOf("ugot_fortune", "calendar"),
+        activateMcpConnectorIds = listOf("fortune.ugot.uk/mcp", "calendar"),
       )
 
     val encoded = encodeUnifiedChatEntryHint(hint)
@@ -56,16 +56,16 @@ class SharedUnifiedChatCoreTest {
   fun connectorBarState_togglesOnlyVisibleConnectors() {
     val state =
       ConnectorBarState(
-        visibleConnectorIds = listOf("ugot_fortune", "calendar"),
-        activeConnectorIds = setOf("ugot_fortune", "hidden_connector"),
+        visibleConnectorIds = listOf("fortune.ugot.uk/mcp", "calendar"),
+        activeConnectorIds = setOf("fortune.ugot.uk/mcp", "hidden_connector"),
       )
 
     assertEquals(
-      setOf("ugot_fortune", "calendar", "hidden_connector"),
+      setOf("fortune.ugot.uk/mcp", "calendar", "hidden_connector"),
       state.toggle("calendar").activeConnectorIds,
     )
     assertEquals(
-      setOf("ugot_fortune", "hidden_connector"),
+      setOf("fortune.ugot.uk/mcp", "hidden_connector"),
       state.toggle("hidden_connector").activeConnectorIds,
     )
   }
@@ -86,7 +86,7 @@ class SharedUnifiedChatCoreTest {
   fun mcpWidgetSnapshotAndHostState_arePlatformNeutral() {
     val snapshot =
       McpWidgetSnapshot(
-        connectorId = "ugot_fortune",
+        connectorId = "fortune.ugot.uk/mcp",
         title = "UGOT Fortune",
         summary = "오늘은 흐름을 정리하는 날",
         widgetStateJson = """{"currentToolName":"show_today_fortune"}""",

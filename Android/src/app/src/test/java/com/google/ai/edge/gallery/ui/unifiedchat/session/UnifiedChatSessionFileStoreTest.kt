@@ -25,7 +25,7 @@ class UnifiedChatSessionFileStoreTest {
         UnifiedChatPersistedSession(
           id = "session-1",
           title = "Fortune follow up",
-          activeConnectorIds = listOf("ugot_fortune"),
+          activeConnectorIds = listOf("fortune.ugot.uk/mcp"),
           messagesJson =
             listOf(
               requireNotNull(
@@ -37,7 +37,7 @@ class UnifiedChatSessionFileStoreTest {
                 )
               )
             ),
-          widgetSnapshots = listOf(McpWidgetSnapshot("ugot_fortune", "UGOT Fortune", "A", "{}")),
+          widgetSnapshots = listOf(McpWidgetSnapshot("fortune.ugot.uk/mcp", "UGOT Fortune", "A", "{}")),
         )
 
       store.save(session)
@@ -65,9 +65,9 @@ class UnifiedChatSessionFileStoreTest {
         UnifiedChatPersistedSession(
           id = "session-1",
           title = "Updated",
-          activeConnectorIds = listOf("ugot_fortune"),
+          activeConnectorIds = listOf("fortune.ugot.uk/mcp"),
           messagesJson = listOf("""{"type":"TEXT","side":"USER","content":"second"}"""),
-          widgetSnapshots = listOf(McpWidgetSnapshot("ugot_fortune", "UGOT Fortune", "A", "{}")),
+          widgetSnapshots = listOf(McpWidgetSnapshot("fortune.ugot.uk/mcp", "UGOT Fortune", "A", "{}")),
         )
 
       store.save(original)
@@ -91,7 +91,7 @@ class UnifiedChatSessionFileStoreTest {
       )
     val widgetSnapshot =
       McpWidgetSnapshot(
-        connectorId = "ugot_fortune",
+        connectorId = "fortune.ugot.uk/mcp",
         title = "UGOT Fortune",
         summary = "Use caution with scheduling.",
         widgetStateJson = """{"tool":"show_today_fortune"}""",
@@ -212,7 +212,7 @@ class UnifiedChatSessionFileStoreTest {
       store.sessionFile("session-1").apply {
         parentFile?.mkdirs()
         writeText(
-          """{"id":"session-1","title":"Mixed snapshots","activeConnectorIds":["ugot_fortune"],"messagesJson":["{\"type\":\"TEXT\",\"side\":\"USER\",\"content\":\"hello\"}"],"widgetSnapshots":[{"connectorId":"ugot_fortune","title":"UGOT Fortune","summary":"A","widgetStateJson":"{}"},{"connectorId":"broken"}]}"""
+          """{"id":"session-1","title":"Mixed snapshots","activeConnectorIds":["fortune.ugot.uk/mcp"],"messagesJson":["{\"type\":\"TEXT\",\"side\":\"USER\",\"content\":\"hello\"}"],"widgetSnapshots":[{"connectorId":"fortune.ugot.uk/mcp","title":"UGOT Fortune","summary":"A","widgetStateJson":"{}"},{"connectorId":"broken"}]}"""
         )
       }
 
@@ -220,10 +220,10 @@ class UnifiedChatSessionFileStoreTest {
         UnifiedChatPersistedSession(
           id = "session-1",
           title = "Mixed snapshots",
-          activeConnectorIds = listOf("ugot_fortune"),
+          activeConnectorIds = listOf("fortune.ugot.uk/mcp"),
           messagesJson =
             listOf("""{"type":"TEXT","side":"USER","content":"hello"}"""),
-          widgetSnapshots = listOf(McpWidgetSnapshot("ugot_fortune", "UGOT Fortune", "A", "{}")),
+          widgetSnapshots = listOf(McpWidgetSnapshot("fortune.ugot.uk/mcp", "UGOT Fortune", "A", "{}")),
         ),
         store.load("session-1"),
       )

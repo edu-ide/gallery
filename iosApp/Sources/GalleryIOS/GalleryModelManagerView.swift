@@ -80,7 +80,7 @@ private struct ModelManagerRow: View {
     GalleryModelManagerView(
       models: GalleryModel.samples,
       connectors: GalleryConnector.samples,
-      selectedConnectorIds: ["github"]
+      selectedConnectorIds: Set(GalleryConnector.defaultSelectedIds)
     )
   }
 }

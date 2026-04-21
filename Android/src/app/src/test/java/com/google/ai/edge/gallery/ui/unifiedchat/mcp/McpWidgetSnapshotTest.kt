@@ -8,7 +8,7 @@ class McpWidgetSnapshotTest {
   fun snapshot_roundTripsCardSummaryAndWidgetState() {
     val snapshot =
       McpWidgetSnapshot(
-        connectorId = "ugot_fortune",
+        connectorId = "fortune.ugot.uk/mcp",
         title = "UGOT Fortune",
         summary = "이번 주는 일정 조율이 핵심",
         widgetStateJson = """{"currentToolName":"show_today_fortune"}""",
@@ -22,7 +22,7 @@ class McpWidgetSnapshotTest {
 
   @Test
   fun activate_replacesPreviousLiveWidgetButKeepsSnapshotIdentity() {
-    val firstSnapshot = McpWidgetSnapshot("ugot_fortune", "UGOT Fortune", "A", "{}")
+    val firstSnapshot = McpWidgetSnapshot("fortune.ugot.uk/mcp", "UGOT Fortune", "A", "{}")
     val secondSnapshot = McpWidgetSnapshot("calendar", "Calendar", "B", "{}")
     val state = McpWidgetHostState()
 
