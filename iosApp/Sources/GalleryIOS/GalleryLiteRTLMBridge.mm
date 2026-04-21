@@ -79,6 +79,100 @@ static void GalleryResetSharedRuntime(void) {
   }
   GallerySharedModelPath = nil;
 }
+
+static BOOL GalleryEnsureConversation(NSString *modelPath, NSString *cacheDir, NSError **error) {
+  if (![[NSFileManager defaultManager] fileExistsAtPath:modelPath]) {
+    if (error) *error = GalleryLiteRTLMError([NSString stringWithFormat:@"Model file not found: %@", modelPath]);
+    return NO;
+  }
+
+  litert_lm_set_min_log_level(2);
+
+  if (GallerySharedEngine && GallerySharedConversation && [GallerySharedModelPath isEqualToString:modelPath]) {
+    return YES;
+  }
+
+  GalleryResetSharedRuntime();
+
+  LiteRtLmEngineSettings *settings = litert_lm_engine_settings_create(
+      [modelPath UTF8String], "cpu", NULL, NULL);
+  if (!settings) {
+    if (error) *error = GalleryLiteRTLMError(@"litert_lm_engine_settings_create returned NULL");
+    return NO;
+  }
+  if (cacheDir.length > 0) {
+    litert_lm_engine_settings_set_cache_dir(settings, [cacheDir UTF8String]);
+  }
+
+  __block LiteRtLmEngine *engine = NULL;
+  NSString *engineLogs = GalleryCaptureStderr(@"gallery_litert_engine.log", ^{
+    engine = litert_lm_engine_create(settings);
+  });
+  litert_lm_engine_settings_delete(settings);
+  if (!engine) {
+    if (error) *error = GalleryLiteRTLMError([NSString stringWithFormat:@"litert_lm_engine_create returned NULL.%@%@",
+      engineLogs.length ? @"\nNative log:\n" : @"", engineLogs]);
+    return NO;
+  }
+
+  __block LiteRtLmConversationConfig *conversationConfig = NULL;
+  __block LiteRtLmConversation *conversation = NULL;
+  NSString *conversationLogs = GalleryCaptureStderr(@"gallery_litert_conversation.log", ^{
+    conversationConfig = litert_lm_conversation_config_create(engine, NULL, NULL, NULL, NULL, false);
+    conversation = litert_lm_conversation_create(engine, conversationConfig);
+  });
+  if (conversationConfig) litert_lm_conversation_config_delete(conversationConfig);
+  if (!conversation) {
+    litert_lm_engine_delete(engine);
+    if (error) *error = GalleryLiteRTLMError([NSString stringWithFormat:@"litert_lm_conversation_create returned NULL.%@%@",
+      conversationLogs.length ? @"\nNative log:\n" : @"", conversationLogs]);
+    return NO;
+  }
+
+  GallerySharedEngine = engine;
+  GallerySharedConversation = conversation;
+  GallerySharedModelPath = [modelPath copy];
+  return YES;
+}
+
+static NSString *GalleryBuildUserMessageJson(NSString *prompt) {
+  NSDictionary *message = @{ @"role": @"user", @"content": prompt ?: @"" };
+  NSData *messageData = [NSJSONSerialization dataWithJSONObject:message options:0 error:nil];
+  return [[NSString alloc] initWithData:messageData encoding:NSUTF8StringEncoding] ?: @"{\"role\":\"user\",\"content\":\"\"}";
+}
+
+struct GalleryStreamContext {
+  void (^onChunk)(NSString *);
+  void (^onComplete)(NSError *);
+  BOOL completed;
+};
+
+static void GalleryStreamCallback(void *callbackData, const char *chunk, bool isFinal, const char *errorMessage) {
+  GalleryStreamContext *context = (GalleryStreamContext *)callbackData;
+  if (!context || context->completed) return;
+
+  if (errorMessage) {
+    context->completed = YES;
+    NSError *error = GalleryLiteRTLMError([NSString stringWithUTF8String:errorMessage]);
+    if (context->onComplete) context->onComplete(error);
+    delete context;
+    return;
+  }
+
+  if (chunk && context->onChunk) {
+    NSString *rawChunk = [NSString stringWithUTF8String:chunk];
+    NSString *text = GalleryExtractText(rawChunk);
+    if (text.length > 0) {
+      context->onChunk(text);
+    }
+  }
+
+  if (isFinal) {
+    context->completed = YES;
+    if (context->onComplete) context->onComplete(nil);
+    delete context;
+  }
+}
 #endif
 
 @implementation GalleryLiteRTLMBridge
@@ -97,60 +191,9 @@ static void GalleryResetSharedRuntime(void) {
   }
   return nil;
 #else
-  if (![[NSFileManager defaultManager] fileExistsAtPath:modelPath]) {
-    if (error) *error = GalleryLiteRTLMError([NSString stringWithFormat:@"Model file not found: %@", modelPath]);
-    return nil;
-  }
-
-  litert_lm_set_min_log_level(2);
-
   @synchronized([GalleryLiteRTLMBridge class]) {
-    if (!GallerySharedEngine || !GallerySharedConversation || ![GallerySharedModelPath isEqualToString:modelPath]) {
-      GalleryResetSharedRuntime();
-
-      LiteRtLmEngineSettings *settings = litert_lm_engine_settings_create(
-          [modelPath UTF8String], "cpu", NULL, NULL);
-      if (!settings) {
-        if (error) *error = GalleryLiteRTLMError(@"litert_lm_engine_settings_create returned NULL");
-        return nil;
-      }
-      if (cacheDir.length > 0) {
-        litert_lm_engine_settings_set_cache_dir(settings, [cacheDir UTF8String]);
-      }
-
-      __block LiteRtLmEngine *engine = NULL;
-      NSString *engineLogs = GalleryCaptureStderr(@"gallery_litert_engine.log", ^{
-        engine = litert_lm_engine_create(settings);
-      });
-      litert_lm_engine_settings_delete(settings);
-      if (!engine) {
-        if (error) *error = GalleryLiteRTLMError([NSString stringWithFormat:@"litert_lm_engine_create returned NULL.%@%@",
-          engineLogs.length ? @"\nNative log:\n" : @"", engineLogs]);
-        return nil;
-      }
-
-      __block LiteRtLmConversationConfig *conversationConfig = NULL;
-      __block LiteRtLmConversation *conversation = NULL;
-      NSString *conversationLogs = GalleryCaptureStderr(@"gallery_litert_conversation.log", ^{
-        conversationConfig = litert_lm_conversation_config_create(engine, NULL, NULL, NULL, NULL, false);
-        conversation = litert_lm_conversation_create(engine, conversationConfig);
-      });
-      if (conversationConfig) litert_lm_conversation_config_delete(conversationConfig);
-      if (!conversation) {
-        litert_lm_engine_delete(engine);
-        if (error) *error = GalleryLiteRTLMError([NSString stringWithFormat:@"litert_lm_conversation_create returned NULL.%@%@",
-          conversationLogs.length ? @"\nNative log:\n" : @"", conversationLogs]);
-        return nil;
-      }
-
-      GallerySharedEngine = engine;
-      GallerySharedConversation = conversation;
-      GallerySharedModelPath = [modelPath copy];
-    }
-
-    NSDictionary *message = @{ @"role": @"user", @"content": prompt ?: @"" };
-    NSData *messageData = [NSJSONSerialization dataWithJSONObject:message options:0 error:nil];
-    NSString *messageJson = [[NSString alloc] initWithData:messageData encoding:NSUTF8StringEncoding] ?: @"{\"role\":\"user\",\"content\":\"\"}";
+    if (!GalleryEnsureConversation(modelPath, cacheDir, error)) return nil;
+    NSString *messageJson = GalleryBuildUserMessageJson(prompt);
 
     LiteRtLmJsonResponse *response = litert_lm_conversation_send_message(GallerySharedConversation, [messageJson UTF8String], NULL);
     if (!response) {
@@ -163,6 +206,45 @@ static void GalleryResetSharedRuntime(void) {
     litert_lm_json_response_delete(response);
 
     return GalleryExtractText(responseJson);
+  }
+#endif
+}
+
+- (void)streamGenerateWithModelPath:(NSString *)modelPath
+                              prompt:(NSString *)prompt
+                            cacheDir:(NSString *)cacheDir
+                             onChunk:(void (^)(NSString *chunk))onChunk
+                          onComplete:(void (^)(NSError * _Nullable error))onComplete {
+#if !GALLERY_HAS_LITERTLM
+  if (onComplete) {
+    onComplete(GalleryLiteRTLMError(@"LiteRT-LM headers/framework are not linked in this build."));
+  }
+#else
+  @synchronized([GalleryLiteRTLMBridge class]) {
+    NSError *prepareError = nil;
+    if (!GalleryEnsureConversation(modelPath, cacheDir, &prepareError)) {
+      if (onComplete) onComplete(prepareError);
+      return;
+    }
+
+    NSString *messageJson = GalleryBuildUserMessageJson(prompt);
+    GalleryStreamContext *context = new GalleryStreamContext();
+    context->onChunk = [onChunk copy];
+    context->onComplete = [onComplete copy];
+    context->completed = NO;
+
+    int rc = litert_lm_conversation_send_message_stream(
+      GallerySharedConversation,
+      [messageJson UTF8String],
+      NULL,
+      &GalleryStreamCallback,
+      context
+    );
+    if (rc != 0) {
+      NSError *error = GalleryLiteRTLMError([NSString stringWithFormat:@"litert_lm_conversation_send_message_stream failed rc=%d", rc]);
+      if (context->onComplete) context->onComplete(error);
+      delete context;
+    }
   }
 #endif
 }

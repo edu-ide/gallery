@@ -33,13 +33,10 @@ struct GalleryHomeView: View {
           heroCard
           startChatSection
           recentSessionsSection
-          controlsSection
-          localModelsSection
-          runtimeSection
         }
         .padding()
       }
-      .navigationTitle("Local AI")
+      .navigationTitle("UGOT AI")
       .background(Color(.systemGroupedBackground))
       .onAppear { refreshRecentSessions() }
     }
@@ -49,9 +46,9 @@ struct GalleryHomeView: View {
     VStack(alignment: .leading, spacing: 16) {
       HStack(alignment: .top) {
         VStack(alignment: .leading, spacing: 8) {
-          Text("Local AI Chat")
+          Text("UGOT Local AI")
             .font(.largeTitle.bold())
-          Text("A ChatGPT-style local assistant shell. Model, tools, image, audio, and session history all flow through one unified chat.")
+          Text("Private, on-device chat powered by Gemma and LiteRT-LM.")
             .font(.body)
             .foregroundStyle(.secondary)
         }
@@ -64,12 +61,12 @@ struct GalleryHomeView: View {
       }
 
       HStack(spacing: 10) {
-        CapabilityBadge(title: "Unified chat", symbol: "bubble.left.and.bubble.right")
+        CapabilityBadge(title: "Private", symbol: "lock")
         CapabilityBadge(title: selectedModel.shortName, symbol: "cpu")
-        CapabilityBadge(title: GalleryRuntimeFactory.defaultRuntime().displayName, symbol: "bolt")
+        CapabilityBadge(title: "On-device", symbol: "bolt")
       }
 
-      Text(GalleryRuntimeFactory.runtimeStatusSummary())
+      Text("Your messages stay on this iPhone. Tools connect only when you choose them.")
         .font(.caption)
         .foregroundStyle(.secondary)
         .padding(10)
@@ -96,21 +93,19 @@ struct GalleryHomeView: View {
       } label: {
         VStack(alignment: .leading, spacing: 14) {
           HStack {
-            Label("Start new local chat", systemImage: "plus.message.fill")
+            Label("New chat", systemImage: "plus.message.fill")
               .font(.title3.bold())
             Spacer()
             Image(systemName: "arrow.right.circle.fill")
               .font(.title2)
               .foregroundStyle(Color.accentColor)
           }
-          Text("Uses \(selectedModel.shortName) with your selected local capabilities and connectors.")
+          Text("\(selectedModel.shortName) • local inference • optional Fortune connector")
             .font(.subheadline)
             .foregroundStyle(.secondary)
           HStack(spacing: 8) {
-            CapabilityBadge(title: imageEnabled && selectedModel.supportsImage ? "Image on" : "Text", symbol: imageEnabled && selectedModel.supportsImage ? "photo" : "text.bubble")
-            if audioEnabled && selectedModel.supportsAudio { CapabilityBadge(title: "Audio on", symbol: "waveform") }
-            if toolsEnabled { CapabilityBadge(title: "Tools on", symbol: "hammer") }
-            CapabilityBadge(title: "\(selectedConnectorIds.count) connectors", symbol: "link")
+            CapabilityBadge(title: "Text chat", symbol: "text.bubble")
+            if toolsEnabled { CapabilityBadge(title: "Fortune MCP", symbol: "sparkles") }
           }
         }
         .padding(18)
@@ -133,7 +128,7 @@ struct GalleryHomeView: View {
       }
 
       if recentSessions.isEmpty {
-        Text("Send a message in Local AI Chat and it will appear here.")
+        Text("Recent chats will appear here.")
           .font(.footnote)
           .foregroundStyle(.secondary)
           .padding(14)

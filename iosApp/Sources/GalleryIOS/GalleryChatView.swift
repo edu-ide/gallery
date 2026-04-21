@@ -11,6 +11,8 @@ struct GalleryChatView: View {
   private let runtime: GalleryInferenceRuntime = GalleryRuntimeFactory.defaultRuntime()
   @State private var sessionState: UnifiedChatSessionState
   @State private var isGenerating = false
+  @State private var streamingAssistantText = ""
+  @FocusState private var isComposerFocused: Bool
 
   init(model: GalleryModel, connectors: [GalleryConnector], entryHint: UnifiedChatEntryHint) {
     self.model = model
@@ -29,7 +31,7 @@ struct GalleryChatView: View {
       modelCapabilities: model.capabilities,
       entryHint: entryHint,
       visibleConnectorIds: connectors.map(\.id),
-      initialDraft: model.recommendedPrompt
+      initialDraft: ""
     )
     let store = GallerySessionStore()
     if let persisted = store.load(id: computedSessionId) {
@@ -41,50 +43,124 @@ struct GalleryChatView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      statusHeader
-      Divider()
       ScrollViewReader { proxy in
         ScrollView {
-          LazyVStack(alignment: .leading, spacing: 12) {
-            ForEach(sessionState.messages, id: \.id) { message in
-              MessageBubble(message: message)
-                .id(message.id)
-            }
-            if let snapshot = sessionState.widgetHostState.activeSnapshot {
-              WidgetPreview(snapshot: snapshot, fullscreen: sessionState.widgetHostState.displayMode == .fullscreen)
-            }
-          }
+          transcriptContent
           .padding()
         }
         .onChange(of: sessionState.messages.count) { _, _ in
-          if let last = sessionState.messages.last {
-            withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
-          }
+          scrollToLastMessage(proxy)
+        }
+        .onChange(of: streamingAssistantText) { _, _ in
+          scrollToStreamingMessage(proxy)
         }
       }
-      Divider()
-      connectorBar
       composer
     }
-    .navigationTitle(model.shortName)
+    .background(Color(.systemBackground))
+    .navigationTitle("Local AI")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
+      ToolbarItem(placement: .topBarLeading) {
+        RuntimeStatusDot(isReady: runtime.isAvailable)
+      }
       ToolbarItem(placement: .topBarTrailing) {
         Menu {
-          Button("Show route hint") { sessionState = sessionState.appendSystemMessage(text: sessionState.route()) }
-          Button("Show widget card") { activateDemoWidget(fullscreen: false) }
-          Button("Show fullscreen widget") { activateDemoWidget(fullscreen: true) }
-          if sessionState.widgetHostState.activeSnapshot != nil {
-            Button("Close widget", role: .destructive) { sessionState = sessionState.closeWidget() }
+          Label(model.name, systemImage: "cpu")
+          Label(runtime.displayName, systemImage: runtime.isAvailable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+          if !connectors.isEmpty {
+            Divider()
+            ForEach(connectors) { connector in
+              Button {
+                sessionState = sessionState.toggleConnector(connectorId: connector.id)
+              } label: {
+                Label(connector.title, systemImage: isActive(connector.id) ? "checkmark.circle.fill" : connector.symbol)
+              }
+            }
           }
         } label: {
-          Image(systemName: "ellipsis.circle")
+          Image(systemName: "slider.horizontal.3")
         }
       }
     }
     .onChange(of: sessionState.messages.count) { _, _ in persistSession() }
     .onChange(of: sessionState.connectorBarState.activeConnectorIds.count) { _, _ in persistSession() }
     .onDisappear { persistSession() }
+  }
+
+  @ViewBuilder
+  private var transcriptContent: some View {
+    LazyVStack(alignment: .leading, spacing: 12) {
+      if visibleMessages.isEmpty && !isGenerating {
+        emptyState.padding(.top, 72)
+      } else {
+        ForEach(visibleMessages, id: \.id) { message in
+          MessageBubble(message: message)
+            .id(message.id)
+        }
+        if isGenerating {
+          StreamingBubble(text: streamingAssistantText)
+            .id("streaming-assistant")
+        }
+      }
+      widgetCard
+    }
+  }
+
+  @ViewBuilder
+  private var widgetCard: some View {
+    if let snapshot = sessionState.widgetHostState.activeSnapshot {
+      WidgetPreview(
+        snapshot: snapshot,
+        fullscreen: sessionState.widgetHostState.displayMode == .fullscreen
+      )
+    }
+  }
+
+  private var visibleMessages: [UnifiedChatMessage] {
+    sessionState.messages.filter { message in
+      if message.role == .system { return false }
+      if message.role == .assistant && message.text.hasPrefix("Loaded ") { return false }
+      return !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+  }
+
+  private func scrollToLastMessage(_ proxy: ScrollViewProxy) {
+    guard let lastId = sessionState.messages.last?.id else { return }
+    proxy.scrollTo(lastId, anchor: UnitPoint.bottom)
+  }
+
+  private func scrollToStreamingMessage(_ proxy: ScrollViewProxy) {
+    proxy.scrollTo("streaming-assistant", anchor: UnitPoint.bottom)
+  }
+
+  private var emptyState: some View {
+    VStack(spacing: 18) {
+      Image(systemName: "sparkles")
+        .font(.system(size: 44, weight: .semibold))
+        .foregroundStyle(Color.accentColor)
+        .frame(width: 80, height: 80)
+        .background(Color.accentColor.opacity(0.12), in: Circle())
+      VStack(spacing: 6) {
+        Text("무엇을 도와드릴까요?")
+          .font(.title2.bold())
+        Text("\(model.shortName) runs locally on this iPhone.")
+          .font(.subheadline)
+          .foregroundStyle(.secondary)
+      }
+      VStack(spacing: 8) {
+        SuggestionButton(title: "오늘 할 일 정리해줘") {
+          sessionState = sessionState.updateDraft(draft: "오늘 할 일을 우선순위대로 정리해줘.")
+          isComposerFocused = true
+        }
+        SuggestionButton(title: "짧게 한국어로 인사해줘") {
+          sessionState = sessionState.updateDraft(draft: "짧게 한국어로 인사해줘.")
+          isComposerFocused = true
+        }
+      }
+    }
+    .frame(maxWidth: .infinity)
+    .padding(.horizontal, 24)
   }
 
   private var statusHeader: some View {
@@ -178,7 +254,11 @@ struct GalleryChatView: View {
           axis: .vertical
         )
         .lineLimit(1...4)
-        .textFieldStyle(.roundedBorder)
+        .focused($isComposerFocused)
+        .textFieldStyle(.plain)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         Button {
           sendDraftThroughRuntime()
         } label: {
@@ -190,11 +270,19 @@ struct GalleryChatView: View {
               .font(.title2)
           }
         }
+        .buttonStyle(.plain)
+        .foregroundStyle(canSend ? Color.accentColor : Color.secondary)
         .disabled(isGenerating || sessionState.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
       }
     }
-    .padding()
-    .background(.bar)
+    .padding(.horizontal, 14)
+    .padding(.top, 10)
+    .padding(.bottom, 12)
+    .background(.regularMaterial)
+  }
+
+  private var canSend: Bool {
+    !isGenerating && !sessionState.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
   private func sendDraftThroughRuntime() {
@@ -214,12 +302,22 @@ struct GalleryChatView: View {
 
     sessionState = sessionState.appendUserMessage(text: prompt)
     isGenerating = true
+    streamingAssistantText = ""
+    isComposerFocused = false
     persistSession()
 
     Task {
-      let result = await runtime.generate(request: request)
+      let result = await runtime.generate(request: request) { token in
+        Task { @MainActor in
+          streamingAssistantText.append(token)
+        }
+      }
       await MainActor.run {
-        sessionState = sessionState.appendAssistantMessage(text: "[\(result.runtimeName)] \(result.text)")
+        let finalText = result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          ? streamingAssistantText
+          : result.text
+        sessionState = sessionState.appendAssistantMessage(text: finalText)
+        streamingAssistantText = ""
         isGenerating = false
         persistSession()
       }
@@ -274,12 +372,79 @@ private struct MessageBubble: View {
   var body: some View {
     HStack {
       if message.role == .user { Spacer(minLength: 40) }
-      Text(message.text)
-        .font(.body)
-        .padding(12)
-        .background(message.role == .user ? Color.accentColor.opacity(0.18) : Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+      VStack(alignment: .leading, spacing: 4) {
+        Text(message.text)
+          .font(.body)
+          .textSelection(.enabled)
+      }
+      .padding(.horizontal, 14)
+      .padding(.vertical, 11)
+      .foregroundStyle(message.role == .user ? .white : .primary)
+      .background(
+        message.role == .user ? Color.accentColor : Color(.secondarySystemGroupedBackground),
+        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+      )
       if message.role != .user { Spacer(minLength: 40) }
     }
+  }
+}
+
+private struct StreamingBubble: View {
+  let text: String
+
+  var body: some View {
+    HStack(alignment: .bottom, spacing: 8) {
+      VStack(alignment: .leading, spacing: 8) {
+        if text.isEmpty {
+          HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text("Thinking…")
+              .font(.body)
+              .foregroundStyle(.secondary)
+          }
+        } else {
+          Text(text)
+            .font(.body)
+            .textSelection(.enabled)
+        }
+      }
+      .padding(.horizontal, 14)
+      .padding(.vertical, 11)
+      .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+      Spacer(minLength: 40)
+    }
+  }
+}
+
+private struct RuntimeStatusDot: View {
+  let isReady: Bool
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Circle()
+        .fill(isReady ? Color.green : Color.orange)
+        .frame(width: 8, height: 8)
+      Text(isReady ? "On-device" : "Setup")
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+    }
+  }
+}
+
+private struct SuggestionButton: View {
+  let title: String
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Text(title)
+        .font(.subheadline.weight(.semibold))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+    .buttonStyle(.plain)
   }
 }
 

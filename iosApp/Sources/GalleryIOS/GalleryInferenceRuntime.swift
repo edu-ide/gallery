@@ -25,6 +25,23 @@ protocol GalleryInferenceRuntime {
   var statusMessage: String { get }
 
   func generate(request: GalleryInferenceRequest) async -> GalleryInferenceResult
+  func generate(
+    request: GalleryInferenceRequest,
+    onToken: @escaping @Sendable (String) -> Void
+  ) async -> GalleryInferenceResult
+}
+
+extension GalleryInferenceRuntime {
+  func generate(
+    request: GalleryInferenceRequest,
+    onToken: @escaping @Sendable (String) -> Void
+  ) async -> GalleryInferenceResult {
+    let result = await generate(request: request)
+    if !result.text.isEmpty {
+      onToken(result.text)
+    }
+    return result
+  }
 }
 
 struct StubGalleryInferenceRuntime: GalleryInferenceRuntime {
@@ -45,6 +62,13 @@ struct StubGalleryInferenceRuntime: GalleryInferenceRuntime {
       text: "Stub runtime response from \(request.modelDisplayName). Active connectors: \(connectors). Modalities: \(modalities.isEmpty ? "text" : modalities).",
       runtimeName: id
     )
+  }
+
+  func generate(
+    request: GalleryInferenceRequest,
+    onToken: @escaping @Sendable (String) -> Void
+  ) async -> GalleryInferenceResult {
+    await generate(request: request)
   }
 }
 
@@ -75,6 +99,16 @@ struct LiteRTLMGalleryInferenceRuntime: GalleryInferenceRuntime {
     }.value
   }
 
+  func generate(
+    request: GalleryInferenceRequest,
+    onToken: @escaping @Sendable (String) -> Void
+  ) async -> GalleryInferenceResult {
+    if GalleryLiteRTLMBridge.isCompiledWithLiteRTLM() {
+      return await streamLiteRTLMText(request: request, onToken: onToken)
+    }
+    return await generate(request: request)
+  }
+
   private func generateLiteRTLMText(request: GalleryInferenceRequest) -> String {
     if GalleryLiteRTLMBridge.isCompiledWithLiteRTLM() {
       guard let modelPath = LiteRTLMDynamicCAPI.findModelPath(fileName: request.modelFileName) else {
@@ -96,6 +130,54 @@ struct LiteRTLMGalleryInferenceRuntime: GalleryInferenceRuntime {
     }
 
     return LiteRTLMDynamicCAPI.shared.generate(request: request)
+  }
+
+  private func streamLiteRTLMText(
+    request: GalleryInferenceRequest,
+    onToken: @escaping @Sendable (String) -> Void
+  ) async -> GalleryInferenceResult {
+    guard let modelPath = LiteRTLMDynamicCAPI.findModelPath(fileName: request.modelFileName) else {
+      return GalleryInferenceResult(
+        text: "LiteRT-LM native bridge is linked, but \(request.modelFileName) was not found. Copy it to Documents/GalleryModels/\(request.modelFileName) or add it to the app bundle resources, then run chat again.",
+        runtimeName: id
+      )
+    }
+
+    return await withCheckedContinuation { continuation in
+      let lock = NSLock()
+      var accumulated = ""
+      var completed = false
+
+      func finish(_ result: GalleryInferenceResult) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !completed else { return }
+        completed = true
+        continuation.resume(returning: result)
+      }
+
+      GalleryLiteRTLMBridge().streamGenerate(
+        withModelPath: modelPath,
+        prompt: request.prompt,
+        cacheDir: LiteRTLMDynamicCAPI.cacheDirectoryPath(),
+        onChunk: { chunk in
+          lock.lock()
+          accumulated.append(chunk)
+          lock.unlock()
+          onToken(chunk)
+        },
+        onComplete: { error in
+          lock.lock()
+          let finalText = accumulated
+          lock.unlock()
+          if let error {
+            finish(GalleryInferenceResult(text: error.localizedDescription, runtimeName: id))
+          } else {
+            finish(GalleryInferenceResult(text: finalText, runtimeName: id))
+          }
+        }
+      )
+    }
   }
 }
 
