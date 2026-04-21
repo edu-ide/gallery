@@ -7,7 +7,7 @@ struct ContentView: View {
 
   var body: some View {
     Group {
-      if authViewModel.isAuthenticated || ProcessInfo.processInfo.environment["GALLERY_IOS_BYPASS_AUTH"] == "1" {
+      if authViewModel.isAuthenticated {
         GalleryHomeView(authViewModel: authViewModel)
       } else {
         UgotLoginView(authViewModel: authViewModel)

@@ -549,12 +549,38 @@ private struct GalleryMCPWidgetPayload {
   }
 
   static func jsonLiteral(_ value: Any) -> String {
-    guard JSONSerialization.isValidJSONObject(["value": value]),
-          let data = try? JSONSerialization.data(withJSONObject: value),
-          let json = String(data: data, encoding: .utf8) else {
+    if value is NSNull { return "null" }
+
+    if let dictionary = value as? [String: Any], JSONSerialization.isValidJSONObject(dictionary),
+       let data = try? JSONSerialization.data(withJSONObject: dictionary),
+       let json = String(data: data, encoding: .utf8) {
+      return json
+    }
+
+    if let array = value as? [Any], JSONSerialization.isValidJSONObject(array),
+       let data = try? JSONSerialization.data(withJSONObject: array),
+       let json = String(data: data, encoding: .utf8) {
+      return json
+    }
+
+    let fragment: Any
+    if let string = value as? String {
+      fragment = string
+    } else if let bool = value as? Bool {
+      fragment = bool
+    } else if let number = value as? NSNumber {
+      fragment = number
+    } else {
+      fragment = String(describing: value)
+    }
+
+    guard JSONSerialization.isValidJSONObject([fragment]),
+          let data = try? JSONSerialization.data(withJSONObject: [fragment]),
+          let wrapped = String(data: data, encoding: .utf8),
+          wrapped.count >= 2 else {
       return "null"
     }
-    return json
+    return String(wrapped.dropFirst().dropLast())
   }
 
   static func jsonString(_ value: Any) -> String {
