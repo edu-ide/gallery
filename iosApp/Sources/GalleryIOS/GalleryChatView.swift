@@ -12,6 +12,8 @@ struct GalleryChatView: View {
   @State private var sessionState: UnifiedChatSessionState
   @State private var isGenerating = false
   @State private var streamingAssistantText = ""
+  @State private var imageInputEnabled: Bool
+  @State private var audioInputEnabled: Bool
   @FocusState private var isComposerFocused: Bool
 
   init(
@@ -45,6 +47,8 @@ struct GalleryChatView: View {
     } else {
       _sessionState = State(initialValue: initialState)
     }
+    _imageInputEnabled = State(initialValue: entryHint.activateImage && model.supportsImage)
+    _audioInputEnabled = State(initialValue: entryHint.activateAudio && model.supportsAudio)
   }
 
   var body: some View {
@@ -74,13 +78,29 @@ struct GalleryChatView: View {
         Menu {
           Label(model.name, systemImage: "cpu")
           Label(runtime.displayName, systemImage: runtime.isAvailable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+          Divider()
+          Toggle(isOn: Binding(
+            get: { imageInputEnabled },
+            set: { imageInputEnabled = $0 && supports(.image) }
+          )) {
+            Label("Image input", systemImage: "photo")
+          }
+          .disabled(!supports(.image))
+          Toggle(isOn: Binding(
+            get: { audioInputEnabled },
+            set: { audioInputEnabled = $0 && supports(.audio) }
+          )) {
+            Label("Audio input", systemImage: "waveform")
+          }
+          .disabled(!supports(.audio))
           if !connectors.isEmpty {
             Divider()
             ForEach(connectors) { connector in
-              Button {
-                sessionState = sessionState.toggleConnector(connectorId: connector.id)
-              } label: {
-                Label(connector.title, systemImage: isActive(connector.id) ? "checkmark.circle.fill" : connector.symbol)
+              Toggle(isOn: Binding(
+                get: { isActive(connector.id) },
+                set: { setConnector(connector.id, active: $0) }
+              )) {
+                Label(connector.title, systemImage: connector.symbol)
               }
             }
           }
@@ -242,8 +262,37 @@ struct GalleryChatView: View {
     .background(Color(.systemBackground))
   }
 
+  private var capabilityToggleRow: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: 8) {
+        CapabilityToggleChip(
+          title: "Image",
+          symbol: "photo",
+          isOn: imageInputEnabled,
+          isEnabled: supports(.image)
+        ) { imageInputEnabled.toggle() }
+        CapabilityToggleChip(
+          title: "Audio",
+          symbol: "waveform",
+          isOn: audioInputEnabled,
+          isEnabled: supports(.audio)
+        ) { audioInputEnabled.toggle() }
+        ForEach(connectors) { connector in
+          CapabilityToggleChip(
+            title: connector.title,
+            symbol: connector.symbol,
+            isOn: isActive(connector.id),
+            isEnabled: true
+          ) { setConnector(connector.id, active: !isActive(connector.id)) }
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+  }
+
   private var composer: some View {
     VStack(spacing: 10) {
+      capabilityToggleRow
       HStack(alignment: .bottom, spacing: 10) {
         if supports(.image) {
           Image(systemName: "photo")
@@ -302,8 +351,8 @@ struct GalleryChatView: View {
       prompt: prompt,
       route: sessionState.route(),
       activeConnectorIds: Array(sessionState.connectorBarState.activeConnectorIds).sorted(),
-      supportsImage: supports(.image),
-      supportsAudio: supports(.audio)
+      supportsImage: imageInputEnabled && supports(.image),
+      supportsAudio: audioInputEnabled && supports(.audio)
     )
 
     sessionState = sessionState.appendUserMessage(text: prompt)
@@ -344,6 +393,13 @@ struct GalleryChatView: View {
 
   private func isActive(_ connectorId: String) -> Bool {
     sessionState.connectorBarState.activeConnectorIds.contains(connectorId)
+  }
+
+  private func setConnector(_ connectorId: String, active: Bool) {
+    let currentlyActive = isActive(connectorId)
+    guard currentlyActive != active else { return }
+    sessionState = sessionState.toggleConnector(connectorId: connectorId)
+    persistSession()
   }
 
   private func activateDemoWidget(fullscreen: Bool) {
@@ -419,6 +475,31 @@ private struct StreamingBubble: View {
       .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
       Spacer(minLength: 40)
     }
+  }
+}
+
+private struct CapabilityToggleChip: View {
+  let title: String
+  let symbol: String
+  let isOn: Bool
+  let isEnabled: Bool
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: { if isEnabled { action() } }) {
+      Label(title, systemImage: isOn ? "checkmark.circle.fill" : symbol)
+        .font(.caption.weight(.semibold))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .foregroundStyle(isEnabled ? (isOn ? Color.accentColor : Color.secondary) : Color.secondary.opacity(0.55))
+        .background(
+          isOn && isEnabled ? Color.accentColor.opacity(0.14) : Color(.secondarySystemBackground),
+          in: Capsule()
+        )
+        .overlay(Capsule().stroke(isOn && isEnabled ? Color.accentColor.opacity(0.45) : Color.clear))
+    }
+    .buttonStyle(.plain)
+    .disabled(!isEnabled)
   }
 }
 

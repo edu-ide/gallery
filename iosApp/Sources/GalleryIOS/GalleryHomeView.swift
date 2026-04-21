@@ -20,9 +20,9 @@ struct GalleryHomeView: View {
 
   private var currentEntryHint: UnifiedChatEntryHint {
     UnifiedChatEntryHint(
-      activateImage: imageEnabled && selectedModel.supportsImage,
-      activateAudio: audioEnabled && selectedModel.supportsAudio,
-      activateSkills: toolsEnabled,
+      activateImage: false,
+      activateAudio: false,
+      activateSkills: true,
       activateMcpConnectorIds: Array(selectedConnectorIds)
     )
   }
@@ -33,7 +33,6 @@ struct GalleryHomeView: View {
         VStack(alignment: .leading, spacing: 24) {
           heroCard
           startChatSection
-          controlsSection
           recentSessionsSection
         }
         .padding()
@@ -111,9 +110,9 @@ struct GalleryHomeView: View {
             .foregroundStyle(.secondary)
           HStack(spacing: 8) {
             CapabilityBadge(title: "Text chat", symbol: "text.bubble")
-            if imageEnabled && selectedModel.supportsImage { CapabilityBadge(title: "Vision", symbol: "photo") }
-            if audioEnabled && selectedModel.supportsAudio { CapabilityBadge(title: "Audio", symbol: "waveform") }
-            if toolsEnabled { CapabilityBadge(title: "Fortune MCP", symbol: "sparkles") }
+            if selectedModel.supportsImage { CapabilityBadge(title: "Vision ready", symbol: "photo") }
+            if selectedModel.supportsAudio { CapabilityBadge(title: "Audio ready", symbol: "waveform") }
+            CapabilityBadge(title: "Fortune MCP", symbol: "sparkles")
           }
         }
         .padding(18)
