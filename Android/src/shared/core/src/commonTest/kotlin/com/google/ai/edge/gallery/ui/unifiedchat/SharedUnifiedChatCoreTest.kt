@@ -88,4 +88,57 @@ class SharedUnifiedChatCoreTest {
     assertEquals(snapshot, state.activeSnapshot)
     assertEquals(McpWidgetDisplayMode.FULLSCREEN, state.displayMode)
   }
+  @Test
+  fun unifiedChatSessionState_submitsDraftAndTracksConnectors() {
+    val state =
+      createUnifiedChatSessionState(
+        modelName = "Gemma-4-E2B-it",
+        modelDisplayName = "Gemma E2B",
+        taskId = "llm_chat",
+        modelCapabilities = UnifiedChatModelCapabilities(supportsImage = true, supportsAudio = true),
+        entryHint = UnifiedChatEntryHint(activateMcpConnectorIds = listOf("github", "hidden")),
+        visibleConnectorIds = listOf("github", "gmail"),
+        initialDraft = "Hello from shared state",
+      )
+
+    assertEquals(setOf("github"), state.connectorBarState.activeConnectorIds)
+
+    val updated = state.toggleConnector("gmail").submitDraft(responsePrefix = "Reply")
+
+    assertEquals("", updated.draft)
+    assertEquals(4, updated.messages.size)
+    assertEquals(UnifiedChatMessageRole.USER, updated.messages[2].role)
+    assertEquals("Hello from shared state", updated.messages[2].text)
+    assertEquals(UnifiedChatMessageRole.ASSISTANT, updated.messages[3].role)
+    assertTrue(updated.messages[3].text.contains("github, gmail"))
+    assertTrue(updated.route().contains("Gemma-4-E2B-it"))
+    assertEquals("Connectors (2)", updated.connectorLauncherLabel())
+  }
+
+  @Test
+  fun unifiedChatSessionState_widgetHostRoundTripsThroughReducer() {
+    val state =
+      createUnifiedChatSessionState(
+        modelName = "FunctionGemma-270m-it",
+        modelDisplayName = "FunctionGemma",
+        taskId = "agent_chat",
+        modelCapabilities = UnifiedChatModelCapabilities(),
+        entryHint = UnifiedChatEntryHint(activateSkills = true),
+        visibleConnectorIds = listOf("github"),
+      )
+    val snapshot =
+      McpWidgetSnapshot(
+        connectorId = "github",
+        title = "GitHub widget",
+        summary = "Repository state",
+        widgetStateJson = "{}",
+      )
+
+    val active = state.activateWidget(snapshot, fullscreen = false)
+
+    assertEquals(snapshot, active.widgetHostState.activeSnapshot)
+    assertEquals(McpWidgetDisplayMode.INLINE, active.widgetHostState.displayMode)
+    assertEquals(null, active.closeWidget().widgetHostState.activeSnapshot)
+  }
+
 }
