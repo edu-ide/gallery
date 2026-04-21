@@ -7,6 +7,9 @@ packages:
   GoogleSignIn:
     url: https://github.com/google/GoogleSignIn-iOS
     from: 8.0.0
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    from: 2.0.0
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -66,6 +69,8 @@ targets:
         embed: true
       - package: GoogleSignIn
         product: GoogleSignIn
+      - package: MarkdownUI
+        product: MarkdownUI
     preBuildScripts:
       - name: Build LiteRT-LM iOS XCFrameworks
         basedOnDependencyAnalysis: false

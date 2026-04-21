@@ -1,5 +1,6 @@
 import SwiftUI
 import GallerySharedCore
+import MarkdownUI
 import PhotosUI
 import UniformTypeIdentifiers
 
@@ -427,6 +428,33 @@ struct GalleryChatView: View {
     persistSession()
 
     Task {
+      if let fortuneResult = await GalleryFortuneActionRunner.runIfNeeded(
+        prompt: effectivePrompt,
+        activeSkillIds: Set(sessionState.agentSkillState.activeSkillIds),
+        activeConnectorIds: Set(sessionState.connectorBarState.activeConnectorIds)
+      ) {
+        await MainActor.run {
+          sessionState = sessionState.appendAssistantMessage(text: fortuneResult.message)
+          streamingAssistantText = ""
+          isGenerating = false
+          persistSession()
+        }
+        return
+      }
+
+      if let actionResult = await GalleryMobileActionRunner.runIfNeeded(
+        prompt: effectivePrompt,
+        activeSkillIds: Set(sessionState.agentSkillState.activeSkillIds)
+      ) {
+        await MainActor.run {
+          sessionState = sessionState.appendAssistantMessage(text: actionResult.message)
+          streamingAssistantText = ""
+          isGenerating = false
+          persistSession()
+        }
+        return
+      }
+
       let result = await runtime.generate(request: request) { token in
         Task { @MainActor in
           streamingAssistantText.append(token)
@@ -617,14 +645,7 @@ private struct AssistantMarkdownText: View {
   let text: String
 
   var body: some View {
-    if let attributed = try? AttributedString(
-      markdown: text,
-      options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
-    ) {
-      Text(attributed)
-    } else {
-      Text(text)
-    }
+    Markdown(text)
   }
 }
 

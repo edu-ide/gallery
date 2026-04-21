@@ -21,9 +21,12 @@
 		765C685217082553D39789A8 /* GalleryInferenceRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17BE82697D8BE3E8B0A08B88 /* GalleryInferenceRuntime.swift */; };
 		770A6E7022D2CB477751FE06 /* UgotLoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DEBEE234E0845891292A22A /* UgotLoginView.swift */; };
 		85E89DFA9C1AB5E675D87E2D /* GalleryLiteRTLMBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = 3227EDD9245CA33E78467C53 /* GalleryLiteRTLMBridge.mm */; };
+		9D6E0D3A818F9009EC298FA2 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = 1CEFA54BA74BD5827645B2E3 /* MarkdownUI */; };
 		C4BC16ED23FAF5CA1E534730 /* UgotAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2491854280A97B8CA7758578 /* UgotAuth.swift */; };
+		CF0CE0CC518E88F178B2E5E0 /* GalleryMobileActionRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4BF835A99924231132153A8 /* GalleryMobileActionRunner.swift */; };
 		D0F1823DA4FBE38BE2915A78 /* GemmaModelConstraintProvider.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5459EBE807B9509DD8E7F3AD /* GemmaModelConstraintProvider.xcframework */; };
 		F4BE7EA22DF6575666C6C654 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AE27BD8E6AAC0726356E35B /* ContentView.swift */; };
+		F74DB60B0B59A7A1C7D14463 /* GalleryFortuneMCPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 919AD099827E6FCF12703D50 /* GalleryFortuneMCPClient.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -53,11 +56,13 @@
 		5DEBEE234E0845891292A22A /* UgotLoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UgotLoginView.swift; sourceTree = "<group>"; };
 		66C2D5A7B58BFC9562C5E7F3 /* GallerySessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GallerySessionStore.swift; sourceTree = "<group>"; };
 		6AE27BD8E6AAC0726356E35B /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		919AD099827E6FCF12703D50 /* GalleryFortuneMCPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryFortuneMCPClient.swift; sourceTree = "<group>"; };
 		923455198CC1BB0067F6E793 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		BB6870C9CB1F1321CE90939A /* GalleryLiteRTLMBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GalleryLiteRTLMBridge.h; sourceTree = "<group>"; };
 		BBEADB975A13B5134A4073A4 /* GalleryIOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryIOSApp.swift; sourceTree = "<group>"; };
 		C4081138E2A43FFE74CCA921 /* GalleryChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryChatView.swift; sourceTree = "<group>"; };
 		E52CD9190ACFA31DD6CB7680 /* GalleryIOS-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "GalleryIOS-Bridging-Header.h"; sourceTree = "<group>"; };
+		F4BF835A99924231132153A8 /* GalleryMobileActionRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryMobileActionRunner.swift; sourceTree = "<group>"; };
 		FA7EFE460A55FDE59E8B835E /* GalleryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryModel.swift; sourceTree = "<group>"; };
 		FCEC6975CCF9D6917AE6D6F3 /* GallerySharedCore.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = GallerySharedCore.xcframework; path = ../Android/src/shared/core/build/XCFrameworks/release/GallerySharedCore.xcframework; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -71,6 +76,7 @@
 				0C3497332CDE02A3C90B5A10 /* LiteRTLM.xcframework in Frameworks */,
 				D0F1823DA4FBE38BE2915A78 /* GemmaModelConstraintProvider.xcframework in Frameworks */,
 				3A6EB5BB76C88BCDC5BFD794 /* GoogleSignIn in Frameworks */,
+				9D6E0D3A818F9009EC298FA2 /* MarkdownUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -82,6 +88,7 @@
 			children = (
 				6AE27BD8E6AAC0726356E35B /* ContentView.swift */,
 				C4081138E2A43FFE74CCA921 /* GalleryChatView.swift */,
+				919AD099827E6FCF12703D50 /* GalleryFortuneMCPClient.swift */,
 				024400A0E7FEC65CE325154E /* GalleryHomeView.swift */,
 				17BE82697D8BE3E8B0A08B88 /* GalleryInferenceRuntime.swift */,
 				5AC0CC2EE8E86DE26928A0F0 /* GalleryInputAttachments.swift */,
@@ -89,6 +96,7 @@
 				BBEADB975A13B5134A4073A4 /* GalleryIOSApp.swift */,
 				BB6870C9CB1F1321CE90939A /* GalleryLiteRTLMBridge.h */,
 				3227EDD9245CA33E78467C53 /* GalleryLiteRTLMBridge.mm */,
+				F4BF835A99924231132153A8 /* GalleryMobileActionRunner.swift */,
 				FA7EFE460A55FDE59E8B835E /* GalleryModel.swift */,
 				10CB47627EC18A453ABADD59 /* GalleryModelManagerView.swift */,
 				66C2D5A7B58BFC9562C5E7F3 /* GallerySessionStore.swift */,
@@ -154,6 +162,7 @@
 			name = GalleryIOS;
 			packageProductDependencies = (
 				46106A88B0A812BAD50B27B0 /* GoogleSignIn */,
+				1CEFA54BA74BD5827645B2E3 /* MarkdownUI */,
 			);
 			productName = GalleryIOS;
 			productReference = 249D1AA722EC6D4A13162CDB /* GalleryIOS.app */;
@@ -184,6 +193,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				75EAC1AB1CD01A14F0B8C8D7 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
+				F5BEBF2B7101F2B54389022F /* XCRemoteSwiftPackageReference "swift-markdown-ui" */,
 			);
 			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
@@ -242,11 +252,13 @@
 			files = (
 				F4BE7EA22DF6575666C6C654 /* ContentView.swift in Sources */,
 				6D059D4E41524FD7930DC7CF /* GalleryChatView.swift in Sources */,
+				F74DB60B0B59A7A1C7D14463 /* GalleryFortuneMCPClient.swift in Sources */,
 				001D1C10C1E418CE2B5EACDE /* GalleryHomeView.swift in Sources */,
 				115798245986EF1D6FA7942D /* GalleryIOSApp.swift in Sources */,
 				765C685217082553D39789A8 /* GalleryInferenceRuntime.swift in Sources */,
 				54B90D101F30F7D5AA3CBC09 /* GalleryInputAttachments.swift in Sources */,
 				85E89DFA9C1AB5E675D87E2D /* GalleryLiteRTLMBridge.mm in Sources */,
+				CF0CE0CC518E88F178B2E5E0 /* GalleryMobileActionRunner.swift in Sources */,
 				4BD5499ABD9192F4CCC34975 /* GalleryModel.swift in Sources */,
 				2F3816210012D410429D6994 /* GalleryModelManagerView.swift in Sources */,
 				45224C16D02F9E28798ABBC2 /* GallerySessionStore.swift in Sources */,
@@ -461,9 +473,22 @@
 				minimumVersion = 8.0.0;
 			};
 		};
+		F5BEBF2B7101F2B54389022F /* XCRemoteSwiftPackageReference "swift-markdown-ui" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/gonzalezreal/swift-markdown-ui";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.0.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		1CEFA54BA74BD5827645B2E3 /* MarkdownUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F5BEBF2B7101F2B54389022F /* XCRemoteSwiftPackageReference "swift-markdown-ui" */;
+			productName = MarkdownUI;
+		};
 		46106A88B0A812BAD50B27B0 /* GoogleSignIn */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 75EAC1AB1CD01A14F0B8C8D7 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;

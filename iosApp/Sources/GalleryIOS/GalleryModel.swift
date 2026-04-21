@@ -220,7 +220,7 @@ extension GalleryAgentSkill {
   static let translateId = "translate"
   static let mobileActionsId = "mobile_actions"
 
-  static let defaultSelectedIds = [fortuneId, summarizeId, translateId]
+  static let defaultSelectedIds = [fortuneId, summarizeId, translateId, mobileActionsId]
 
   static let samples: [GalleryAgentSkill] = [
     GalleryAgentSkill(
