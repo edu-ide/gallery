@@ -30,7 +30,7 @@ import com.google.ai.edge.gallery.common.UgotAuthConfig
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.gallery.ui.modelmanager.TokenRequestResult
 import com.google.ai.edge.gallery.ui.modelmanager.TokenRequestResultType
-import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
 import java.util.UUID
@@ -46,66 +46,64 @@ internal fun rememberUgotNativeGoogleSignInLauncher(
   val scope = rememberCoroutineScope()
   val credentialManager = remember(context) { CredentialManager.create(context) }
 
-  return remember(context, scope, credentialManager, modelManagerViewModel, onStarted, onResult) {
-    {
-      onStarted()
-      scope.launch {
-        try {
-          val googleOption =
-            GetSignInWithGoogleOption.Builder(UgotAuthConfig.googleServerClientId)
-              .setNonce(UUID.randomUUID().toString())
-              .build()
-          val request = GetCredentialRequest.Builder().addCredentialOption(googleOption).build()
-          val result = credentialManager.getCredential(context, request)
-          val credential = result.credential
-          if (
-            credential is CustomCredential &&
-              credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
-          ) {
-            val googleCredential = GoogleIdTokenCredential.createFrom(credential.data)
-            modelManagerViewModel.exchangeGoogleIdTokenForUgotTokens(
-              idToken = googleCredential.idToken,
-              onDone = onResult,
-            )
-          } else {
-            onResult(
-              TokenRequestResult(
-                status = TokenRequestResultType.FAILED,
-                errorMessage = "Google sign-in was not available on this device",
-              )
-            )
-          }
-        } catch (_: GetCredentialCancellationException) {
-          onResult(TokenRequestResult(status = TokenRequestResultType.USER_CANCELLED))
-        } catch (_: NoCredentialException) {
+  return {
+    onStarted()
+    scope.launch {
+      try {
+        val googleOption =
+          com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption.Builder(UgotAuthConfig.googleServerClientId)
+            .setNonce(UUID.randomUUID().toString())
+            .build()
+        val request = GetCredentialRequest.Builder().addCredentialOption(googleOption).build()
+        val result = credentialManager.getCredential(context, request)
+        val credential = result.credential
+        if (
+          credential is CustomCredential &&
+            credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+        ) {
+          val googleCredential = GoogleIdTokenCredential.createFrom(credential.data)
+          modelManagerViewModel.exchangeGoogleIdTokenForUgotTokens(
+            idToken = googleCredential.idToken,
+            onDone = onResult,
+          )
+        } else {
           onResult(
             TokenRequestResult(
               status = TokenRequestResultType.FAILED,
               errorMessage = "Google sign-in was not available on this device",
             )
           )
-        } catch (e: GoogleIdTokenParsingException) {
-          onResult(
-            TokenRequestResult(
-              status = TokenRequestResultType.FAILED,
-              errorMessage = e.message ?: "Failed to parse Google token",
-            )
-          )
-        } catch (e: GetCredentialException) {
-          onResult(
-            TokenRequestResult(
-              status = TokenRequestResultType.FAILED,
-              errorMessage = e.message ?: "Native sign-in failed",
-            )
-          )
-        } catch (e: Exception) {
-          onResult(
-            TokenRequestResult(
-              status = TokenRequestResultType.FAILED,
-              errorMessage = e.message ?: "Native sign-in failed",
-            )
-          )
         }
+      } catch (_: GetCredentialCancellationException) {
+        onResult(TokenRequestResult(status = TokenRequestResultType.USER_CANCELLED))
+      } catch (_: NoCredentialException) {
+        onResult(
+          TokenRequestResult(
+            status = TokenRequestResultType.FAILED,
+            errorMessage = "No Google account found. Please add a Google account in Settings and ensure Play Services are updated.",
+          )
+        )
+      } catch (e: GoogleIdTokenParsingException) {
+        onResult(
+          TokenRequestResult(
+            status = TokenRequestResultType.FAILED,
+            errorMessage = e.message ?: "Failed to parse Google token",
+          )
+        )
+      } catch (e: GetCredentialException) {
+        onResult(
+          TokenRequestResult(
+            status = TokenRequestResultType.FAILED,
+            errorMessage = e.message ?: "Native sign-in failed",
+          )
+        )
+      } catch (e: Exception) {
+        onResult(
+          TokenRequestResult(
+            status = TokenRequestResultType.FAILED,
+            errorMessage = e.message ?: "Native sign-in failed",
+          )
+        )
       }
     }
   }

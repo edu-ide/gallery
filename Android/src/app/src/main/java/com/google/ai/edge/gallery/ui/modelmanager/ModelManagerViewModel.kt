@@ -1078,6 +1078,12 @@ constructor(
           }
         }
 
+        modelAllowlist?.let { allowlist ->
+          val targetModels = setOf("Gemma-4-E2B-it", "Gemma-4-E2B-it-int4", "Gemma-4-E4B-it", "Gemma-4-E4B-it-int4")
+          modelAllowlist = allowlist.copy(models = allowlist.models.filter { targetModels.contains(it.name) })
+        }
+
+
         if (modelAllowlist == null) {
           _uiState.update {
             uiState.value.copy(
