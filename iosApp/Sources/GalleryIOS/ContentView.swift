@@ -25,6 +25,11 @@ struct ContentView: View {
     }
     didStartSmokeRun = true
 
+    if ProcessInfo.processInfo.environment["GALLERY_IOS_SMOKE_ACTION"] == "1" {
+      await runActionSmoke(prompt: prompt)
+      return
+    }
+
     let model = GalleryModel.samples[0]
     let request = GalleryInferenceRequest(
       modelName: model.name,
@@ -48,6 +53,46 @@ struct ContentView: View {
     prompt=\(prompt)
     response=\(result.text)
     """
+    if let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+      try? body.write(
+        to: documents.appendingPathComponent("GallerySmokeResult.txt"),
+        atomically: true,
+        encoding: .utf8
+      )
+    }
+  }
+
+  private func runActionSmoke(prompt: String) async {
+    let startedAt = ISO8601DateFormatter().string(from: Date())
+    let skills = Set(GalleryAgentSkill.defaultSelectedIds)
+    let connectors = Set(GalleryConnector.defaultSelectedIds)
+    var result = await GalleryFortuneActionRunner.runIfNeeded(
+      prompt: prompt,
+      activeSkillIds: skills,
+      activeConnectorIds: connectors
+    )
+    if result == nil {
+      result = await GalleryMobileActionRunner.runIfNeeded(
+        prompt: prompt,
+        activeSkillIds: skills
+      )
+    }
+    let finishedAt = ISO8601DateFormatter().string(from: Date())
+    let snapshotState = result?.widgetSnapshot?.widgetStateJson ?? ""
+    let body = """
+    startedAt=\(startedAt)
+    finishedAt=\(finishedAt)
+    actionSmoke=true
+    prompt=\(prompt)
+    message=\(result?.message ?? "NO_ACTION")
+    hasWidget=\(result?.widgetSnapshot != nil)
+    hasWidgetHtml=\(snapshotState.contains("widgetHtmlBase64"))
+    snapshotPrefix=\(snapshotState.prefix(500))
+    """
+    writeSmokeResult(body)
+  }
+
+  private func writeSmokeResult(_ body: String) {
     if let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
       try? body.write(
         to: documents.appendingPathComponent("GallerySmokeResult.txt"),

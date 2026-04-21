@@ -473,8 +473,10 @@ struct GalleryChatView: View {
   private func completeActionResult(_ result: GalleryChatActionResult) {
     if let snapshot = result.widgetSnapshot {
       sessionState = sessionState.activateWidget(snapshot: snapshot, fullscreen: false)
+      sessionState = sessionState.appendAssistantMessage(text: "\(snapshot.title)을 위젯으로 표시했어요.")
+    } else {
+      sessionState = sessionState.appendAssistantMessage(text: result.message)
     }
-    sessionState = sessionState.appendAssistantMessage(text: result.message)
     streamingAssistantText = ""
     isGenerating = false
     persistSession()

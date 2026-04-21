@@ -64,7 +64,6 @@ final class GalleryFortuneMCPClient {
     try await initialize()
     let tools = try await listTools()
     let toolName = pickTodayFortuneTool(from: tools)
-    let widgetResource = try? await loadWidgetResource(tools: tools, toolName: toolName)
     let result = try await callTool(
       name: toolName,
       arguments: [
@@ -72,6 +71,9 @@ final class GalleryFortuneMCPClient {
         "target_date": todayString(),
       ]
     )
+    let widgetResource =
+      (try? await loadWidgetResource(tools: tools, toolName: toolName)) ??
+      widgetResource(fromToolResult: result)
     let message = renderToolResult(result, toolName: toolName)
     return GalleryFortuneMCPResponse(
       message: message,
@@ -156,9 +158,10 @@ final class GalleryFortuneMCPClient {
     }
 
     for item in contents {
-      guard let text = item["text"] as? String, !text.isEmpty else { continue }
       let mimeType = item["mimeType"] as? String
       let itemURI = item["uri"] as? String ?? uri
+      let text = itemText(item)
+      guard !text.isEmpty else { continue }
       if isSupportedWidgetMime(mimeType) || text.localizedCaseInsensitiveContains("<html") {
         return GalleryMCPWidgetResource(uri: itemURI, mimeType: mimeType, html: text)
       }
@@ -301,15 +304,15 @@ final class GalleryFortuneMCPClient {
       guard (item["type"] as? String) == "text" else { return nil }
       return item["text"] as? String
     }
-    if !texts.isEmpty {
-      return texts.joined(separator: "\n\n")
+    let cleanedTexts = texts.compactMap(cleanToolText)
+    if !cleanedTexts.isEmpty {
+      return cleanedTexts.joined(separator: "\n\n")
     }
     if let structured = result["structuredContent"],
-       let data = try? JSONSerialization.data(withJSONObject: structured, options: [.prettyPrinted]),
-       let json = String(data: data, encoding: .utf8) {
-      return "Fortune MCP 결과입니다.\n\n```json\n\(json)\n```"
+       let markdown = markdownSummary(from: structured) {
+      return markdown
     }
-    return "Fortune MCP에서 \(toolName)을 실행했어요. 위젯 응답을 받았지만 표시할 텍스트가 없어요."
+    return "Fortune MCP에서 \(toolName)을 실행했어요."
   }
 
   private func makeSnapshot(
@@ -318,6 +321,8 @@ final class GalleryFortuneMCPClient {
     result: [String: Any],
     widgetResource: GalleryMCPWidgetResource?
   ) -> McpWidgetSnapshot {
+    let compactMessage = trimForWidget(message)
+    let compactOutput = compactToolOutput(result, message: compactMessage)
     var state: [String: Any] = [
       "kind": "fortune",
       "connectorId": GalleryConnector.fortuneMcpId,
@@ -327,10 +332,9 @@ final class GalleryFortuneMCPClient {
         "lang": "ko",
         "target_date": todayString(),
       ],
-      "toolOutput": result,
+      "toolOutput": compactOutput,
       "targetDate": todayString(),
-      "contentMarkdown": message,
-      "rawResult": result,
+      "contentMarkdown": compactMessage,
     ]
     if let widgetResource {
       state["widgetUri"] = widgetResource.uri
@@ -343,9 +347,24 @@ final class GalleryFortuneMCPClient {
     return McpWidgetSnapshot(
       connectorId: GalleryConnector.fortuneMcpId,
       title: "오늘의 운세",
-      summary: firstSummaryLine(from: message),
+      summary: firstSummaryLine(from: compactMessage),
       widgetStateJson: json
     )
+  }
+
+  private func compactToolOutput(_ result: [String: Any], message: String) -> [String: Any] {
+    var compact: [String: Any] = [
+      "contentMarkdown": message,
+      "generatedAt": ISO8601DateFormatter().string(from: Date()),
+    ]
+    if let structured = result["structuredContent"],
+       let summary = markdownSummary(from: structured) {
+      compact["structuredSummary"] = trimForWidget(summary)
+    }
+    if let target = targetIljin(from: rawSajuDataObject(in: message) ?? rawSajuDataObject(in: String(describing: result))) {
+      compact["targetIljin"] = compactIljin(target)
+    }
+    return compact
   }
 
   private func firstSummaryLine(from message: String) -> String {
@@ -383,15 +402,275 @@ final class GalleryFortuneMCPClient {
   }
 
   private func isSupportedWidgetMime(_ mimeType: String?) -> Bool {
-    mimeType == "text/html;profile=mcp-app" || mimeType == "text/html+skybridge"
+    guard let mimeType = mimeType?.lowercased() else { return false }
+    return mimeType.hasPrefix("text/html") ||
+      mimeType.contains("mcp-app") ||
+      mimeType.contains("skybridge")
   }
 
   private func mimePriority(_ mimeType: String?) -> Int {
     switch mimeType {
     case "text/html;profile=mcp-app": return 2
     case "text/html+skybridge": return 1
+    case "text/html": return 1
     default: return 0
     }
+  }
+
+  private func widgetResource(fromToolResult result: [String: Any]) -> GalleryMCPWidgetResource? {
+    let content = result["content"] as? [[String: Any]] ?? []
+    for item in content {
+      if let resource = item["resource"] as? [String: Any] {
+        let mimeType = resource["mimeType"] as? String
+        let uri = resource["uri"] as? String ?? "inline://fortune-widget"
+        let text = itemText(resource)
+        if !text.isEmpty, isSupportedWidgetMime(mimeType) || text.localizedCaseInsensitiveContains("<html") {
+          return GalleryMCPWidgetResource(uri: uri, mimeType: mimeType, html: text)
+        }
+      }
+
+      let mimeType = item["mimeType"] as? String
+      let uri = item["uri"] as? String ?? "inline://fortune-widget"
+      let text = itemText(item)
+      if !text.isEmpty, isSupportedWidgetMime(mimeType) || text.localizedCaseInsensitiveContains("<html") {
+        return GalleryMCPWidgetResource(uri: uri, mimeType: mimeType, html: text)
+      }
+    }
+    return nil
+  }
+
+  private func itemText(_ item: [String: Any]) -> String {
+    if let text = item["text"] as? String {
+      return text
+    }
+    if let blob = item["blob"] as? String,
+       let data = Data(base64Encoded: blob),
+       let text = String(data: data, encoding: .utf8) {
+      return text
+    }
+    return ""
+  }
+
+  private func cleanToolText(_ text: String) -> String? {
+    let normalized = text.replacingOccurrences(of: "\\n", with: "\n")
+    if let markdown = fortuneMarkdownFromRawToolText(normalized) {
+      return markdown
+    }
+
+    var trimmed = normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    if let markerRange = trimmed.range(of: "[Raw Saju Data]") {
+      trimmed = String(trimmed[..<markerRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    if trimmed.lowercased().contains("already loaded"),
+       let firstBullet = trimmed.range(of: "\n- ") {
+      trimmed = String(trimmed[firstBullet.lowerBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    if let parsed = parseJsonLikeText(trimmed),
+       let summary = markdownSummary(from: parsed) {
+      return summary
+    }
+    if trimmed.hasPrefix("{") || trimmed.hasPrefix("[") {
+      return "오늘의 운세를 불러왔어요."
+    }
+    return trimmed
+  }
+
+  private func fortuneMarkdownFromRawToolText(_ text: String) -> String? {
+    guard let raw = rawSajuDataObject(in: text),
+          let target = targetIljin(from: raw) else {
+      return nil
+    }
+
+    let ganji = target["ganji"] as? String ?? target["iljin"] as? String ?? "오늘"
+    let dayOfWeek = target["day_of_week"] as? String
+    let score = (target["scores"] as? [String: Any])?["fortune_flow"]
+    let zodiac = target["zodiac_fortune"] as? [String: Any]
+    let stemOverall = ((target["stem_fortune"] as? [String: Any])?["overall"] as? [String])?.first
+    let branchOverall = ((target["branch_fortune"] as? [String: Any])?["overall"] as? [String])?.first
+    let tips = Array((target["tips"] as? [String] ?? []).prefix(4))
+
+    var lines = [
+      "### 오늘의 운세",
+      "- **일진**: \(ganji)\(dayOfWeek.map { " (\($0))" } ?? "")",
+    ]
+    if let score {
+      lines.append("- **흐름 점수**: \(score)")
+    }
+    if let wealth = zodiac?["wealth"] as? String {
+      lines.append("- **재물**: \(wealth)")
+    }
+    if let love = zodiac?["love"] as? String {
+      lines.append("- **관계/애정**: \(love)")
+    }
+    if let health = zodiac?["health"] as? String {
+      lines.append("- **건강**: \(health)")
+    }
+    if let direction = zodiac?["luckyDirection"] as? String {
+      lines.append("- **행운 방향**: \(direction)")
+    }
+    if let stemOverall {
+      lines.append("- **핵심 흐름**: \(stemOverall)")
+    }
+    if let branchOverall, branchOverall != stemOverall {
+      lines.append("- **환경 흐름**: \(branchOverall)")
+    }
+    if !tips.isEmpty {
+      lines.append("- **팁**: \(tips.joined(separator: ", "))")
+    }
+    return lines.joined(separator: "\n")
+  }
+
+  private func rawSajuDataObject(in text: String) -> [String: Any]? {
+    let normalized = text.replacingOccurrences(of: "\\n", with: "\n")
+    guard let marker = normalized.range(of: "[Raw Saju Data]"),
+          let firstBrace = normalized[marker.upperBound...].firstIndex(of: "{") else {
+      return nil
+    }
+    let jsonCandidate = String(normalized[firstBrace...])
+    guard let jsonString = firstJSONObjectString(in: jsonCandidate),
+          let data = jsonString.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+      return nil
+    }
+    return object
+  }
+
+  private func firstJSONObjectString(in text: String) -> String? {
+    var depth = 0
+    var isInString = false
+    var isEscaped = false
+    var endIndex: String.Index?
+
+    for index in text.indices {
+      let character = text[index]
+      if isInString {
+        if isEscaped {
+          isEscaped = false
+        } else if character == "\\" {
+          isEscaped = true
+        } else if character == "\"" {
+          isInString = false
+        }
+        continue
+      }
+
+      if character == "\"" {
+        isInString = true
+      } else if character == "{" {
+        depth += 1
+      } else if character == "}" {
+        depth -= 1
+        if depth == 0 {
+          endIndex = index
+          break
+        }
+      }
+    }
+
+    guard let endIndex else { return nil }
+    return String(text[...endIndex])
+  }
+
+  private func targetIljin(from raw: [String: Any]?) -> [String: Any]? {
+    guard let list = raw?["iljin_list"] as? [[String: Any]] else { return nil }
+    return list.first { ($0["is_target"] as? Bool) == true } ?? list.first
+  }
+
+  private func compactIljin(_ target: [String: Any]) -> [String: Any] {
+    var compact: [String: Any] = [:]
+    for key in ["year", "month", "day", "day_of_week", "ganji", "stem", "branch", "is_target"] {
+      if let value = target[key] {
+        compact[key] = value
+      }
+    }
+    if let scores = target["scores"] as? [String: Any] {
+      compact["scores"] = scores.filter { key, _ in
+        ["balance", "swing", "love", "wealth", "health", "fortune_flow", "wealth_with_flow"].contains(key)
+      }
+    }
+    if let zodiac = target["zodiac_fortune"] as? [String: Any] {
+      compact["zodiac_fortune"] = zodiac.filter { key, _ in
+        ["zodiac", "relation", "relationHeader", "mainKeyword", "wealth", "health", "love", "luckyDirection"].contains(key)
+      }
+    }
+    if let tips = target["tips"] as? [String] {
+      compact["tips"] = Array(tips.prefix(4))
+    }
+    return compact
+  }
+
+  private func trimForWidget(_ text: String, maxLength: Int = 4_000) -> String {
+    let normalized = text.replacingOccurrences(of: "\\n", with: "\n")
+    if normalized.count <= maxLength {
+      return normalized
+    }
+    return String(normalized.prefix(maxLength)) + "\n\n…"
+  }
+
+  private func parseJsonLikeText(_ text: String) -> Any? {
+    guard let data = text.data(using: .utf8) else { return nil }
+    if let parsed = try? JSONSerialization.jsonObject(with: data) {
+      return parsed
+    }
+    if let unescaped = try? JSONDecoder().decode(String.self, from: data),
+       let unescapedData = unescaped.data(using: .utf8),
+       let parsed = try? JSONSerialization.jsonObject(with: unescapedData) {
+      return parsed
+    }
+    return nil
+  }
+
+  private func markdownSummary(from value: Any) -> String? {
+    if let string = value as? String {
+      return cleanToolText(string)
+    }
+    if let array = value as? [Any] {
+      return array.compactMap(markdownSummary).first
+    }
+    guard let dict = value as? [String: Any] else { return nil }
+
+    let preferredStringKeys = [
+      "contentMarkdown",
+      "markdown",
+      "message",
+      "summary",
+      "interpretation",
+      "advice",
+      "text",
+      "description",
+    ]
+    for key in preferredStringKeys {
+      if let text = dict[key] as? String,
+         let cleaned = cleanToolText(text),
+         !cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        return cleaned
+      }
+    }
+
+    for key in ["structuredContent", "result", "data", "fortune", "today", "daily", "content"] {
+      if let nested = dict[key],
+         let nestedMarkdown = markdownSummary(from: nested) {
+        return nestedMarkdown
+      }
+    }
+
+    let scalarLines = dict
+      .sorted { $0.key < $1.key }
+      .compactMap { key, value -> String? in
+        guard value is String || value is NSNumber || value is Bool else { return nil }
+        let rendered = String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rendered.isEmpty else { return nil }
+        return "- **\(humanTitle(key))**: \(rendered)"
+      }
+    return scalarLines.isEmpty ? nil : scalarLines.joined(separator: "\n")
+  }
+
+  private func humanTitle(_ key: String) -> String {
+    key
+      .replacingOccurrences(of: "_", with: " ")
+      .replacingOccurrences(of: "-", with: " ")
+      .capitalized
   }
 
   private func widgetBaseURL(for uri: String) -> String {
