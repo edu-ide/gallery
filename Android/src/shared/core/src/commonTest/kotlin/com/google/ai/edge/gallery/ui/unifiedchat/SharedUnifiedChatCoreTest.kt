@@ -19,6 +19,10 @@ package com.google.ai.edge.gallery.ui.unifiedchat
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetDisplayMode
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetHostState
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSnapshot
+import com.google.ai.edge.gallery.ui.unifiedchat.session.UnifiedChatPersistedSession
+import com.google.ai.edge.gallery.ui.unifiedchat.session.decodeUnifiedChatPersistedSession
+import com.google.ai.edge.gallery.ui.unifiedchat.session.encodeUnifiedChatPersistedSession
+import com.google.ai.edge.gallery.ui.unifiedchat.session.unifiedChatSessionFileName
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -139,6 +143,40 @@ class SharedUnifiedChatCoreTest {
     assertEquals(snapshot, active.widgetHostState.activeSnapshot)
     assertEquals(McpWidgetDisplayMode.INLINE, active.widgetHostState.displayMode)
     assertEquals(null, active.closeWidget().widgetHostState.activeSnapshot)
+  }
+
+  @Test
+  fun persistedSessionSchema_roundTripsAndValidatesLegacyData() {
+    val session =
+      UnifiedChatPersistedSession(
+        id = "task::model::hint",
+        title = "Unified chat",
+        activeConnectorIds = listOf("github", "gmail"),
+        messagesJson = listOf("{\"type\":\"TEXT\"}"),
+        widgetSnapshots =
+          listOf(
+            McpWidgetSnapshot(
+              connectorId = "github",
+              title = "GitHub",
+              summary = "PR summary",
+              widgetStateJson = "{}",
+            )
+          ),
+      )
+
+    assertEquals(session, decodeUnifiedChatPersistedSession(encodeUnifiedChatPersistedSession(session)))
+    assertEquals("task%3A%3Amodel%3A%3Ahint.json", unifiedChatSessionFileName(session.id))
+  }
+
+  @Test
+  fun persistedSessionSchema_rejectsNullMessageEntriesButKeepsLegacyMissingSnapshots() {
+    val legacy =
+      """{"id":"session-1","title":"Legacy","activeConnectorIds":[],"messagesJson":["{}"]}"""
+    val malformed =
+      """{"id":"session-1","title":"Bad","activeConnectorIds":[],"messagesJson":[null]}"""
+
+    assertEquals(emptyList<McpWidgetSnapshot>(), decodeUnifiedChatPersistedSession(legacy)?.widgetSnapshots)
+    assertEquals(null, decodeUnifiedChatPersistedSession(malformed))
   }
 
 }

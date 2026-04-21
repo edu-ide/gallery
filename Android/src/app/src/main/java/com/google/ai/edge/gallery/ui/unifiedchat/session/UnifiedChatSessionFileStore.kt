@@ -28,33 +28,8 @@ import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSnapshot
 import com.google.ai.edge.gallery.ui.unifiedchat.messages.ChatMessageMcpWidgetCard
 import com.google.gson.Gson
 import java.io.File
-import java.net.URLEncoder
 import java.nio.file.Files
-import java.nio.charset.StandardCharsets
 import java.nio.file.StandardCopyOption
-
-data class UnifiedChatPersistedSession(
-  val id: String,
-  val title: String,
-  val activeConnectorIds: List<String>,
-  val messagesJson: List<String>,
-  val widgetSnapshots: List<McpWidgetSnapshot>,
-)
-
-private data class PersistedSessionSchema(
-  val id: String? = null,
-  val title: String? = null,
-  val activeConnectorIds: List<String?>? = null,
-  val messagesJson: List<String?>? = null,
-  val widgetSnapshots: List<PersistedWidgetSnapshotSchema?>? = null,
-)
-
-private data class PersistedWidgetSnapshotSchema(
-  val connectorId: String? = null,
-  val title: String? = null,
-  val summary: String? = null,
-  val widgetStateJson: String? = null,
-)
 
 private data class PersistedChatMessageEnvelope(
   val type: String,
@@ -180,7 +155,7 @@ class UnifiedChatSessionFileStore(private val baseDir: File) {
     val file = sessionFile(session.id)
     file.parentFile?.mkdirs()
     val tempFile = File.createTempFile(file.name, ".tmp", file.parentFile)
-    tempFile.writeText(gson.toJson(session))
+    tempFile.writeText(encodeUnifiedChatPersistedSession(session))
     runCatching {
         Files.move(
           tempFile.toPath(),
@@ -212,7 +187,7 @@ class UnifiedChatSessionFileStore(private val baseDir: File) {
     }
 
     return runCatching {
-        gson.fromJson(file.readText(), PersistedSessionSchema::class.java).toValidatedSession()
+        decodeUnifiedChatPersistedSession(file.readText())
       }
       .getOrNull()
   }
@@ -222,53 +197,8 @@ class UnifiedChatSessionFileStore(private val baseDir: File) {
   }
 
   internal fun sessionFile(id: String): File =
-    File(baseDir, "${encodeSessionId(id)}.json")
+    File(baseDir, unifiedChatSessionFileName(id))
 }
 
 private fun String?.toChatSide(): ChatSide =
   runCatching { ChatSide.valueOf(this.orEmpty()) }.getOrDefault(ChatSide.SYSTEM)
-
-private fun PersistedSessionSchema?.toValidatedSession(): UnifiedChatPersistedSession? {
-  if (this == null) {
-    return null
-  }
-
-  val sessionId = id ?: return null
-  val sessionTitle = title ?: return null
-  val connectorIds = activeConnectorIds?.filterNotNull() ?: return null
-  val messages = messagesJson?.filterNotNull() ?: return null
-  val snapshots = widgetSnapshots.orEmpty().mapNotNull(PersistedWidgetSnapshotSchema?::toValidatedSnapshot)
-
-  if (connectorIds.size != activeConnectorIds.size || messages.size != messagesJson.size) {
-    return null
-  }
-
-  return UnifiedChatPersistedSession(
-    id = sessionId,
-    title = sessionTitle,
-    activeConnectorIds = connectorIds,
-    messagesJson = messages,
-    widgetSnapshots = snapshots,
-  )
-}
-
-private fun PersistedWidgetSnapshotSchema?.toValidatedSnapshot(): McpWidgetSnapshot? {
-  if (this == null) {
-    return null
-  }
-
-  val snapshotConnectorId = connectorId ?: return null
-  val snapshotTitle = title ?: return null
-  val snapshotSummary = summary ?: return null
-  val snapshotWidgetStateJson = widgetStateJson ?: return null
-
-  return McpWidgetSnapshot(
-    connectorId = snapshotConnectorId,
-    title = snapshotTitle,
-    summary = snapshotSummary,
-    widgetStateJson = snapshotWidgetStateJson,
-  )
-}
-
-private fun encodeSessionId(id: String): String =
-  URLEncoder.encode(id, StandardCharsets.UTF_8.name()).replace("+", "%20")
