@@ -97,7 +97,7 @@ struct GalleryMCPWidgetWebView: UIViewRepresentable {
 
       Task {
         do {
-          let client = try makeClient()
+          let client = try await makeClient()
           let result: [String: Any]
           switch method {
           case "tools/call":
@@ -126,8 +126,8 @@ struct GalleryMCPWidgetWebView: UIViewRepresentable {
       }
     }
 
-    private func makeClient() throws -> GalleryMCPExtAppsClient {
-      guard let accessToken = UgotAuthStore.accessToken() else {
+    private func makeClient() async throws -> GalleryMCPExtAppsClient {
+      guard let accessToken = try await UgotAuthStore.validAccessToken() else {
         throw WidgetBridgeError.missingAuth
       }
       let state = snapshot.widgetStateDictionary ?? [:]
@@ -206,20 +206,13 @@ private struct GalleryMCPWidgetPayload {
   }
 
   var injectedHTML: String {
-    let innerBridge = Self.innerBridgeScript(
+    let bridge = Self.innerBridgeScript(
       toolName: toolName,
       toolInputJson: toolInputJson,
       toolOutputJson: toolOutputJson,
       widgetStateJson: widgetStateJson
     )
-    let widgetHTML = Self.inject(script: innerBridge, into: html, baseURL: baseURL)
-    return Self.hostWrapperHTML(
-      widgetHTML: widgetHTML,
-      toolName: toolName,
-      toolInputJson: toolInputJson,
-      toolOutputJson: toolOutputJson,
-      widgetStateJson: widgetStateJson
-    )
+    return Self.inject(script: bridge, into: html, baseURL: baseURL)
   }
 
   static func inject(script: String, into html: String, baseURL: URL?) -> String {
@@ -419,14 +412,42 @@ private struct GalleryMCPWidgetPayload {
       };
       const pending = {};
       let requestId = 1;
+      const postNative = (payload) => {
+        try { window.webkit.messageHandlers.mcpWidget.postMessage(payload || {}); }
+        catch (error) { console.warn('[McpUiAppCompat] native bridge missing', error); }
+      };
       const dispatchGlobals = (globals) => window.dispatchEvent(new CustomEvent('openai:set_globals', { detail: { globals } }));
-      function rpc(method, params) {
+      function nativeRequest(method, params) {
         const id = String(requestId++);
         return new Promise((resolve, reject) => {
           pending[id] = { resolve, reject, method };
-          window.parent.postMessage({ jsonrpc: '2.0', id, method, params: params || {} }, '*');
+          postNative({ type: 'mcpRequest', id, method, params: params || {} });
         });
       }
+      function rpc(method, params) {
+        if (window.parent && window.parent !== window) {
+          const id = String(requestId++);
+          return new Promise((resolve, reject) => {
+            pending[id] = { resolve, reject, method };
+            window.parent.postMessage({ jsonrpc: '2.0', id, method, params: params || {} }, '*');
+          });
+        }
+        return nativeRequest(method, params);
+      }
+      window.__galleryMcpResolveRequest = (id, result) => {
+        const item = pending[id];
+        if (!item) return;
+        delete pending[id];
+        item.resolve(result || {});
+      };
+      window.__galleryMcpRejectRequest = (id, message) => {
+        const item = pending[id];
+        if (!item) return;
+        delete pending[id];
+        item.reject(new Error(message || 'MCP request failed'));
+      };
+      window.__galleryMcpResolveCall = window.__galleryMcpResolveRequest;
+      window.__galleryMcpRejectCall = window.__galleryMcpRejectRequest;
       const hostContext = {
         theme: window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
         locale: navigator.language || 'ko',

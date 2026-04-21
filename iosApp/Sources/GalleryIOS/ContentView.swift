@@ -14,6 +14,7 @@ struct ContentView: View {
       }
     }
     .task {
+      await authViewModel.restoreSession()
       await runLaunchSmokeTestIfRequested()
     }
   }

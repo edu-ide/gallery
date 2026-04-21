@@ -15,11 +15,10 @@ enum GalleryFortuneActionRunner {
     guard activeConnectorIds.contains(GalleryConnector.fortuneMcpId) else {
       return GalleryChatActionResult(message: "Fortune connector를 켜면 오늘의 운세를 볼 수 있어요.")
     }
-    guard let accessToken = UgotAuthStore.accessToken() else {
-      return GalleryChatActionResult(message: "Fortune MCP를 사용하려면 UGOT 로그인이 필요해요.")
-    }
-
     do {
+      guard let accessToken = try await UgotAuthStore.validAccessToken() else {
+        return GalleryChatActionResult(message: "UGOT 세션이 만료됐어요. 다시 로그인해 주세요.")
+      }
       let client = GalleryFortuneMCPClient(accessToken: accessToken)
       let response = try await client.fetchTodayFortune()
       return GalleryChatActionResult(message: response.message, widgetSnapshot: response.snapshot)

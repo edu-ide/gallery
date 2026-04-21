@@ -54,7 +54,25 @@ final class UgotAuthViewModel: ObservableObject {
   }
 
   func reload() {
-    isAuthenticated = UgotAuthStore.load()?.isExpired == false
+    isAuthenticated = UgotAuthStore.hasRestorableSession()
+  }
+
+  func restoreSession() async {
+    guard UgotAuthStore.hasRestorableSession() else {
+      isAuthenticated = false
+      return
+    }
+
+    do {
+      isLoading = true
+      defer { isLoading = false }
+      isAuthenticated = try await UgotAuthStore.validAccessToken() != nil
+    } catch {
+      UgotAuthStore.clear()
+      errorMessage = error.localizedDescription
+      isAuthenticated = false
+      isLoading = false
+    }
   }
 
   func signIn() async {
@@ -92,17 +110,41 @@ final class UgotAuthViewModel: ObservableObject {
 
 enum UgotAuthService {
   static func exchangeGoogleIdTokenForUgotTokens(idToken: String) async throws -> UgotTokenData {
+    try await requestToken(
+      bodyItems: [
+        ("grant_type", "urn:ietf:params:oauth:grant-type:token-exchange"),
+        ("subject_token_type", "urn:ietf:params:oauth:token-type:id_token"),
+        ("subject_token", idToken),
+        ("client_id", UgotAuthConfig.mobileClientId),
+        ("scope", UgotAuthConfig.mobileScopes),
+      ],
+      fallbackRefreshToken: nil,
+      failureLabel: "Token exchange"
+    )
+  }
+
+  static func refreshTokens(refreshToken: String) async throws -> UgotTokenData {
+    try await requestToken(
+      bodyItems: [
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refreshToken),
+        ("client_id", UgotAuthConfig.mobileClientId),
+        ("scope", UgotAuthConfig.mobileScopes),
+      ],
+      fallbackRefreshToken: refreshToken,
+      failureLabel: "Token refresh"
+    )
+  }
+
+  private static func requestToken(
+    bodyItems: [(String, String)],
+    fallbackRefreshToken: String?,
+    failureLabel: String
+  ) async throws -> UgotTokenData {
     let url = UgotAuthConfig.authServerBaseURL.appendingPathComponent("oauth2/token")
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-    let bodyItems: [(String, String)] = [
-      ("grant_type", "urn:ietf:params:oauth:grant-type:token-exchange"),
-      ("subject_token_type", "urn:ietf:params:oauth:token-type:id_token"),
-      ("subject_token", idToken),
-      ("client_id", UgotAuthConfig.mobileClientId),
-      ("scope", UgotAuthConfig.mobileScopes),
-    ]
     request.httpBody = bodyItems
       .map { "\($0.0.formEncoded)=\($0.1.formEncoded)" }
       .joined(separator: "&")
@@ -112,13 +154,14 @@ enum UgotAuthService {
     let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
     guard (200..<300).contains(statusCode) else {
       let raw = String(data: data, encoding: .utf8) ?? ""
-      throw UgotAuthError.tokenExchangeFailed("Token exchange failed (\(statusCode)): \(raw)")
+      throw UgotAuthError.tokenExchangeFailed("\(failureLabel) failed (\(statusCode)): \(raw)")
     }
+
     let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any]
     guard let accessToken = payload?["access_token"] as? String, !accessToken.isEmpty else {
-      throw UgotAuthError.tokenExchangeFailed("Token exchange returned no access token")
+      throw UgotAuthError.tokenExchangeFailed("\(failureLabel) returned no access token")
     }
-    let refreshToken = payload?["refresh_token"] as? String
+    let refreshToken = (payload?["refresh_token"] as? String)?.nilIfBlank ?? fallbackRefreshToken
     let expiresAtMs = (payload?["expires_in"] as? NSNumber).map {
       Int64(Date().timeIntervalSince1970 * 1000) + $0.int64Value * 1000
     }
@@ -160,9 +203,29 @@ enum UgotAuthStore {
     return try? JSONDecoder().decode(UgotTokenData.self, from: data)
   }
 
+  static func hasRestorableSession() -> Bool {
+    guard let tokenData = load() else { return false }
+    if !tokenData.isExpired { return true }
+    return tokenData.refreshToken?.nilIfBlank != nil
+  }
+
   static func accessToken() -> String? {
     guard let tokenData = load(), !tokenData.isExpired else { return nil }
     return tokenData.accessToken
+  }
+
+  static func validAccessToken() async throws -> String? {
+    guard let tokenData = load() else { return nil }
+    if !tokenData.isExpired {
+      return tokenData.accessToken
+    }
+    guard let refreshToken = tokenData.refreshToken?.nilIfBlank else {
+      clear()
+      return nil
+    }
+    let refreshed = try await UgotAuthService.refreshTokens(refreshToken: refreshToken)
+    try save(refreshed)
+    return refreshed.accessToken
   }
 
   static func clear() {

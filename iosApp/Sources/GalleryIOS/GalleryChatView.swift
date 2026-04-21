@@ -710,42 +710,19 @@ private struct WidgetPreview: View {
   let fullscreen: Bool
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      HStack {
-        Label(snapshot.title, systemImage: fullscreen ? "arrow.up.left.and.arrow.down.right" : "sparkles")
-          .font(.headline)
-        Spacer()
-        Text("MCP App")
-          .font(.caption2.weight(.bold))
-          .padding(.horizontal, 8)
-          .padding(.vertical, 4)
-          .background(Color.orange.opacity(0.18), in: Capsule())
-      }
-      Text(snapshot.summary)
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
-      if snapshot.hasMcpWidgetHTML {
-        GalleryMCPWidgetWebView(snapshot: snapshot)
-          .frame(maxWidth: .infinity, minHeight: 320, maxHeight: 420)
-          .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-          .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.orange.opacity(0.18)))
-      } else if let content = snapshot.fortuneContentMarkdown {
-        AssistantMarkdownText(text: content)
-          .font(.body)
-          .lineLimit(8)
-      } else {
-        Text(snapshot.widgetStateJson)
-          .font(.caption.monospaced())
-          .foregroundStyle(.secondary)
-          .lineLimit(3)
-      }
+    if snapshot.hasMcpWidgetHTML {
+      GalleryMCPWidgetWebView(snapshot: snapshot)
+        .frame(maxWidth: .infinity, minHeight: 360, maxHeight: fullscreen ? .infinity : 520)
+    } else if let content = snapshot.fortuneContentMarkdown {
+      AssistantMarkdownText(text: content)
+        .font(.body)
+        .padding(.vertical, 4)
+    } else {
+      EmptyView()
     }
-    .padding()
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Color.orange.opacity(0.13), in: RoundedRectangle(cornerRadius: 18))
-    .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.orange.opacity(0.4)))
   }
 }
+
 
 private extension McpWidgetSnapshot {
   var hasMcpWidgetHTML: Bool {
