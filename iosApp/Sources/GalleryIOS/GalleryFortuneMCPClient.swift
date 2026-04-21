@@ -1,4 +1,5 @@
 import Foundation
+import GallerySharedCore
 
 enum GalleryFortuneActionRunner {
   static func runIfNeeded(
@@ -20,8 +21,8 @@ enum GalleryFortuneActionRunner {
 
     do {
       let client = GalleryFortuneMCPClient(accessToken: accessToken)
-      let message = try await client.fetchTodayFortune()
-      return GalleryChatActionResult(message: message)
+      let response = try await client.fetchTodayFortune()
+      return GalleryChatActionResult(message: response.message, widgetSnapshot: response.snapshot)
     } catch {
       return GalleryChatActionResult(message: "Fortune MCP 호출에 실패했어요.\n\n\(error.localizedDescription)")
     }
@@ -38,6 +39,11 @@ enum GalleryFortuneActionRunner {
   }
 }
 
+private struct GalleryFortuneMCPResponse {
+  let message: String
+  let snapshot: McpWidgetSnapshot
+}
+
 private final class GalleryFortuneMCPClient {
   private let endpoint = URL(string: GalleryConnector.fortuneMcpEndpoint)!
   private let accessToken: String
@@ -48,7 +54,7 @@ private final class GalleryFortuneMCPClient {
     self.accessToken = accessToken
   }
 
-  func fetchTodayFortune() async throws -> String {
+  func fetchTodayFortune() async throws -> GalleryFortuneMCPResponse {
     try await initialize()
     let tools = try await listTools()
     let toolName = pickTodayFortuneTool(from: tools)
@@ -59,7 +65,11 @@ private final class GalleryFortuneMCPClient {
         "target_date": todayString(),
       ]
     )
-    return renderToolResult(result, toolName: toolName)
+    let message = renderToolResult(result, toolName: toolName)
+    return GalleryFortuneMCPResponse(
+      message: message,
+      snapshot: makeSnapshot(toolName: toolName, message: message, result: result)
+    )
   }
 
   private func initialize() async throws {
@@ -215,6 +225,34 @@ private final class GalleryFortuneMCPClient {
       return "Fortune MCP 결과입니다.\n\n```json\n\(json)\n```"
     }
     return "Fortune MCP에서 \(toolName)을 실행했어요. 위젯 응답을 받았지만 표시할 텍스트가 없어요."
+  }
+
+  private func makeSnapshot(toolName: String, message: String, result: [String: Any]) -> McpWidgetSnapshot {
+    let state: [String: Any] = [
+      "kind": "fortune",
+      "connectorId": GalleryConnector.fortuneMcpId,
+      "endpoint": GalleryConnector.fortuneMcpEndpoint,
+      "toolName": toolName,
+      "targetDate": todayString(),
+      "contentMarkdown": message,
+      "rawResult": result,
+    ]
+    let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
+    let json = data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+    return McpWidgetSnapshot(
+      connectorId: GalleryConnector.fortuneMcpId,
+      title: "오늘의 운세",
+      summary: firstSummaryLine(from: message),
+      widgetStateJson: json
+    )
+  }
+
+  private func firstSummaryLine(from message: String) -> String {
+    message
+      .split(separator: "\n", omittingEmptySubsequences: true)
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .first { !$0.isEmpty }
+      .map { String($0.prefix(80)) } ?? "Fortune MCP 결과"
   }
 
   private func todayString() -> String {

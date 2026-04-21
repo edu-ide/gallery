@@ -1,8 +1,15 @@
 import Foundation
+import GallerySharedCore
 import UIKit
 
 struct GalleryChatActionResult {
   let message: String
+  let widgetSnapshot: McpWidgetSnapshot?
+
+  init(message: String, widgetSnapshot: McpWidgetSnapshot? = nil) {
+    self.message = message
+    self.widgetSnapshot = widgetSnapshot
+  }
 }
 
 enum GalleryMobileActionRunner {

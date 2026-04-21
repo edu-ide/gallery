@@ -214,12 +214,8 @@ struct GalleryChatView: View {
           .foregroundStyle(.secondary)
       }
       VStack(spacing: 8) {
-        SuggestionButton(title: "오늘 할 일 정리해줘") {
-          sessionState = sessionState.updateDraft(draft: "오늘 할 일을 우선순위대로 정리해줘.")
-          isComposerFocused = true
-        }
-        SuggestionButton(title: "짧게 한국어로 인사해줘") {
-          sessionState = sessionState.updateDraft(draft: "짧게 한국어로 인사해줘.")
+        SuggestionButton(title: "오늘의 운세 알려줘") {
+          sessionState = sessionState.updateDraft(draft: "오늘의 운세 알려줘.")
           isComposerFocused = true
         }
       }
@@ -434,10 +430,7 @@ struct GalleryChatView: View {
         activeConnectorIds: Set(sessionState.connectorBarState.activeConnectorIds)
       ) {
         await MainActor.run {
-          sessionState = sessionState.appendAssistantMessage(text: fortuneResult.message)
-          streamingAssistantText = ""
-          isGenerating = false
-          persistSession()
+          completeActionResult(fortuneResult)
         }
         return
       }
@@ -447,10 +440,7 @@ struct GalleryChatView: View {
         activeSkillIds: Set(sessionState.agentSkillState.activeSkillIds)
       ) {
         await MainActor.run {
-          sessionState = sessionState.appendAssistantMessage(text: actionResult.message)
-          streamingAssistantText = ""
-          isGenerating = false
-          persistSession()
+          completeActionResult(actionResult)
         }
         return
       }
@@ -478,6 +468,16 @@ struct GalleryChatView: View {
     } else {
       sessionStore.delete(id: sessionId)
     }
+  }
+
+  private func completeActionResult(_ result: GalleryChatActionResult) {
+    if let snapshot = result.widgetSnapshot {
+      sessionState = sessionState.activateWidget(snapshot: snapshot, fullscreen: false)
+    }
+    sessionState = sessionState.appendAssistantMessage(text: result.message)
+    streamingAssistantText = ""
+    isGenerating = false
+    persistSession()
   }
 
   private func userVisiblePrompt(prompt: String, attachments: [ChatInputAttachment]) -> String {
@@ -709,20 +709,47 @@ private struct WidgetPreview: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Label(snapshot.title, systemImage: fullscreen ? "arrow.up.left.and.arrow.down.right" : "macwindow")
-        .font(.headline)
+      HStack {
+        Label(snapshot.title, systemImage: fullscreen ? "arrow.up.left.and.arrow.down.right" : "sparkles")
+          .font(.headline)
+        Spacer()
+        Text("MCP App")
+          .font(.caption2.weight(.bold))
+          .padding(.horizontal, 8)
+          .padding(.vertical, 4)
+          .background(Color.orange.opacity(0.18), in: Capsule())
+      }
       Text(snapshot.summary)
         .font(.subheadline)
         .foregroundStyle(.secondary)
-      Text(snapshot.widgetStateJson)
-        .font(.caption.monospaced())
-        .foregroundStyle(.secondary)
-        .lineLimit(2)
+      if let content = snapshot.fortuneContentMarkdown {
+        AssistantMarkdownText(text: content)
+          .font(.body)
+          .lineLimit(8)
+      } else {
+        Text(snapshot.widgetStateJson)
+          .font(.caption.monospaced())
+          .foregroundStyle(.secondary)
+          .lineLimit(3)
+      }
     }
     .padding()
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(Color.orange.opacity(0.13), in: RoundedRectangle(cornerRadius: 18))
     .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.orange.opacity(0.4)))
+  }
+}
+
+private extension McpWidgetSnapshot {
+  var fortuneContentMarkdown: String? {
+    guard connectorId == GalleryConnector.fortuneMcpId,
+          let data = widgetStateJson.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let content = object["contentMarkdown"] as? String,
+          !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return nil
+    }
+    return content
   }
 }
 
