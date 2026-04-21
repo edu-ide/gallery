@@ -19,8 +19,12 @@ package com.google.ai.edge.gallery.ui.unifiedchat
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetDisplayMode
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetHostState
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSnapshot
+import com.google.ai.edge.gallery.ui.unifiedchat.session.UnifiedChatPersistedMessageEnvelope
+import com.google.ai.edge.gallery.ui.unifiedchat.session.UnifiedChatPersistedMessageType
 import com.google.ai.edge.gallery.ui.unifiedchat.session.UnifiedChatPersistedSession
+import com.google.ai.edge.gallery.ui.unifiedchat.session.decodeUnifiedChatPersistedMessageEnvelope
 import com.google.ai.edge.gallery.ui.unifiedchat.session.decodeUnifiedChatPersistedSession
+import com.google.ai.edge.gallery.ui.unifiedchat.session.encodeUnifiedChatPersistedMessageEnvelope
 import com.google.ai.edge.gallery.ui.unifiedchat.session.encodeUnifiedChatPersistedSession
 import com.google.ai.edge.gallery.ui.unifiedchat.session.unifiedChatSessionFileName
 import kotlin.test.Test
@@ -177,6 +181,37 @@ class SharedUnifiedChatCoreTest {
 
     assertEquals(emptyList<McpWidgetSnapshot>(), decodeUnifiedChatPersistedSession(legacy)?.widgetSnapshots)
     assertEquals(null, decodeUnifiedChatPersistedSession(malformed))
+  }
+
+  @Test
+  fun persistedMessageEnvelope_roundTripsSupportedFields() {
+    val snapshot =
+      McpWidgetSnapshot(
+        connectorId = "github",
+        title = "GitHub",
+        summary = "Pull request",
+        widgetStateJson = "{}",
+      )
+    val envelope =
+      UnifiedChatPersistedMessageEnvelope(
+        type = UnifiedChatPersistedMessageType.MCP_WIDGET_CARD,
+        side = "AGENT",
+        connectorId = snapshot.connectorId,
+        title = snapshot.title,
+        summary = snapshot.summary,
+        snapshot = snapshot,
+        disableBubbleShape = true,
+      )
+
+    assertEquals(
+      envelope,
+      decodeUnifiedChatPersistedMessageEnvelope(encodeUnifiedChatPersistedMessageEnvelope(envelope)),
+    )
+  }
+
+  @Test
+  fun persistedMessageEnvelope_rejectsUnknownTypes() {
+    assertEquals(null, decodeUnifiedChatPersistedMessageEnvelope("""{"type":"UNKNOWN"}"""))
   }
 
 }

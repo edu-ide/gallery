@@ -21,40 +21,20 @@ import com.google.ai.edge.gallery.ui.common.chat.ChatMessageError
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageInfo
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageText
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageThinking
-import com.google.ai.edge.gallery.ui.common.chat.ChatMessageType
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageWarning
 import com.google.ai.edge.gallery.ui.common.chat.ChatSide
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSnapshot
 import com.google.ai.edge.gallery.ui.unifiedchat.messages.ChatMessageMcpWidgetCard
-import com.google.gson.Gson
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
-
-private data class PersistedChatMessageEnvelope(
-  val type: String,
-  val side: String? = null,
-  val content: String? = null,
-  val isMarkdown: Boolean? = null,
-  val latencyMs: Float? = null,
-  val accelerator: String? = null,
-  val hideSenderLabel: Boolean? = null,
-  val inProgress: Boolean? = null,
-  val connectorId: String? = null,
-  val title: String? = null,
-  val summary: String? = null,
-  val snapshot: McpWidgetSnapshot? = null,
-  val disableBubbleShape: Boolean? = null,
-)
-
-private val gson = Gson()
 
 fun encodePersistableChatMessage(message: ChatMessage): String? {
   val envelope =
     when (message) {
       is ChatMessageText ->
-        PersistedChatMessageEnvelope(
-          type = ChatMessageType.TEXT.name,
+        UnifiedChatPersistedMessageEnvelope(
+          type = UnifiedChatPersistedMessageType.TEXT,
           side = message.side.name,
           content = message.content,
           isMarkdown = message.isMarkdown,
@@ -63,23 +43,23 @@ fun encodePersistableChatMessage(message: ChatMessage): String? {
           hideSenderLabel = message.hideSenderLabel,
         )
       is ChatMessageInfo ->
-        PersistedChatMessageEnvelope(
-          type = ChatMessageType.INFO.name,
+        UnifiedChatPersistedMessageEnvelope(
+          type = UnifiedChatPersistedMessageType.INFO,
           content = message.content,
         )
       is ChatMessageWarning ->
-        PersistedChatMessageEnvelope(
-          type = ChatMessageType.WARNING.name,
+        UnifiedChatPersistedMessageEnvelope(
+          type = UnifiedChatPersistedMessageType.WARNING,
           content = message.content,
         )
       is ChatMessageError ->
-        PersistedChatMessageEnvelope(
-          type = ChatMessageType.ERROR.name,
+        UnifiedChatPersistedMessageEnvelope(
+          type = UnifiedChatPersistedMessageType.ERROR,
           content = message.content,
         )
       is ChatMessageThinking ->
-        PersistedChatMessageEnvelope(
-          type = ChatMessageType.THINKING.name,
+        UnifiedChatPersistedMessageEnvelope(
+          type = UnifiedChatPersistedMessageType.THINKING,
           side = message.side.name,
           content = message.content,
           accelerator = message.accelerator,
@@ -87,8 +67,8 @@ fun encodePersistableChatMessage(message: ChatMessage): String? {
           inProgress = message.inProgress,
         )
       is ChatMessageMcpWidgetCard ->
-        PersistedChatMessageEnvelope(
-          type = ChatMessageType.MCP_WIDGET_CARD.name,
+        UnifiedChatPersistedMessageEnvelope(
+          type = UnifiedChatPersistedMessageType.MCP_WIDGET_CARD,
           side = message.side.name,
           connectorId = message.connectorId,
           title = message.title,
@@ -99,14 +79,14 @@ fun encodePersistableChatMessage(message: ChatMessage): String? {
       else -> null
     }
 
-  return envelope?.let(gson::toJson)
+  return envelope?.let(::encodeUnifiedChatPersistedMessageEnvelope)
 }
 
 fun decodePersistedChatMessage(json: String): ChatMessage? {
   return runCatching {
-      val envelope = gson.fromJson(json, PersistedChatMessageEnvelope::class.java) ?: return null
-      when (ChatMessageType.valueOf(envelope.type)) {
-        ChatMessageType.TEXT ->
+      val envelope = decodeUnifiedChatPersistedMessageEnvelope(json) ?: return null
+      when (envelope.type) {
+        UnifiedChatPersistedMessageType.TEXT ->
           ChatMessageText(
             content = envelope.content.orEmpty(),
             side = envelope.side.toChatSide(),
@@ -115,10 +95,10 @@ fun decodePersistedChatMessage(json: String): ChatMessage? {
             accelerator = envelope.accelerator.orEmpty(),
             hideSenderLabel = envelope.hideSenderLabel ?: false,
           )
-        ChatMessageType.INFO -> ChatMessageInfo(content = envelope.content.orEmpty())
-        ChatMessageType.WARNING -> ChatMessageWarning(content = envelope.content.orEmpty())
-        ChatMessageType.ERROR -> ChatMessageError(content = envelope.content.orEmpty())
-        ChatMessageType.THINKING ->
+        UnifiedChatPersistedMessageType.INFO -> ChatMessageInfo(content = envelope.content.orEmpty())
+        UnifiedChatPersistedMessageType.WARNING -> ChatMessageWarning(content = envelope.content.orEmpty())
+        UnifiedChatPersistedMessageType.ERROR -> ChatMessageError(content = envelope.content.orEmpty())
+        UnifiedChatPersistedMessageType.THINKING ->
           ChatMessageThinking(
             content = envelope.content.orEmpty(),
             inProgress = false,
@@ -126,7 +106,7 @@ fun decodePersistedChatMessage(json: String): ChatMessage? {
             accelerator = envelope.accelerator.orEmpty(),
             hideSenderLabel = envelope.hideSenderLabel ?: false,
           )
-        ChatMessageType.MCP_WIDGET_CARD -> {
+        UnifiedChatPersistedMessageType.MCP_WIDGET_CARD -> {
           val snapshot =
             envelope.snapshot
               ?: McpWidgetSnapshot(
@@ -144,7 +124,6 @@ fun decodePersistedChatMessage(json: String): ChatMessage? {
             disableBubbleShape = envelope.disableBubbleShape ?: true,
           )
         }
-        else -> null
       }
     }
     .getOrNull()
