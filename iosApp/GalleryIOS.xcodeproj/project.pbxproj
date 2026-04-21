@@ -10,6 +10,7 @@
 		001D1C10C1E418CE2B5EACDE /* GalleryHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 024400A0E7FEC65CE325154E /* GalleryHomeView.swift */; };
 		0A2C28980BFBEAB26B6EE591 /* GallerySharedCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = FCEC6975CCF9D6917AE6D6F3 /* GallerySharedCore.xcframework */; };
 		115798245986EF1D6FA7942D /* GalleryIOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBEADB975A13B5134A4073A4 /* GalleryIOSApp.swift */; };
+		2F3816210012D410429D6994 /* GalleryModelManagerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10CB47627EC18A453ABADD59 /* GalleryModelManagerView.swift */; };
 		45224C16D02F9E28798ABBC2 /* GallerySessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66C2D5A7B58BFC9562C5E7F3 /* GallerySessionStore.swift */; };
 		4BD5499ABD9192F4CCC34975 /* GalleryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA7EFE460A55FDE59E8B835E /* GalleryModel.swift */; };
 		6D059D4E41524FD7930DC7CF /* GalleryChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4081138E2A43FFE74CCA921 /* GalleryChatView.swift */; };
@@ -19,6 +20,7 @@
 
 /* Begin PBXFileReference section */
 		024400A0E7FEC65CE325154E /* GalleryHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryHomeView.swift; sourceTree = "<group>"; };
+		10CB47627EC18A453ABADD59 /* GalleryModelManagerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryModelManagerView.swift; sourceTree = "<group>"; };
 		17BE82697D8BE3E8B0A08B88 /* GalleryInferenceRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryInferenceRuntime.swift; sourceTree = "<group>"; };
 		249D1AA722EC6D4A13162CDB /* GalleryIOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = GalleryIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		66C2D5A7B58BFC9562C5E7F3 /* GallerySessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GallerySessionStore.swift; sourceTree = "<group>"; };
@@ -51,6 +53,7 @@
 				17BE82697D8BE3E8B0A08B88 /* GalleryInferenceRuntime.swift */,
 				BBEADB975A13B5134A4073A4 /* GalleryIOSApp.swift */,
 				FA7EFE460A55FDE59E8B835E /* GalleryModel.swift */,
+				10CB47627EC18A453ABADD59 /* GalleryModelManagerView.swift */,
 				66C2D5A7B58BFC9562C5E7F3 /* GallerySessionStore.swift */,
 				923455198CC1BB0067F6E793 /* Info.plist */,
 			);
@@ -177,6 +180,7 @@
 				115798245986EF1D6FA7942D /* GalleryIOSApp.swift in Sources */,
 				765C685217082553D39789A8 /* GalleryInferenceRuntime.swift in Sources */,
 				4BD5499ABD9192F4CCC34975 /* GalleryModel.swift in Sources */,
+				2F3816210012D410429D6994 /* GalleryModelManagerView.swift in Sources */,
 				45224C16D02F9E28798ABBC2 /* GallerySessionStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

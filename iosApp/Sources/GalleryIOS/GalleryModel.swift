@@ -1,7 +1,14 @@
 import Foundation
 import GallerySharedCore
+import SwiftUI
 
 struct GalleryModel: Identifiable, Hashable {
+  enum DownloadState: String {
+    case notDownloaded = "Not downloaded"
+    case downloaded = "Downloaded"
+    case loaded = "Loaded"
+  }
+
   let id: String
   let name: String
   let shortName: String
@@ -10,6 +17,9 @@ struct GalleryModel: Identifiable, Hashable {
   let supportsImage: Bool
   let supportsAudio: Bool
   let recommendedPrompt: String
+  let parameterLabel: String
+  let estimatedSize: String
+  let downloadState: DownloadState
 
   var capabilities: UnifiedChatModelCapabilities {
     UnifiedChatModelCapabilities(
@@ -29,7 +39,10 @@ extension GalleryModel {
       taskId: "llm_chat",
       supportsImage: true,
       supportsAudio: true,
-      recommendedPrompt: "Draft a short launch checklist for the iOS KMP shell."
+      recommendedPrompt: "Draft a short launch checklist for the iOS KMP shell.",
+      parameterLabel: "E2B",
+      estimatedSize: "~3.1 GB",
+      downloadState: .loaded
     ),
     GalleryModel(
       id: "gemma-e4b",
@@ -39,7 +52,10 @@ extension GalleryModel {
       taskId: "llm_chat",
       supportsImage: true,
       supportsAudio: true,
-      recommendedPrompt: "Compare local mobile inference runtime options."
+      recommendedPrompt: "Compare local mobile inference runtime options.",
+      parameterLabel: "E4B",
+      estimatedSize: "~5.8 GB",
+      downloadState: .notDownloaded
     ),
     GalleryModel(
       id: "functiongemma",
@@ -49,9 +65,114 @@ extension GalleryModel {
       taskId: "agent_chat",
       supportsImage: false,
       supportsAudio: false,
-      recommendedPrompt: "Turn on a connector and call a demo tool."
+      recommendedPrompt: "Turn on a connector and call a demo tool.",
+      parameterLabel: "270M",
+      estimatedSize: "~350 MB",
+      downloadState: .downloaded
     ),
   ]
+}
+
+struct GalleryTask: Identifiable, Hashable {
+  let id: String
+  let title: String
+  let subtitle: String
+  let symbol: String
+  let tint: Color
+  let model: GalleryModel
+  let entryHint: UnifiedChatEntryHint
+}
+
+extension GalleryTask {
+  static func samples(selectedConnectorIds: Set<String>, models: [GalleryModel]) -> [GalleryTask] {
+    let connectors = Array(selectedConnectorIds)
+    return [
+      GalleryTask(
+        id: "chat",
+        title: "AI Chat",
+        subtitle: "Chat with Gemma using the shared KMP session state.",
+        symbol: "bubble.left.and.bubble.right.fill",
+        tint: .blue,
+        model: models[0],
+        entryHint: UnifiedChatEntryHint(
+          activateImage: false,
+          activateAudio: false,
+          activateSkills: false,
+          activateMcpConnectorIds: connectors
+        )
+      ),
+      GalleryTask(
+        id: "ask-image",
+        title: "Ask Image",
+        subtitle: "Multimodal prompt shell with image capability enabled.",
+        symbol: "photo.fill.on.rectangle.fill",
+        tint: .purple,
+        model: models[0],
+        entryHint: UnifiedChatEntryHint(
+          activateImage: true,
+          activateAudio: false,
+          activateSkills: false,
+          activateMcpConnectorIds: connectors
+        )
+      ),
+      GalleryTask(
+        id: "agent-skills",
+        title: "Agent Skills",
+        subtitle: "Tool calling flow with connector chips and MCP cards.",
+        symbol: "wand.and.stars.inverse",
+        tint: .orange,
+        model: models[2],
+        entryHint: UnifiedChatEntryHint(
+          activateImage: false,
+          activateAudio: false,
+          activateSkills: true,
+          activateMcpConnectorIds: connectors
+        )
+      ),
+      GalleryTask(
+        id: "audio-scribe",
+        title: "Audio Scribe",
+        subtitle: "Audio-capable chat shell and microphone chrome.",
+        symbol: "waveform.circle.fill",
+        tint: .green,
+        model: models[0],
+        entryHint: UnifiedChatEntryHint(
+          activateImage: false,
+          activateAudio: true,
+          activateSkills: false,
+          activateMcpConnectorIds: connectors
+        )
+      ),
+      GalleryTask(
+        id: "prompt-lab",
+        title: "Prompt Lab",
+        subtitle: "Single-turn prompt experiments; runtime adapter pending.",
+        symbol: "slider.horizontal.3",
+        tint: .teal,
+        model: models[1],
+        entryHint: UnifiedChatEntryHint(
+          activateImage: false,
+          activateAudio: false,
+          activateSkills: false,
+          activateMcpConnectorIds: connectors
+        )
+      ),
+      GalleryTask(
+        id: "mobile-actions",
+        title: "Mobile Actions",
+        subtitle: "FunctionGemma action shell for future device controls.",
+        symbol: "iphone.gen3.radiowaves.left.and.right",
+        tint: .pink,
+        model: models[2],
+        entryHint: UnifiedChatEntryHint(
+          activateImage: false,
+          activateAudio: false,
+          activateSkills: true,
+          activateMcpConnectorIds: connectors
+        )
+      ),
+    ]
+  }
 }
 
 struct GalleryConnector: Identifiable, Hashable {
