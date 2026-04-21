@@ -26,6 +26,8 @@ import com.google.ai.edge.gallery.ui.unifiedchat.session.decodeUnifiedChatPersis
 import com.google.ai.edge.gallery.ui.unifiedchat.session.decodeUnifiedChatPersistedSession
 import com.google.ai.edge.gallery.ui.unifiedchat.session.encodeUnifiedChatPersistedMessageEnvelope
 import com.google.ai.edge.gallery.ui.unifiedchat.session.encodeUnifiedChatPersistedSession
+import com.google.ai.edge.gallery.ui.unifiedchat.session.buildUnifiedChatSessionId
+import com.google.ai.edge.gallery.ui.unifiedchat.session.parseUnifiedChatSessionId
 import com.google.ai.edge.gallery.ui.unifiedchat.session.unifiedChatSessionFileName
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -212,6 +214,24 @@ class SharedUnifiedChatCoreTest {
   @Test
   fun persistedMessageEnvelope_rejectsUnknownTypes() {
     assertEquals(null, decodeUnifiedChatPersistedMessageEnvelope("""{"type":"UNKNOWN"}"""))
+  }
+
+  @Test
+  fun unifiedSessionId_roundTripsThroughSharedParser() {
+    val hint =
+      UnifiedChatEntryHint(
+        activateImage = true,
+        activateAudio = false,
+        activateSkills = true,
+        activateMcpConnectorIds = listOf("github", "gmail"),
+      )
+    val id = buildUnifiedChatSessionId("agent_chat", "Gemma-4-E2B-it", hint)
+    val parsed = requireNotNull(parseUnifiedChatSessionId(id))
+
+    assertEquals("agent_chat", parsed.taskId)
+    assertEquals("Gemma-4-E2B-it", parsed.modelName)
+    assertEquals(hint.copy(activateMcpConnectorIds = listOf("github", "gmail")), parsed.entryHint)
+    assertEquals(null, parseUnifiedChatSessionId("bad-session-id"))
   }
 
 }

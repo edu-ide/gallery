@@ -21,6 +21,12 @@ import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSnapshot
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
+data class UnifiedChatSessionKey(
+  val taskId: String,
+  val modelName: String,
+  val entryHint: UnifiedChatEntryHint,
+)
+
 /** Platform-neutral persisted transcript/session envelope. */
 data class UnifiedChatPersistedSession(
   val id: String,
@@ -66,6 +72,18 @@ fun buildUnifiedChatSessionId(
   modelName: String,
   entryHint: UnifiedChatEntryHint,
 ): String = "$taskId::$modelName::${entryHint.toPersistenceKey()}"
+
+fun parseUnifiedChatSessionId(id: String): UnifiedChatSessionKey? {
+  val parts = id.split("::", limit = 3)
+  if (parts.size != 3 || parts.any { it.isBlank() }) {
+    return null
+  }
+  return UnifiedChatSessionKey(
+    taskId = parts[0],
+    modelName = parts[1],
+    entryHint = parsePersistenceKey(parts[2]),
+  )
+}
 
 fun unifiedChatSessionFileName(id: String): String = "${percentEncode(id)}.json"
 
@@ -164,3 +182,29 @@ private fun UnifiedChatEntryHint.toPersistenceKey(): String =
     append(";mcp=")
     append(activateMcpConnectorIds.sorted().joinToString(","))
   }
+
+private fun parsePersistenceKey(value: String): UnifiedChatEntryHint {
+  val values =
+    value
+      .split(';')
+      .mapNotNull { part ->
+        val index = part.indexOf('=')
+        if (index <= 0) {
+          null
+        } else {
+          part.substring(0, index) to part.substring(index + 1)
+        }
+      }
+      .toMap()
+
+  return UnifiedChatEntryHint(
+    activateImage = values["image"]?.toBooleanStrictOrNull() ?: false,
+    activateAudio = values["audio"]?.toBooleanStrictOrNull() ?: false,
+    activateSkills = values["skills"]?.toBooleanStrictOrNull() ?: false,
+    activateMcpConnectorIds =
+      values["mcp"]
+        ?.split(',')
+        ?.filter { it.isNotBlank() }
+        .orEmpty(),
+  )
+}

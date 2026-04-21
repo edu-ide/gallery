@@ -3,8 +3,10 @@ import GallerySharedCore
 
 struct GalleryHomeView: View {
   @State private var selectedConnectorIds: Set<String> = ["github"]
+  @State private var recentSessions: [GallerySessionSummary] = []
   private let models = GalleryModel.samples
   private let connectors = GalleryConnector.samples
+  private let sessionStore = GallerySessionStore()
 
   var body: some View {
     NavigationStack {
@@ -12,6 +14,7 @@ struct GalleryHomeView: View {
         VStack(alignment: .leading, spacing: 22) {
           heroCard
           quickStartSection
+          recentSessionsSection
           modelSection
           connectorSection
           buildStatusSection
@@ -20,6 +23,7 @@ struct GalleryHomeView: View {
       }
       .navigationTitle("Gallery")
       .background(Color(.systemGroupedBackground))
+      .onAppear { refreshRecentSessions() }
     }
   }
 
@@ -83,6 +87,41 @@ struct GalleryHomeView: View {
             )
           )
         )
+      }
+    }
+  }
+
+
+  private var recentSessionsSection: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack {
+        SectionTitle("Recent sessions")
+        Spacer()
+        if !recentSessions.isEmpty {
+          Button("Refresh") { refreshRecentSessions() }
+            .font(.caption.weight(.semibold))
+        }
+      }
+
+      if recentSessions.isEmpty {
+        Text("Start a chat and send a message to save a session here.")
+          .font(.footnote)
+          .foregroundStyle(.secondary)
+          .padding(14)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+      } else {
+        ForEach(recentSessions) { session in
+          NavigationLink {
+            chatDestination(model: modelForSession(session), hint: hintForSession(session))
+          } label: {
+            RecentSessionRow(session: session) {
+              sessionStore.delete(id: session.id)
+              refreshRecentSessions()
+            }
+          }
+          .buttonStyle(.plain)
+        }
       }
     }
   }
@@ -168,6 +207,23 @@ struct GalleryHomeView: View {
     GalleryChatView(model: model, connectors: connectors, entryHint: hint)
   }
 
+  private func refreshRecentSessions() {
+    recentSessions = sessionStore.listSessions()
+  }
+
+  private func modelForSession(_ session: GallerySessionSummary) -> GalleryModel {
+    models.first { $0.name == session.modelName } ?? models[0]
+  }
+
+  private func hintForSession(_ session: GallerySessionSummary) -> UnifiedChatEntryHint {
+    UnifiedChatEntryHint(
+      activateImage: session.entryHint.activateImage,
+      activateAudio: session.entryHint.activateAudio,
+      activateSkills: session.entryHint.activateSkills,
+      activateMcpConnectorIds: session.activeConnectorIds
+    )
+  }
+
   private func toggle(_ connectorId: String) {
     if selectedConnectorIds.contains(connectorId) {
       selectedConnectorIds.remove(connectorId)
@@ -221,6 +277,47 @@ private struct QuickActionCard<Destination: View>: View {
       .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
     }
     .buttonStyle(.plain)
+  }
+}
+
+
+private struct RecentSessionRow: View {
+  let session: GallerySessionSummary
+  let onDelete: () -> Void
+
+  var body: some View {
+    HStack(spacing: 12) {
+      VStack(alignment: .leading, spacing: 5) {
+        Text(session.title)
+          .font(.headline)
+          .lineLimit(1)
+        Text("\(session.modelName) • \(session.messageCount) messages")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        if !session.activeConnectorIds.isEmpty {
+          Text("Connectors: \(session.activeConnectorIds.joined(separator: ", "))")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
+      }
+      Spacer()
+      Button(role: .destructive) {
+        onDelete()
+      } label: {
+        Image(systemName: "trash")
+          .font(.subheadline.weight(.semibold))
+          .foregroundStyle(.red)
+          .frame(width: 34, height: 34)
+          .background(Color.red.opacity(0.1), in: Circle())
+      }
+      .buttonStyle(.plain)
+      Image(systemName: "chevron.right")
+        .font(.footnote.weight(.bold))
+        .foregroundStyle(.tertiary)
+    }
+    .padding(16)
+    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18))
   }
 }
 

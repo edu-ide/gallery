@@ -1,6 +1,17 @@
 import Foundation
 import GallerySharedCore
 
+struct GallerySessionSummary: Identifiable {
+  let id: String
+  let title: String
+  let modelName: String
+  let taskId: String
+  let updatedAt: Date
+  let messageCount: Int
+  let activeConnectorIds: [String]
+  let entryHint: UnifiedChatEntryHint
+}
+
 struct GallerySessionStore {
   private let directory: URL
 
@@ -14,11 +25,36 @@ struct GallerySessionStore {
 
   func load(id: String) -> UnifiedChatPersistedSession? {
     let url = fileURL(id: id)
-    guard let data = try? Data(contentsOf: url),
-          let json = String(data: data, encoding: .utf8) else {
-      return nil
-    }
-    return UnifiedChatPersistedSessionKt.decodeUnifiedChatPersistedSession(jsonValue: json)
+    return load(url: url)
+  }
+
+  func listSessions() -> [GallerySessionSummary] {
+    let urls = (try? FileManager.default.contentsOfDirectory(
+      at: directory,
+      includingPropertiesForKeys: [.contentModificationDateKey],
+      options: [.skipsHiddenFiles]
+    )) ?? []
+
+    return urls
+      .filter { $0.pathExtension == "json" }
+      .compactMap { url -> GallerySessionSummary? in
+        guard let session = load(url: url),
+              let key = UnifiedChatPersistedSessionKt.parseUnifiedChatSessionId(id: session.id) else {
+          return nil
+        }
+        let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+        return GallerySessionSummary(
+          id: session.id,
+          title: session.title,
+          modelName: key.modelName,
+          taskId: key.taskId,
+          updatedAt: modified,
+          messageCount: session.messagesJson.count,
+          activeConnectorIds: session.activeConnectorIds,
+          entryHint: key.entryHint
+        )
+      }
+      .sorted { $0.updatedAt > $1.updatedAt }
   }
 
   func save(_ session: UnifiedChatPersistedSession) {
@@ -39,6 +75,14 @@ struct GallerySessionStore {
 
   func delete(id: String) {
     try? FileManager.default.removeItem(at: fileURL(id: id))
+  }
+
+  private func load(url: URL) -> UnifiedChatPersistedSession? {
+    guard let data = try? Data(contentsOf: url),
+          let json = String(data: data, encoding: .utf8) else {
+      return nil
+    }
+    return UnifiedChatPersistedSessionKt.decodeUnifiedChatPersistedSession(jsonValue: json)
   }
 
   private func fileURL(id: String) -> URL {
