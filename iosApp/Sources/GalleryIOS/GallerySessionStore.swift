@@ -55,6 +55,13 @@ struct GallerySessionStore {
           return nil
         }
         let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+        let entryHint = UnifiedChatEntryHint(
+          activateImage: key.entryHint.activateImage,
+          activateAudio: key.entryHint.activateAudio,
+          activateSkills: !session.activeAgentSkillIds.isEmpty,
+          activateAgentSkillIds: session.activeAgentSkillIds,
+          activateMcpConnectorIds: session.activeConnectorIds
+        )
         return GallerySessionSummary(
           id: session.id,
           title: session.title,
@@ -63,7 +70,7 @@ struct GallerySessionStore {
           updatedAt: modified,
           messageCount: session.messagesJson.count,
           activeConnectorIds: session.activeConnectorIds,
-          entryHint: key.entryHint
+          entryHint: entryHint
         )
       }
       .sorted { $0.updatedAt > $1.updatedAt }
@@ -136,13 +143,14 @@ extension UnifiedChatSessionState {
     }
     let snapshots = widgetHostState.activeSnapshot.map { [$0] } ?? []
 
-    if encodedMessages.isEmpty && connectorBarState.activeConnectorIds.isEmpty && snapshots.isEmpty {
+    if encodedMessages.isEmpty && agentSkillState.activeSkillIds.isEmpty && connectorBarState.activeConnectorIds.isEmpty && snapshots.isEmpty {
       return nil
     }
 
     return UnifiedChatPersistedSession(
       id: id,
       title: title ?? derivedTitle,
+      activeAgentSkillIds: Array(agentSkillState.activeSkillIds).sorted(),
       activeConnectorIds: Array(connectorBarState.activeConnectorIds).sorted(),
       messagesJson: encodedMessages,
       widgetSnapshots: snapshots
@@ -168,6 +176,10 @@ extension UnifiedChatSessionState {
       taskId: taskId,
       modelCapabilities: modelCapabilities,
       entryHint: entryHint,
+      agentSkillState: AgentSkillState(
+        visibleSkillIds: agentSkillState.visibleSkillIds,
+        activeSkillIds: Set(persisted.activeAgentSkillIds)
+      ),
       connectorBarState: ConnectorBarState(
         visibleConnectorIds: connectorBarState.visibleConnectorIds,
         activeConnectorIds: Set(persisted.activeConnectorIds)

@@ -6,12 +6,10 @@ struct GalleryHomeView: View {
   @State private var selectedConnectorIds: Set<String> = Set(GalleryConnector.defaultSelectedIds)
   @State private var recentSessions: [GallerySessionSummary] = []
   @State private var selectedModelId: String = GalleryModel.samples[0].id
-  @State private var imageEnabled = false
-  @State private var audioEnabled = false
-  @State private var toolsEnabled = true
   @State private var newChatSessionId: String?
 
   private let models = GalleryModel.samples
+  private let agentSkills = GalleryAgentSkill.samples
   private let connectors = GalleryConnector.samples
   private let sessionStore = GallerySessionStore()
 
@@ -21,9 +19,10 @@ struct GalleryHomeView: View {
 
   private var currentEntryHint: UnifiedChatEntryHint {
     UnifiedChatEntryHint(
-      activateImage: false,
-      activateAudio: false,
+      activateImage: selectedModel.supportsImage,
+      activateAudio: selectedModel.supportsAudio,
       activateSkills: true,
+      activateAgentSkillIds: GalleryAgentSkill.defaultSelectedIds,
       activateMcpConnectorIds: Array(selectedConnectorIds)
     )
   }
@@ -172,9 +171,8 @@ struct GalleryHomeView: View {
 
   private var controlsSection: some View {
     VStack(alignment: .leading, spacing: 16) {
-      SectionTitle("AI Chat capabilities")
+      SectionTitle("Chat settings")
       modelPicker
-      capabilityToggles
       connectorPicker
     }
     .padding(16)
@@ -190,8 +188,6 @@ struct GalleryHomeView: View {
           ForEach(models) { model in
             Button {
               selectedModelId = model.id
-              if !model.supportsImage { imageEnabled = false }
-              if !model.supportsAudio { audioEnabled = false }
             } label: {
               VStack(alignment: .leading, spacing: 4) {
                 Text(model.shortName).font(.caption.weight(.bold))
@@ -206,18 +202,6 @@ struct GalleryHomeView: View {
           }
         }
       }
-    }
-  }
-
-  private var capabilityToggles: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      Text("Capabilities")
-        .font(.subheadline.weight(.semibold))
-      Toggle("Image input", isOn: Binding(get: { imageEnabled && selectedModel.supportsImage }, set: { imageEnabled = $0 && selectedModel.supportsImage }))
-        .disabled(!selectedModel.supportsImage)
-      Toggle("Audio input", isOn: Binding(get: { audioEnabled && selectedModel.supportsAudio }, set: { audioEnabled = $0 && selectedModel.supportsAudio }))
-        .disabled(!selectedModel.supportsAudio)
-      Toggle("Tools / connectors", isOn: $toolsEnabled)
     }
   }
 
@@ -252,6 +236,7 @@ struct GalleryHomeView: View {
         NavigationLink("Manage") {
           GalleryModelManagerView(
             models: models,
+            agentSkills: agentSkills,
             connectors: connectors,
             selectedConnectorIds: selectedConnectorIds
           )
@@ -289,6 +274,7 @@ struct GalleryHomeView: View {
   ) -> some View {
     GalleryChatView(
       model: model,
+      agentSkills: agentSkills,
       connectors: connectors,
       entryHint: hint,
       sessionIdOverride: sessionId,
@@ -309,6 +295,7 @@ struct GalleryHomeView: View {
       activateImage: session.entryHint.activateImage,
       activateAudio: session.entryHint.activateAudio,
       activateSkills: session.entryHint.activateSkills,
+      activateAgentSkillIds: session.entryHint.activateAgentSkillIds,
       activateMcpConnectorIds: session.activeConnectorIds
     )
   }

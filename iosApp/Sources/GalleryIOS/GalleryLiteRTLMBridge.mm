@@ -67,6 +67,8 @@ static NSString *GalleryExtractText(NSString *json) {
 static LiteRtLmEngine *GallerySharedEngine = NULL;
 static LiteRtLmConversation *GallerySharedConversation = NULL;
 static NSString *GallerySharedModelPath = nil;
+static BOOL GallerySharedVisionBackend = NO;
+static BOOL GallerySharedAudioBackend = NO;
 
 static void GalleryResetSharedRuntime(void) {
   if (GallerySharedConversation) {
@@ -78,9 +80,16 @@ static void GalleryResetSharedRuntime(void) {
     GallerySharedEngine = NULL;
   }
   GallerySharedModelPath = nil;
+  GallerySharedVisionBackend = NO;
+  GallerySharedAudioBackend = NO;
 }
 
-static BOOL GalleryEnsureConversation(NSString *modelPath, NSString *cacheDir, NSError **error) {
+static BOOL GalleryEnsureConversation(
+    NSString *modelPath,
+    BOOL enableVision,
+    BOOL enableAudio,
+    NSString *cacheDir,
+    NSError **error) {
   if (![[NSFileManager defaultManager] fileExistsAtPath:modelPath]) {
     if (error) *error = GalleryLiteRTLMError([NSString stringWithFormat:@"Model file not found: %@", modelPath]);
     return NO;
@@ -88,14 +97,20 @@ static BOOL GalleryEnsureConversation(NSString *modelPath, NSString *cacheDir, N
 
   litert_lm_set_min_log_level(2);
 
-  if (GallerySharedEngine && GallerySharedConversation && [GallerySharedModelPath isEqualToString:modelPath]) {
+  if (GallerySharedEngine &&
+      GallerySharedConversation &&
+      [GallerySharedModelPath isEqualToString:modelPath] &&
+      GallerySharedVisionBackend == enableVision &&
+      GallerySharedAudioBackend == enableAudio) {
     return YES;
   }
 
   GalleryResetSharedRuntime();
 
+  const char *visionBackend = enableVision ? "cpu" : NULL;
+  const char *audioBackend = enableAudio ? "cpu" : NULL;
   LiteRtLmEngineSettings *settings = litert_lm_engine_settings_create(
-      [modelPath UTF8String], "cpu", NULL, NULL);
+      [modelPath UTF8String], "cpu", visionBackend, audioBackend);
   if (!settings) {
     if (error) *error = GalleryLiteRTLMError(@"litert_lm_engine_settings_create returned NULL");
     return NO;
@@ -132,11 +147,53 @@ static BOOL GalleryEnsureConversation(NSString *modelPath, NSString *cacheDir, N
   GallerySharedEngine = engine;
   GallerySharedConversation = conversation;
   GallerySharedModelPath = [modelPath copy];
+  GallerySharedVisionBackend = enableVision;
+  GallerySharedAudioBackend = enableAudio;
   return YES;
 }
 
-static NSString *GalleryBuildUserMessageJson(NSString *prompt) {
-  NSDictionary *message = @{ @"role": @"user", @"content": prompt ?: @"" };
+static NSArray *GalleryAttachmentPartsFromJson(NSString *attachmentsJson) {
+  if (attachmentsJson.length == 0) return @[];
+  NSData *data = [attachmentsJson dataUsingEncoding:NSUTF8StringEncoding];
+  if (!data) return @[];
+
+  id parsed = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+  if (![parsed isKindOfClass:[NSArray class]]) return @[];
+
+  NSMutableArray *parts = [NSMutableArray array];
+  for (id item in (NSArray *)parsed) {
+    if (![item isKindOfClass:[NSDictionary class]]) continue;
+    NSDictionary *attachment = (NSDictionary *)item;
+    id kind = attachment[@"kind"];
+    id path = attachment[@"path"];
+    if (![kind isKindOfClass:[NSString class]] || ![path isKindOfClass:[NSString class]]) continue;
+    if (![(NSString *)kind isEqualToString:@"image"] && ![(NSString *)kind isEqualToString:@"audio"]) continue;
+    if (![[NSFileManager defaultManager] fileExistsAtPath:(NSString *)path]) continue;
+    [parts addObject:@{ @"type": kind, @"path": path }];
+  }
+  return parts;
+}
+
+static NSString *GalleryBuildUserMessageJson(NSString *prompt, NSString *attachmentsJson) {
+  NSMutableArray *parts = [NSMutableArray array];
+  if (prompt.length > 0) {
+    [parts addObject:@{ @"type": @"text", @"text": prompt }];
+  }
+  [parts addObjectsFromArray:GalleryAttachmentPartsFromJson(attachmentsJson)];
+
+  id content = prompt ?: @"";
+  if (parts.count > 1) {
+    content = parts;
+  } else if (parts.count == 1) {
+    NSDictionary *onlyPart = (NSDictionary *)parts.firstObject;
+    if ([[onlyPart objectForKey:@"type"] isEqualToString:@"text"]) {
+      content = [onlyPart objectForKey:@"text"] ?: @"";
+    } else {
+      content = parts;
+    }
+  }
+
+  NSDictionary *message = @{ @"role": @"user", @"content": content };
   NSData *messageData = [NSJSONSerialization dataWithJSONObject:message options:0 error:nil];
   return [[NSString alloc] initWithData:messageData encoding:NSUTF8StringEncoding] ?: @"{\"role\":\"user\",\"content\":\"\"}";
 }
@@ -183,6 +240,9 @@ static void GalleryStreamCallback(void *callbackData, const char *chunk, bool is
 
 - (NSString *)generateWithModelPath:(NSString *)modelPath
                              prompt:(NSString *)prompt
+                    attachmentsJson:(NSString *)attachmentsJson
+                       enableVision:(BOOL)enableVision
+                         enableAudio:(BOOL)enableAudio
                            cacheDir:(NSString *)cacheDir
                               error:(NSError **)error {
 #if !GALLERY_HAS_LITERTLM
@@ -192,8 +252,8 @@ static void GalleryStreamCallback(void *callbackData, const char *chunk, bool is
   return nil;
 #else
   @synchronized([GalleryLiteRTLMBridge class]) {
-    if (!GalleryEnsureConversation(modelPath, cacheDir, error)) return nil;
-    NSString *messageJson = GalleryBuildUserMessageJson(prompt);
+    if (!GalleryEnsureConversation(modelPath, enableVision, enableAudio, cacheDir, error)) return nil;
+    NSString *messageJson = GalleryBuildUserMessageJson(prompt, attachmentsJson);
 
     LiteRtLmJsonResponse *response = litert_lm_conversation_send_message(GallerySharedConversation, [messageJson UTF8String], NULL);
     if (!response) {
@@ -212,6 +272,9 @@ static void GalleryStreamCallback(void *callbackData, const char *chunk, bool is
 
 - (void)streamGenerateWithModelPath:(NSString *)modelPath
                               prompt:(NSString *)prompt
+                     attachmentsJson:(NSString *)attachmentsJson
+                        enableVision:(BOOL)enableVision
+                          enableAudio:(BOOL)enableAudio
                             cacheDir:(NSString *)cacheDir
                              onChunk:(void (^)(NSString *chunk))onChunk
                           onComplete:(void (^)(NSError * _Nullable error))onComplete {
@@ -222,12 +285,12 @@ static void GalleryStreamCallback(void *callbackData, const char *chunk, bool is
 #else
   @synchronized([GalleryLiteRTLMBridge class]) {
     NSError *prepareError = nil;
-    if (!GalleryEnsureConversation(modelPath, cacheDir, &prepareError)) {
+    if (!GalleryEnsureConversation(modelPath, enableVision, enableAudio, cacheDir, &prepareError)) {
       if (onComplete) onComplete(prepareError);
       return;
     }
 
-    NSString *messageJson = GalleryBuildUserMessageJson(prompt);
+    NSString *messageJson = GalleryBuildUserMessageJson(prompt, attachmentsJson);
     GalleryStreamContext *context = new GalleryStreamContext();
     context->onChunk = [onChunk copy];
     context->onComplete = [onComplete copy];

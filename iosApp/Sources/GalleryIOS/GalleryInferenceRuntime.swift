@@ -2,15 +2,28 @@ import Foundation
 import GallerySharedCore
 import Darwin
 
+enum GalleryInferenceAttachmentKind: String, Codable {
+  case image
+  case audio
+}
+
+struct GalleryInferenceAttachment: Codable, Hashable {
+  let kind: GalleryInferenceAttachmentKind
+  let path: String
+  let displayName: String
+}
+
 struct GalleryInferenceRequest {
   let modelName: String
   let modelDisplayName: String
   let modelFileName: String
   let prompt: String
   let route: String
+  let activeAgentSkillIds: [String]
   let activeConnectorIds: [String]
   let supportsImage: Bool
   let supportsAudio: Bool
+  let attachments: [GalleryInferenceAttachment]
 }
 
 struct GalleryInferenceResult {
@@ -52,6 +65,7 @@ struct StubGalleryInferenceRuntime: GalleryInferenceRuntime {
 
   func generate(request: GalleryInferenceRequest) async -> GalleryInferenceResult {
     try? await Task.sleep(nanoseconds: 120_000_000)
+    let skills = request.activeAgentSkillIds.isEmpty ? "none" : request.activeAgentSkillIds.joined(separator: ", ")
     let connectors = request.activeConnectorIds.isEmpty ? "none" : request.activeConnectorIds.joined(separator: ", ")
     let modalities = [
       request.supportsImage ? "image" : nil,
@@ -59,7 +73,7 @@ struct StubGalleryInferenceRuntime: GalleryInferenceRuntime {
     ].compactMap { $0 }.joined(separator: ", ")
 
     return GalleryInferenceResult(
-      text: "Stub runtime response from \(request.modelDisplayName). Active connectors: \(connectors). Modalities: \(modalities.isEmpty ? "text" : modalities).",
+      text: "Stub runtime response from \(request.modelDisplayName). Active skills: \(skills). Active connectors: \(connectors). Modalities: \(modalities.isEmpty ? "text" : modalities).",
       runtimeName: id
     )
   }
@@ -118,6 +132,9 @@ struct LiteRTLMGalleryInferenceRuntime: GalleryInferenceRuntime {
         let text = try GalleryLiteRTLMBridge().generate(
           withModelPath: modelPath,
           prompt: request.prompt,
+          attachmentsJson: request.attachmentsJson,
+          enableVision: request.supportsImage,
+          enableAudio: request.supportsAudio,
           cacheDir: LiteRTLMDynamicCAPI.cacheDirectoryPath()
         )
         if !text.isEmpty {
@@ -159,6 +176,9 @@ struct LiteRTLMGalleryInferenceRuntime: GalleryInferenceRuntime {
       GalleryLiteRTLMBridge().streamGenerate(
         withModelPath: modelPath,
         prompt: request.prompt,
+        attachmentsJson: request.attachmentsJson,
+        enableVision: request.supportsImage,
+        enableAudio: request.supportsAudio,
         cacheDir: LiteRTLMDynamicCAPI.cacheDirectoryPath(),
         onChunk: { chunk in
           lock.lock()
@@ -178,6 +198,17 @@ struct LiteRTLMGalleryInferenceRuntime: GalleryInferenceRuntime {
         }
       )
     }
+  }
+}
+
+private extension GalleryInferenceRequest {
+  var attachmentsJson: String {
+    guard !attachments.isEmpty,
+          let data = try? JSONEncoder().encode(attachments),
+          let json = String(data: data, encoding: .utf8) else {
+      return "[]"
+    }
+    return json
   }
 }
 

@@ -31,6 +31,7 @@ data class UnifiedChatSessionKey(
 data class UnifiedChatPersistedSession(
   val id: String,
   val title: String,
+  val activeAgentSkillIds: List<String>,
   val activeConnectorIds: List<String>,
   val messagesJson: List<String>,
   val widgetSnapshots: List<McpWidgetSnapshot>,
@@ -40,6 +41,7 @@ data class UnifiedChatPersistedSession(
 private data class PersistedSessionSchema(
   val id: String? = null,
   val title: String? = null,
+  val activeAgentSkillIds: List<String?>? = null,
   val activeConnectorIds: List<String?>? = null,
   val messagesJson: List<String?>? = null,
   val widgetSnapshots: List<PersistedWidgetSnapshotSchema?>? = null,
@@ -91,6 +93,7 @@ private fun UnifiedChatPersistedSession.toSchema(): PersistedSessionSchema =
   PersistedSessionSchema(
     id = id,
     title = title,
+    activeAgentSkillIds = activeAgentSkillIds,
     activeConnectorIds = activeConnectorIds,
     messagesJson = messagesJson,
     widgetSnapshots = widgetSnapshots.map { it.toSchema() },
@@ -111,17 +114,23 @@ private fun PersistedSessionSchema?.toValidatedSession(): UnifiedChatPersistedSe
 
   val sessionId = id ?: return null
   val sessionTitle = title ?: return null
+  val agentSkillIds = activeAgentSkillIds?.filterNotNull().orEmpty()
   val connectorIds = activeConnectorIds?.filterNotNull() ?: return null
   val messages = messagesJson?.filterNotNull() ?: return null
   val snapshots = widgetSnapshots.orEmpty().mapNotNull(PersistedWidgetSnapshotSchema?::toValidatedSnapshot)
 
-  if (connectorIds.size != activeConnectorIds.size || messages.size != messagesJson.size) {
+  if (
+    agentSkillIds.size != activeAgentSkillIds.orEmpty().size ||
+      connectorIds.size != activeConnectorIds.size ||
+      messages.size != messagesJson.size
+  ) {
     return null
   }
 
   return UnifiedChatPersistedSession(
     id = sessionId,
     title = sessionTitle,
+    activeAgentSkillIds = agentSkillIds,
     activeConnectorIds = connectorIds,
     messagesJson = messages,
     widgetSnapshots = snapshots,
@@ -179,6 +188,8 @@ private fun UnifiedChatEntryHint.toPersistenceKey(): String =
     append(activateAudio)
     append(";skills=")
     append(activateSkills)
+    append(";agentSkills=")
+    append(activateAgentSkillIds.sorted().joinToString(","))
     append(";mcp=")
     append(activateMcpConnectorIds.sorted().joinToString(","))
   }
@@ -201,6 +212,11 @@ private fun parsePersistenceKey(value: String): UnifiedChatEntryHint {
     activateImage = values["image"]?.toBooleanStrictOrNull() ?: false,
     activateAudio = values["audio"]?.toBooleanStrictOrNull() ?: false,
     activateSkills = values["skills"]?.toBooleanStrictOrNull() ?: false,
+    activateAgentSkillIds =
+      values["agentSkills"]
+        ?.split(',')
+        ?.filter { it.isNotBlank() }
+        .orEmpty(),
     activateMcpConnectorIds =
       values["mcp"]
         ?.split(',')

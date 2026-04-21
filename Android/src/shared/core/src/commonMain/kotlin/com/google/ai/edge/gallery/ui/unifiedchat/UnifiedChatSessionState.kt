@@ -45,6 +45,7 @@ data class UnifiedChatSessionState(
   val taskId: String,
   val modelCapabilities: UnifiedChatModelCapabilities,
   val entryHint: UnifiedChatEntryHint,
+  val agentSkillState: AgentSkillState,
   val connectorBarState: ConnectorBarState,
   val messages: List<UnifiedChatMessage>,
   val draft: String,
@@ -52,6 +53,12 @@ data class UnifiedChatSessionState(
   val nextMessageIndex: Int,
 ) {
   fun updateDraft(draft: String): UnifiedChatSessionState = copy(draft = draft)
+
+  fun withAgentSkill(skillId: String, active: Boolean): UnifiedChatSessionState =
+    copy(agentSkillState = agentSkillState.withSkill(skillId = skillId, active = active))
+
+  fun toggleAgentSkill(skillId: String): UnifiedChatSessionState =
+    copy(agentSkillState = agentSkillState.toggle(skillId))
 
   fun toggleConnector(connectorId: String): UnifiedChatSessionState =
     copy(connectorBarState = connectorBarState.toggle(connectorId))
@@ -97,7 +104,11 @@ data class UnifiedChatSessionState(
   fun closeWidget(): UnifiedChatSessionState = copy(widgetHostState = widgetHostState.close())
 
   fun currentEntryHint(): UnifiedChatEntryHint =
-    entryHint.copy(activateMcpConnectorIds = connectorBarState.activeConnectorIds.sorted())
+    entryHint.copy(
+      activateSkills = agentSkillState.activeSkillIds.isNotEmpty(),
+      activateAgentSkillIds = agentSkillState.activeSkillIds.sorted(),
+      activateMcpConnectorIds = connectorBarState.activeConnectorIds.sorted(),
+    )
 
   fun route(): String = buildUnifiedChatRoute(taskId = taskId, modelName = modelName, entryHint = currentEntryHint())
 
@@ -142,9 +153,18 @@ fun createUnifiedChatSessionState(
   taskId: String,
   modelCapabilities: UnifiedChatModelCapabilities,
   entryHint: UnifiedChatEntryHint,
+  visibleAgentSkillIds: List<String> = emptyList(),
   visibleConnectorIds: List<String>,
   initialDraft: String = "",
 ): UnifiedChatSessionState {
+  val activeAgentSkillIds =
+    if (entryHint.activateAgentSkillIds.isNotEmpty()) {
+      entryHint.activateAgentSkillIds.filter { visibleAgentSkillIds.contains(it) }
+    } else if (entryHint.activateSkills) {
+      visibleAgentSkillIds
+    } else {
+      emptyList()
+    }
   val activeConnectorIds = entryHint.activateMcpConnectorIds.filter { visibleConnectorIds.contains(it) }
   return UnifiedChatSessionState(
     modelName = modelName,
@@ -152,6 +172,11 @@ fun createUnifiedChatSessionState(
     taskId = taskId,
     modelCapabilities = modelCapabilities,
     entryHint = entryHint,
+    agentSkillState =
+      AgentSkillState(
+        visibleSkillIds = visibleAgentSkillIds,
+        activeSkillIds = activeAgentSkillIds.toSet(),
+      ),
     connectorBarState =
       ConnectorBarState(
         visibleConnectorIds = visibleConnectorIds,

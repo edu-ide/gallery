@@ -16,6 +16,7 @@
 		3A6EB5BB76C88BCDC5BFD794 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 46106A88B0A812BAD50B27B0 /* GoogleSignIn */; };
 		45224C16D02F9E28798ABBC2 /* GallerySessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66C2D5A7B58BFC9562C5E7F3 /* GallerySessionStore.swift */; };
 		4BD5499ABD9192F4CCC34975 /* GalleryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA7EFE460A55FDE59E8B835E /* GalleryModel.swift */; };
+		54B90D101F30F7D5AA3CBC09 /* GalleryInputAttachments.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AC0CC2EE8E86DE26928A0F0 /* GalleryInputAttachments.swift */; };
 		6D059D4E41524FD7930DC7CF /* GalleryChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4081138E2A43FFE74CCA921 /* GalleryChatView.swift */; };
 		765C685217082553D39789A8 /* GalleryInferenceRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17BE82697D8BE3E8B0A08B88 /* GalleryInferenceRuntime.swift */; };
 		770A6E7022D2CB477751FE06 /* UgotLoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DEBEE234E0845891292A22A /* UgotLoginView.swift */; };
@@ -48,6 +49,7 @@
 		249D1AA722EC6D4A13162CDB /* GalleryIOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = GalleryIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		3227EDD9245CA33E78467C53 /* GalleryLiteRTLMBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = GalleryLiteRTLMBridge.mm; sourceTree = "<group>"; };
 		5459EBE807B9509DD8E7F3AD /* GemmaModelConstraintProvider.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = GemmaModelConstraintProvider.xcframework; path = Vendor/LiteRTLM/GemmaModelConstraintProvider.xcframework; sourceTree = "<group>"; };
+		5AC0CC2EE8E86DE26928A0F0 /* GalleryInputAttachments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryInputAttachments.swift; sourceTree = "<group>"; };
 		5DEBEE234E0845891292A22A /* UgotLoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UgotLoginView.swift; sourceTree = "<group>"; };
 		66C2D5A7B58BFC9562C5E7F3 /* GallerySessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GallerySessionStore.swift; sourceTree = "<group>"; };
 		6AE27BD8E6AAC0726356E35B /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -82,6 +84,7 @@
 				C4081138E2A43FFE74CCA921 /* GalleryChatView.swift */,
 				024400A0E7FEC65CE325154E /* GalleryHomeView.swift */,
 				17BE82697D8BE3E8B0A08B88 /* GalleryInferenceRuntime.swift */,
+				5AC0CC2EE8E86DE26928A0F0 /* GalleryInputAttachments.swift */,
 				E52CD9190ACFA31DD6CB7680 /* GalleryIOS-Bridging-Header.h */,
 				BBEADB975A13B5134A4073A4 /* GalleryIOSApp.swift */,
 				BB6870C9CB1F1321CE90939A /* GalleryLiteRTLMBridge.h */,
@@ -242,6 +245,7 @@
 				001D1C10C1E418CE2B5EACDE /* GalleryHomeView.swift in Sources */,
 				115798245986EF1D6FA7942D /* GalleryIOSApp.swift in Sources */,
 				765C685217082553D39789A8 /* GalleryInferenceRuntime.swift in Sources */,
+				54B90D101F30F7D5AA3CBC09 /* GalleryInputAttachments.swift in Sources */,
 				85E89DFA9C1AB5E675D87E2D /* GalleryLiteRTLMBridge.mm in Sources */,
 				4BD5499ABD9192F4CCC34975 /* GalleryModel.swift in Sources */,
 				2F3816210012D410429D6994 /* GalleryModelManagerView.swift in Sources */,

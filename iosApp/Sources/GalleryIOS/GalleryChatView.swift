@@ -1,8 +1,11 @@
 import SwiftUI
 import GallerySharedCore
+import PhotosUI
+import UniformTypeIdentifiers
 
 struct GalleryChatView: View {
   let model: GalleryModel
+  let agentSkills: [GalleryAgentSkill]
   let connectors: [GalleryConnector]
   let entryHint: UnifiedChatEntryHint
 
@@ -12,18 +15,25 @@ struct GalleryChatView: View {
   @State private var sessionState: UnifiedChatSessionState
   @State private var isGenerating = false
   @State private var streamingAssistantText = ""
-  @State private var imageInputEnabled: Bool
-  @State private var audioInputEnabled: Bool
+  @State private var attachments: [ChatInputAttachment] = []
+  @State private var selectedPhotoItem: PhotosPickerItem?
+  @State private var showCamera = false
+  @State private var showAudioRecorder = false
+  @State private var showAudioFilePicker = false
+  @State private var showAttachmentError = false
+  @State private var attachmentErrorMessage = ""
   @FocusState private var isComposerFocused: Bool
 
   init(
     model: GalleryModel,
+    agentSkills: [GalleryAgentSkill],
     connectors: [GalleryConnector],
     entryHint: UnifiedChatEntryHint,
     sessionIdOverride: String? = nil,
     restoreExistingSession: Bool = true
   ) {
     self.model = model
+    self.agentSkills = agentSkills
     self.connectors = connectors
     self.entryHint = entryHint
     let computedSessionId = sessionIdOverride ?? GallerySessionStore.makeSessionId(
@@ -38,6 +48,7 @@ struct GalleryChatView: View {
       taskId: model.taskId,
       modelCapabilities: model.capabilities,
       entryHint: entryHint,
+      visibleAgentSkillIds: agentSkills.map(\.id),
       visibleConnectorIds: connectors.map(\.id),
       initialDraft: ""
     )
@@ -47,8 +58,6 @@ struct GalleryChatView: View {
     } else {
       _sessionState = State(initialValue: initialState)
     }
-    _imageInputEnabled = State(initialValue: entryHint.activateImage && model.supportsImage)
-    _audioInputEnabled = State(initialValue: entryHint.activateAudio && model.supportsAudio)
   }
 
   var body: some View {
@@ -76,31 +85,27 @@ struct GalleryChatView: View {
       }
       ToolbarItem(placement: .topBarTrailing) {
         Menu {
-          Label(model.name, systemImage: "cpu")
-          Label(runtime.displayName, systemImage: runtime.isAvailable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-          Divider()
-          Toggle(isOn: Binding(
-            get: { imageInputEnabled },
-            set: { imageInputEnabled = $0 && supports(.image) }
-          )) {
-            Label("Image input", systemImage: "photo")
+          if !agentSkills.isEmpty {
+            Section("Skills") {
+              ForEach(agentSkills) { skill in
+                Toggle(isOn: Binding(
+                  get: { isActiveSkill(skill.id) },
+                  set: { setAgentSkill(skill.id, active: $0) }
+                )) {
+                  Label(skill.title, systemImage: skill.symbol)
+                }
+              }
+            }
           }
-          .disabled(!supports(.image))
-          Toggle(isOn: Binding(
-            get: { audioInputEnabled },
-            set: { audioInputEnabled = $0 && supports(.audio) }
-          )) {
-            Label("Audio input", systemImage: "waveform")
-          }
-          .disabled(!supports(.audio))
           if !connectors.isEmpty {
-            Divider()
-            ForEach(connectors) { connector in
-              Toggle(isOn: Binding(
-                get: { isActive(connector.id) },
-                set: { setConnector(connector.id, active: $0) }
-              )) {
-                Label(connector.title, systemImage: connector.symbol)
+            Section("Connectors") {
+              ForEach(connectors) { connector in
+                Toggle(isOn: Binding(
+                  get: { isActive(connector.id) },
+                  set: { setConnector(connector.id, active: $0) }
+                )) {
+                  Label(connectorMenuTitle(connector), systemImage: connector.symbol)
+                }
               }
             }
           }
@@ -110,8 +115,41 @@ struct GalleryChatView: View {
       }
     }
     .onChange(of: sessionState.messages.count) { _, _ in persistSession() }
+    .onChange(of: sessionState.agentSkillState.activeSkillIds.count) { _, _ in persistSession() }
     .onChange(of: sessionState.connectorBarState.activeConnectorIds.count) { _, _ in persistSession() }
     .onDisappear { persistSession() }
+    .onChange(of: selectedPhotoItem) { _, item in
+      handleSelectedPhoto(item)
+    }
+    .sheet(isPresented: $showCamera) {
+      CameraCaptureView(
+        onImage: { image in
+          addCameraImage(image)
+          showCamera = false
+        },
+        onCancel: { showCamera = false }
+      )
+    }
+    .sheet(isPresented: $showAudioRecorder) {
+      AudioRecorderSheet(
+        onComplete: { url in
+          addRecording(url)
+          showAudioRecorder = false
+        },
+        onCancel: { showAudioRecorder = false }
+      )
+    }
+    .fileImporter(
+      isPresented: $showAudioFilePicker,
+      allowedContentTypes: [.wav, .audio],
+      allowsMultipleSelection: false,
+      onCompletion: handlePickedAudioFile
+    )
+    .alert("Attachment failed", isPresented: $showAttachmentError) {
+      Button("OK", role: .cancel) {}
+    } message: {
+      Text(attachmentErrorMessage)
+    }
   }
 
   @ViewBuilder
@@ -262,44 +300,66 @@ struct GalleryChatView: View {
     .background(Color(.systemBackground))
   }
 
-  private var capabilityToggleRow: some View {
-    ScrollView(.horizontal, showsIndicators: false) {
-      HStack(spacing: 8) {
-        CapabilityToggleChip(
-          title: "Image",
-          symbol: "photo",
-          isOn: imageInputEnabled,
-          isEnabled: supports(.image)
-        ) { imageInputEnabled.toggle() }
-        CapabilityToggleChip(
-          title: "Audio",
-          symbol: "waveform",
-          isOn: audioInputEnabled,
-          isEnabled: supports(.audio)
-        ) { audioInputEnabled.toggle() }
-        ForEach(connectors) { connector in
-          CapabilityToggleChip(
-            title: connector.title,
-            symbol: connector.symbol,
-            isOn: isActive(connector.id),
-            isEnabled: true
-          ) { setConnector(connector.id, active: !isActive(connector.id)) }
+  private var attachmentStrip: some View {
+    Group {
+      if attachments.isEmpty {
+        EmptyView()
+      } else {
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(spacing: 8) {
+            ForEach(attachments) { attachment in
+              AttachmentChip(attachment: attachment) {
+                attachments.removeAll { $0.id == attachment.id }
+              }
+            }
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
         }
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
     }
+  }
+
+  private var addInputMenu: some View {
+    Menu {
+      if supports(.image) {
+        PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+          Label("Photo Library", systemImage: "photo.on.rectangle")
+        }
+        Button {
+          showCamera = true
+        } label: {
+          Label("Camera", systemImage: "camera")
+        }
+      }
+      if supports(.audio) {
+        Button {
+          showAudioFilePicker = true
+        } label: {
+          Label("Pick WAV File", systemImage: "doc.badge.plus")
+        }
+        Button {
+          showAudioRecorder = true
+        } label: {
+          Label("Record Audio", systemImage: "mic")
+        }
+      }
+      if !supports(.image) && !supports(.audio) {
+        Text("No attachments available")
+      }
+    } label: {
+      Image(systemName: "plus.circle.fill")
+        .font(.title2)
+        .foregroundStyle(Color.accentColor)
+        .frame(width: 34, height: 34)
+    }
+    .accessibilityLabel("Add input")
   }
 
   private var composer: some View {
     VStack(spacing: 10) {
-      capabilityToggleRow
+      attachmentStrip
       HStack(alignment: .bottom, spacing: 10) {
-        if supports(.image) {
-          Image(systemName: "photo")
-            .font(.title3)
-            .foregroundStyle(.secondary)
-            .frame(width: 34, height: 34)
-        }
+        addInputMenu
         TextField(
           "Ask anything",
           text: Binding(
@@ -327,7 +387,7 @@ struct GalleryChatView: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(canSend ? Color.accentColor : Color.secondary)
-        .disabled(isGenerating || sessionState.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .disabled(!canSend)
       }
     }
     .padding(.horizontal, 14)
@@ -337,27 +397,32 @@ struct GalleryChatView: View {
   }
 
   private var canSend: Bool {
-    !isGenerating && !sessionState.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    !isGenerating && (!sessionState.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
   }
 
   private func sendDraftThroughRuntime() {
     let prompt = sessionState.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !prompt.isEmpty, !isGenerating else { return }
+    guard canSend else { return }
+    let attachmentsToSend = attachments
+    let effectivePrompt = prompt.isEmpty ? "Please describe the attached input." : prompt
 
     let request = GalleryInferenceRequest(
       modelName: sessionState.modelName,
       modelDisplayName: sessionState.modelDisplayName,
       modelFileName: model.modelFileName,
-      prompt: prompt,
+      prompt: effectivePrompt,
       route: sessionState.route(),
+      activeAgentSkillIds: Array(sessionState.agentSkillState.activeSkillIds).sorted(),
       activeConnectorIds: Array(sessionState.connectorBarState.activeConnectorIds).sorted(),
-      supportsImage: imageInputEnabled && supports(.image),
-      supportsAudio: audioInputEnabled && supports(.audio)
+      supportsImage: attachmentsToSend.contains { $0.kind == .image } && supports(.image),
+      supportsAudio: attachmentsToSend.contains { $0.kind == .audio } && supports(.audio),
+      attachments: attachmentsToSend.map(\.inferenceAttachment)
     )
 
-    sessionState = sessionState.appendUserMessage(text: prompt)
+    sessionState = sessionState.appendUserMessage(text: userVisiblePrompt(prompt: effectivePrompt, attachments: attachmentsToSend))
     isGenerating = true
     streamingAssistantText = ""
+    attachments = []
     isComposerFocused = false
     persistSession()
 
@@ -387,6 +452,55 @@ struct GalleryChatView: View {
     }
   }
 
+  private func userVisiblePrompt(prompt: String, attachments: [ChatInputAttachment]) -> String {
+    guard !attachments.isEmpty else { return prompt }
+    let names = attachments.map { "\($0.symbol) \($0.displayName)" }.joined(separator: ", ")
+    return "\(prompt)\n\nAttached: \(names)"
+  }
+
+  private func handleSelectedPhoto(_ item: PhotosPickerItem?) {
+    guard let item else { return }
+    Task {
+      do {
+        let attachment = try await ChatInputAttachmentStore.savePickedPhoto(item)
+        await MainActor.run { attachments.append(attachment) }
+      } catch {
+        await MainActor.run { showAttachmentError(error.localizedDescription) }
+      }
+      await MainActor.run { selectedPhotoItem = nil }
+    }
+  }
+
+  private func handlePickedAudioFile(_ result: Result<[URL], Error>) {
+    do {
+      guard let url = try result.get().first else { return }
+      attachments.append(try ChatInputAttachmentStore.copyAudioFile(from: url))
+    } catch {
+      showAttachmentError(error.localizedDescription)
+    }
+  }
+
+  private func addCameraImage(_ image: UIImage) {
+    do {
+      attachments.append(try ChatInputAttachmentStore.saveCameraImage(image))
+    } catch {
+      showAttachmentError(error.localizedDescription)
+    }
+  }
+
+  private func addRecording(_ url: URL) {
+    do {
+      attachments.append(try ChatInputAttachmentStore.copyAudioFile(from: url))
+    } catch {
+      showAttachmentError(error.localizedDescription)
+    }
+  }
+
+  private func showAttachmentError(_ message: String) {
+    attachmentErrorMessage = message
+    showAttachmentError = true
+  }
+
   private func supports(_ capability: UnifiedChatCapability) -> Bool {
     sessionState.modelCapabilities.supportsUnifiedChatCapability(requiredCapability: capability)
   }
@@ -395,11 +509,26 @@ struct GalleryChatView: View {
     sessionState.connectorBarState.activeConnectorIds.contains(connectorId)
   }
 
+  private func isActiveSkill(_ skillId: String) -> Bool {
+    sessionState.agentSkillState.activeSkillIds.contains(skillId)
+  }
+
+  private func setAgentSkill(_ skillId: String, active: Bool) {
+    let currentlyActive = isActiveSkill(skillId)
+    guard currentlyActive != active else { return }
+    sessionState = sessionState.withAgentSkill(skillId: skillId, active: active)
+    persistSession()
+  }
+
   private func setConnector(_ connectorId: String, active: Bool) {
     let currentlyActive = isActive(connectorId)
     guard currentlyActive != active else { return }
     sessionState = sessionState.toggleConnector(connectorId: connectorId)
     persistSession()
+  }
+
+  private func connectorMenuTitle(_ connector: GalleryConnector) -> String {
+    connector.id == GalleryConnector.fortuneMcpId ? "Fortune" : connector.title
   }
 
   private func activateDemoWidget(fullscreen: Bool) {
@@ -435,9 +564,15 @@ private struct MessageBubble: View {
     HStack {
       if message.role == .user { Spacer(minLength: 40) }
       VStack(alignment: .leading, spacing: 4) {
-        Text(message.text)
-          .font(.body)
-          .textSelection(.enabled)
+        if message.role == .assistant {
+          AssistantMarkdownText(text: message.text)
+            .font(.body)
+            .textSelection(.enabled)
+        } else {
+          Text(message.text)
+            .font(.body)
+            .textSelection(.enabled)
+        }
       }
       .padding(.horizontal, 14)
       .padding(.vertical, 11)
@@ -465,7 +600,7 @@ private struct StreamingBubble: View {
               .foregroundStyle(.secondary)
           }
         } else {
-          Text(text)
+          AssistantMarkdownText(text: text)
             .font(.body)
             .textSelection(.enabled)
         }
@@ -478,28 +613,40 @@ private struct StreamingBubble: View {
   }
 }
 
-private struct CapabilityToggleChip: View {
-  let title: String
-  let symbol: String
-  let isOn: Bool
-  let isEnabled: Bool
-  let action: () -> Void
+private struct AssistantMarkdownText: View {
+  let text: String
 
   var body: some View {
-    Button(action: { if isEnabled { action() } }) {
-      Label(title, systemImage: isOn ? "checkmark.circle.fill" : symbol)
-        .font(.caption.weight(.semibold))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .foregroundStyle(isEnabled ? (isOn ? Color.accentColor : Color.secondary) : Color.secondary.opacity(0.55))
-        .background(
-          isOn && isEnabled ? Color.accentColor.opacity(0.14) : Color(.secondarySystemBackground),
-          in: Capsule()
-        )
-        .overlay(Capsule().stroke(isOn && isEnabled ? Color.accentColor.opacity(0.45) : Color.clear))
+    if let attributed = try? AttributedString(
+      markdown: text,
+      options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
+    ) {
+      Text(attributed)
+    } else {
+      Text(text)
     }
-    .buttonStyle(.plain)
-    .disabled(!isEnabled)
+  }
+}
+
+private struct AttachmentChip: View {
+  let attachment: ChatInputAttachment
+  let onRemove: () -> Void
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Image(systemName: attachment.symbol)
+      Text(attachment.displayName)
+        .lineLimit(1)
+      Button(action: onRemove) {
+        Image(systemName: "xmark.circle.fill")
+          .foregroundStyle(.secondary)
+      }
+      .buttonStyle(.plain)
+    }
+    .font(.caption.weight(.semibold))
+    .padding(.horizontal, 10)
+    .padding(.vertical, 7)
+    .background(Color(.secondarySystemBackground), in: Capsule())
   }
 }
 
@@ -562,8 +709,15 @@ private struct WidgetPreview: View {
   NavigationStack {
     GalleryChatView(
       model: GalleryModel.samples[0],
+      agentSkills: GalleryAgentSkill.samples,
       connectors: GalleryConnector.samples,
-      entryHint: UnifiedChatEntryHint(activateImage: true, activateAudio: false, activateSkills: false, activateMcpConnectorIds: GalleryConnector.defaultSelectedIds)
+      entryHint: UnifiedChatEntryHint(
+        activateImage: true,
+        activateAudio: false,
+        activateSkills: true,
+        activateAgentSkillIds: GalleryAgentSkill.defaultSelectedIds,
+        activateMcpConnectorIds: GalleryConnector.defaultSelectedIds
+      )
     )
   }
 }

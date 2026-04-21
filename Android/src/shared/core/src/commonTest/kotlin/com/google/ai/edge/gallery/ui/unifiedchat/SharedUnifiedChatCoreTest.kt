@@ -108,6 +108,7 @@ class SharedUnifiedChatCoreTest {
         taskId = "llm_chat",
         modelCapabilities = UnifiedChatModelCapabilities(supportsImage = true, supportsAudio = true),
         entryHint = UnifiedChatEntryHint(activateMcpConnectorIds = listOf("github", "hidden")),
+        visibleAgentSkillIds = emptyList(),
         visibleConnectorIds = listOf("github", "gmail"),
         initialDraft = "Hello from shared state",
       )
@@ -127,6 +128,27 @@ class SharedUnifiedChatCoreTest {
   }
 
   @Test
+  fun unifiedChatSessionState_togglesMobileActionsInEntryHint() {
+    val state =
+      createUnifiedChatSessionState(
+        modelName = "Gemma-4-E2B-it",
+        modelDisplayName = "Gemma E2B",
+        taskId = "llm_chat",
+        modelCapabilities = UnifiedChatModelCapabilities(supportsImage = true, supportsAudio = true),
+        entryHint = UnifiedChatEntryHint(activateAgentSkillIds = listOf("mobile_actions"), activateMcpConnectorIds = listOf("fortune.ugot.uk/mcp")),
+        visibleAgentSkillIds = listOf("fortune", "mobile_actions"),
+        visibleConnectorIds = listOf("fortune.ugot.uk/mcp"),
+      )
+
+    val disabled = state.withAgentSkill("mobile_actions", false)
+
+    assertFalse(disabled.currentEntryHint().activateSkills)
+    assertEquals(emptySet<String>(), disabled.agentSkillState.activeSkillIds)
+    assertEquals(setOf("fortune.ugot.uk/mcp"), disabled.connectorBarState.activeConnectorIds)
+    assertFalse(decodeUnifiedChatEntryHint(disabled.route().substringAfter("entry_hint=")).activateSkills)
+  }
+
+  @Test
   fun unifiedChatSessionState_widgetHostRoundTripsThroughReducer() {
     val state =
       createUnifiedChatSessionState(
@@ -134,7 +156,8 @@ class SharedUnifiedChatCoreTest {
         modelDisplayName = "FunctionGemma",
         taskId = "agent_chat",
         modelCapabilities = UnifiedChatModelCapabilities(),
-        entryHint = UnifiedChatEntryHint(activateSkills = true),
+        entryHint = UnifiedChatEntryHint(activateAgentSkillIds = listOf("summarize")),
+        visibleAgentSkillIds = listOf("summarize"),
         visibleConnectorIds = listOf("github"),
       )
     val snapshot =
@@ -158,6 +181,7 @@ class SharedUnifiedChatCoreTest {
       UnifiedChatPersistedSession(
         id = "task::model::hint",
         title = "Unified chat",
+        activeAgentSkillIds = listOf("summarize", "mobile_actions"),
         activeConnectorIds = listOf("github", "gmail"),
         messagesJson = listOf("{\"type\":\"TEXT\"}"),
         widgetSnapshots =
@@ -224,6 +248,7 @@ class SharedUnifiedChatCoreTest {
         activateImage = true,
         activateAudio = false,
         activateSkills = true,
+        activateAgentSkillIds = listOf("summarize", "mobile_actions"),
         activateMcpConnectorIds = listOf("github", "gmail"),
       )
     val id = buildUnifiedChatSessionId("agent_chat", "Gemma-4-E2B-it", hint)
@@ -231,7 +256,7 @@ class SharedUnifiedChatCoreTest {
 
     assertEquals("agent_chat", parsed.taskId)
     assertEquals("Gemma-4-E2B-it", parsed.modelName)
-    assertEquals(hint.copy(activateMcpConnectorIds = listOf("github", "gmail")), parsed.entryHint)
+    assertEquals(hint.copy(activateAgentSkillIds = listOf("mobile_actions", "summarize"), activateMcpConnectorIds = listOf("github", "gmail")), parsed.entryHint)
     assertEquals(null, parseUnifiedChatSessionId("bad-session-id"))
   }
 
@@ -244,6 +269,7 @@ class SharedUnifiedChatCoreTest {
         taskId = "llm_chat",
         modelCapabilities = UnifiedChatModelCapabilities(),
         entryHint = UnifiedChatEntryHint(),
+        visibleAgentSkillIds = emptyList(),
         visibleConnectorIds = emptyList(),
         initialDraft = "  hello runtime  ",
       )

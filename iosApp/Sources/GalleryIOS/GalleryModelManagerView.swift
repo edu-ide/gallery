@@ -3,6 +3,7 @@ import GallerySharedCore
 
 struct GalleryModelManagerView: View {
   let models: [GalleryModel]
+  let agentSkills: [GalleryAgentSkill]
   let connectors: [GalleryConnector]
   let selectedConnectorIds: Set<String>
 
@@ -13,11 +14,13 @@ struct GalleryModelManagerView: View {
           NavigationLink {
             GalleryChatView(
               model: model,
+              agentSkills: agentSkills,
               connectors: connectors,
               entryHint: UnifiedChatEntryHint(
                 activateImage: model.supportsImage,
                 activateAudio: false,
-                activateSkills: model.id == "functiongemma",
+                activateSkills: true,
+                activateAgentSkillIds: model.id == "functiongemma" ? [GalleryAgentSkill.mobileActionsId] : GalleryAgentSkill.defaultSelectedIds,
                 activateMcpConnectorIds: Array(selectedConnectorIds)
               )
             )
@@ -79,6 +82,7 @@ private struct ModelManagerRow: View {
   NavigationStack {
     GalleryModelManagerView(
       models: GalleryModel.samples,
+      agentSkills: GalleryAgentSkill.samples,
       connectors: GalleryConnector.samples,
       selectedConnectorIds: Set(GalleryConnector.defaultSelectedIds)
     )

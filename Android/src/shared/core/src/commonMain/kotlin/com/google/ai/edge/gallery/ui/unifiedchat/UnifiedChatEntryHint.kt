@@ -24,6 +24,7 @@ data class UnifiedChatEntryHint(
   val activateImage: Boolean = false,
   val activateAudio: Boolean = false,
   val activateSkills: Boolean = false,
+  val activateAgentSkillIds: List<String> = emptyList(),
   val activateMcpConnectorIds: List<String> = emptyList(),
 )
 

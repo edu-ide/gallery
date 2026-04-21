@@ -32,9 +32,11 @@ struct ContentView: View {
       modelFileName: model.modelFileName,
       prompt: prompt,
       route: "ios-smoke",
+      activeAgentSkillIds: GalleryAgentSkill.defaultSelectedIds,
       activeConnectorIds: GalleryConnector.defaultSelectedIds,
       supportsImage: false,
-      supportsAudio: false
+      supportsAudio: false,
+      attachments: []
     )
     let startedAt = ISO8601DateFormatter().string(from: Date())
     let result = await GalleryRuntimeFactory.defaultRuntime().generate(request: request)

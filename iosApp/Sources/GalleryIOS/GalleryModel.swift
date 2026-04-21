@@ -101,7 +101,8 @@ extension GalleryTask {
         entryHint: UnifiedChatEntryHint(
           activateImage: false,
           activateAudio: false,
-          activateSkills: false,
+          activateSkills: true,
+          activateAgentSkillIds: GalleryAgentSkill.defaultSelectedIds,
           activateMcpConnectorIds: connectors
         )
       ),
@@ -115,7 +116,8 @@ extension GalleryTask {
         entryHint: UnifiedChatEntryHint(
           activateImage: true,
           activateAudio: false,
-          activateSkills: false,
+          activateSkills: true,
+          activateAgentSkillIds: GalleryAgentSkill.defaultSelectedIds,
           activateMcpConnectorIds: connectors
         )
       ),
@@ -130,6 +132,7 @@ extension GalleryTask {
           activateImage: false,
           activateAudio: false,
           activateSkills: true,
+          activateAgentSkillIds: GalleryAgentSkill.defaultSelectedIds,
           activateMcpConnectorIds: connectors
         )
       ),
@@ -143,7 +146,8 @@ extension GalleryTask {
         entryHint: UnifiedChatEntryHint(
           activateImage: false,
           activateAudio: true,
-          activateSkills: false,
+          activateSkills: true,
+          activateAgentSkillIds: GalleryAgentSkill.defaultSelectedIds,
           activateMcpConnectorIds: connectors
         )
       ),
@@ -157,7 +161,8 @@ extension GalleryTask {
         entryHint: UnifiedChatEntryHint(
           activateImage: false,
           activateAudio: false,
-          activateSkills: false,
+          activateSkills: true,
+          activateAgentSkillIds: [GalleryAgentSkill.summarizeId, GalleryAgentSkill.translateId],
           activateMcpConnectorIds: connectors
         )
       ),
@@ -172,6 +177,7 @@ extension GalleryTask {
           activateImage: false,
           activateAudio: false,
           activateSkills: true,
+          activateAgentSkillIds: [GalleryAgentSkill.mobileActionsId],
           activateMcpConnectorIds: connectors
         )
       ),
@@ -197,6 +203,49 @@ extension GalleryConnector {
       title: "UGOT Fortune",
       symbol: "sparkles",
       summary: "MCP endpoint: \(fortuneMcpEndpoint)"
+    ),
+  ]
+}
+
+struct GalleryAgentSkill: Identifiable, Hashable {
+  let id: String
+  let title: String
+  let symbol: String
+  let summary: String
+}
+
+extension GalleryAgentSkill {
+  static let fortuneId = "fortune"
+  static let summarizeId = "summarize"
+  static let translateId = "translate"
+  static let mobileActionsId = "mobile_actions"
+
+  static let defaultSelectedIds = [fortuneId, summarizeId, translateId]
+
+  static let samples: [GalleryAgentSkill] = [
+    GalleryAgentSkill(
+      id: fortuneId,
+      title: "Fortune",
+      symbol: "sparkles",
+      summary: "Use the Fortune connector when it is enabled."
+    ),
+    GalleryAgentSkill(
+      id: summarizeId,
+      title: "Summarize",
+      symbol: "text.badge.checkmark",
+      summary: "Summarize long text inside chat."
+    ),
+    GalleryAgentSkill(
+      id: translateId,
+      title: "Translate",
+      symbol: "character.book.closed",
+      summary: "Translate and rewrite text inside chat."
+    ),
+    GalleryAgentSkill(
+      id: mobileActionsId,
+      title: "Mobile actions",
+      symbol: "iphone.gen3.radiowaves.left.and.right",
+      summary: "Allow device actions with confirmation."
     ),
   ]
 }
