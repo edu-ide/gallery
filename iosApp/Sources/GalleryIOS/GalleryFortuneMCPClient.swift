@@ -44,46 +44,46 @@ struct GalleryFortuneMCPResponse {
   let snapshot: McpWidgetSnapshot
 }
 
-private struct GalleryMCPWidgetResource {
-  let uri: String
-  let mimeType: String?
-  let html: String
-}
-
 final class GalleryFortuneMCPClient {
-  private let endpoint = URL(string: GalleryConnector.fortuneMcpEndpoint)!
+  private static let defaultEndpoint = URL(string: GalleryConnector.fortuneMcpEndpoint)!
+  private let endpoint: URL
   private let accessToken: String
+  private let mcpClient: GalleryMCPExtAppsClient
   private var sessionId: String?
   private var nextId = 1
 
   init(accessToken: String) {
+    let endpoint = Self.defaultEndpoint
+    self.endpoint = endpoint
     self.accessToken = accessToken
+    self.mcpClient = GalleryMCPExtAppsClient(
+      connectorId: GalleryConnector.fortuneMcpId,
+      endpoint: endpoint,
+      accessToken: accessToken
+    )
   }
 
   func fetchTodayFortune() async throws -> GalleryFortuneMCPResponse {
-    try await initialize()
-    let tools = try await listTools()
+    try await mcpClient.initialize()
+    let tools = try await mcpClient.listTools()
     let toolName = pickTodayFortuneTool(from: tools)
-    let result = try await callTool(
-      name: toolName,
-      arguments: [
-        "lang": "ko",
-        "target_date": todayString(),
-      ]
-    )
+    let arguments: [String: Any] = [
+      "lang": "ko",
+      "target_date": todayString(),
+    ]
+    let result = try await mcpClient.callTool(name: toolName, arguments: arguments)
     let widgetResource =
-      (try? await loadWidgetResource(tools: tools, toolName: toolName)) ??
+      (try? await mcpClient.resolveWidgetResource(tools: tools, toolName: toolName, result: result)) ??
       widgetResource(fromToolResult: result)
     let message = renderToolResult(result, toolName: toolName)
     return GalleryFortuneMCPResponse(
       message: message,
-      snapshot: makeSnapshot(toolName: toolName, message: message, result: result, widgetResource: widgetResource)
+      snapshot: makeSnapshot(toolName: toolName, message: message, result: result, widgetResource: widgetResource, tools: tools)
     )
   }
 
   func callToolForWidget(name: String, arguments: [String: Any]) async throws -> [String: Any] {
-    try await initialize()
-    return try await callTool(name: name, arguments: arguments)
+    try await mcpClient.callTool(name: name, arguments: arguments)
   }
 
   private func initialize() async throws {
@@ -163,7 +163,7 @@ final class GalleryFortuneMCPClient {
       let text = itemText(item)
       guard !text.isEmpty else { continue }
       if isSupportedWidgetMime(mimeType) || text.localizedCaseInsensitiveContains("<html") {
-        return GalleryMCPWidgetResource(uri: itemURI, mimeType: mimeType, html: text)
+        return GalleryMCPWidgetResource(uri: itemURI, mimeType: mimeType, html: text, csp: nil, permissions: nil)
       }
     }
     return nil
@@ -319,7 +319,8 @@ final class GalleryFortuneMCPClient {
     toolName: String,
     message: String,
     result: [String: Any],
-    widgetResource: GalleryMCPWidgetResource?
+    widgetResource: GalleryMCPWidgetResource?,
+    tools: [[String: Any]] = []
   ) -> McpWidgetSnapshot {
     let compactMessage = trimForWidget(message)
     let compactOutput = compactToolOutput(result, message: compactMessage)
@@ -336,10 +337,13 @@ final class GalleryFortuneMCPClient {
       "targetDate": todayString(),
       "contentMarkdown": compactMessage,
     ]
+    if let toolDefinition = tools.first(where: { ($0["name"] as? String) == toolName }) {
+      state["toolDefinition"] = compactToolDefinition(toolDefinition)
+    }
     if let widgetResource {
       state["widgetUri"] = widgetResource.uri
       state["widgetMimeType"] = widgetResource.mimeType ?? ""
-      state["widgetBaseUrl"] = widgetBaseURL(for: widgetResource.uri)
+      state["widgetBaseUrl"] = mcpClient.widgetBaseURL(for: widgetResource.uri)
       state["widgetHtmlBase64"] = Data(widgetResource.html.utf8).base64EncodedString()
     }
     let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
@@ -350,6 +354,16 @@ final class GalleryFortuneMCPClient {
       summary: firstSummaryLine(from: compactMessage),
       widgetStateJson: json
     )
+  }
+
+  private func compactToolDefinition(_ tool: [String: Any]) -> [String: Any] {
+    var compact: [String: Any] = [:]
+    for key in ["name", "title", "description", "inputSchema", "annotations", "_meta"] {
+      if let value = tool[key] {
+        compact[key] = GalleryMCPExtAppsClient.compactForWidget(value, maxStringLength: 2_000, maxArrayCount: 30)
+      }
+    }
+    return compact
   }
 
   private func compactToolOutput(_ result: [String: Any], message: String) -> [String: Any] {
@@ -425,7 +439,7 @@ final class GalleryFortuneMCPClient {
         let uri = resource["uri"] as? String ?? "inline://fortune-widget"
         let text = itemText(resource)
         if !text.isEmpty, isSupportedWidgetMime(mimeType) || text.localizedCaseInsensitiveContains("<html") {
-          return GalleryMCPWidgetResource(uri: uri, mimeType: mimeType, html: text)
+          return GalleryMCPWidgetResource(uri: uri, mimeType: mimeType, html: text, csp: nil, permissions: nil)
         }
       }
 
@@ -433,7 +447,7 @@ final class GalleryFortuneMCPClient {
       let uri = item["uri"] as? String ?? "inline://fortune-widget"
       let text = itemText(item)
       if !text.isEmpty, isSupportedWidgetMime(mimeType) || text.localizedCaseInsensitiveContains("<html") {
-        return GalleryMCPWidgetResource(uri: uri, mimeType: mimeType, html: text)
+        return GalleryMCPWidgetResource(uri: uri, mimeType: mimeType, html: text, csp: nil, permissions: nil)
       }
     }
     return nil

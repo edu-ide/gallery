@@ -64,43 +64,96 @@ struct GalleryMCPWidgetWebView: UIViewRepresentable {
         // source of truth for restored views.
         break
       case "callTool":
-        handleToolCall(payload)
+        handleLegacyToolCall(payload)
+      case "mcpRequest":
+        handleMCPRequest(payload)
       default:
         break
       }
     }
 
-    private func handleToolCall(_ payload: [String: Any]) {
-      guard snapshot.connectorId == GalleryConnector.fortuneMcpId,
-            let requestId = payload["id"] as? String,
+    private func handleLegacyToolCall(_ payload: [String: Any]) {
+      guard let requestId = payload["id"] as? String,
             let toolName = payload["name"] as? String else {
         return
       }
       let arguments = payload["arguments"] as? [String: Any] ?? [:]
+      handleMCPRequest([
+        "id": requestId,
+        "method": "tools/call",
+        "params": [
+          "name": toolName,
+          "arguments": arguments,
+        ],
+      ])
+    }
+
+    private func handleMCPRequest(_ payload: [String: Any]) {
+      guard let requestId = payload["id"] as? String,
+            let method = payload["method"] as? String else {
+        return
+      }
+      let params = payload["params"] as? [String: Any] ?? [:]
 
       Task {
         do {
-          guard let accessToken = UgotAuthStore.accessToken() else {
-            throw WidgetBridgeError.missingAuth
+          let client = try makeClient()
+          let result: [String: Any]
+          switch method {
+          case "tools/call":
+            guard let toolName = params["name"] as? String else {
+              throw WidgetBridgeError.invalidRequest("tools/call missing name")
+            }
+            let arguments = params["arguments"] as? [String: Any] ?? [:]
+            result = try await client.callTool(name: toolName, arguments: arguments)
+          case "tools/list":
+            result = ["tools": try await client.listTools()]
+          case "resources/list":
+            result = ["resources": try await client.listResources()]
+          case "resources/read":
+            guard let uri = params["uri"] as? String else {
+              throw WidgetBridgeError.invalidRequest("resources/read missing uri")
+            }
+            result = try await client.readResource(uri: uri) ?? ["contents": []]
+          default:
+            throw WidgetBridgeError.invalidRequest("Unsupported MCP method: \(method)")
           }
-          let client = GalleryFortuneMCPClient(accessToken: accessToken)
-          let result = try await client.callToolForWidget(name: toolName, arguments: arguments)
-          await resolveToolCall(id: requestId, result: result)
+          let compact = GalleryMCPExtAppsClient.compactForWidget(result)
+          await resolveMCPRequest(id: requestId, result: compact)
         } catch {
-          await rejectToolCall(id: requestId, message: error.localizedDescription)
+          await rejectMCPRequest(id: requestId, message: error.localizedDescription)
         }
       }
     }
 
-    @MainActor
-    private func resolveToolCall(id: String, result: [String: Any]) {
-      let resultJson = GalleryMCPWidgetPayload.jsonLiteral(result)
-      evaluate("window.__galleryMcpResolveCall && window.__galleryMcpResolveCall(\(GalleryMCPWidgetPayload.jsString(id)), \(resultJson));")
+    private func makeClient() throws -> GalleryMCPExtAppsClient {
+      guard let accessToken = UgotAuthStore.accessToken() else {
+        throw WidgetBridgeError.missingAuth
+      }
+      let state = snapshot.widgetStateDictionary ?? [:]
+      let endpointString = (state["endpoint"] as? String) ?? GalleryConnector.fortuneMcpEndpoint
+      guard let endpoint = URL(string: endpointString) else {
+        throw WidgetBridgeError.invalidRequest("Invalid MCP endpoint")
+      }
+      return GalleryMCPExtAppsClient(
+        connectorId: snapshot.connectorId,
+        endpoint: endpoint,
+        accessToken: accessToken
+      )
     }
 
     @MainActor
-    private func rejectToolCall(id: String, message: String) {
-      evaluate("window.__galleryMcpRejectCall && window.__galleryMcpRejectCall(\(GalleryMCPWidgetPayload.jsString(id)), \(GalleryMCPWidgetPayload.jsString(message)));")
+    private func resolveMCPRequest(id: String, result: Any) {
+      let resultJson = GalleryMCPWidgetPayload.jsonLiteral(result)
+      let idJson = GalleryMCPWidgetPayload.jsString(id)
+      evaluate("window.__galleryMcpResolveRequest && window.__galleryMcpResolveRequest(\(idJson), \(resultJson)); window.__galleryMcpResolveCall && window.__galleryMcpResolveCall(\(idJson), \(resultJson));")
+    }
+
+    @MainActor
+    private func rejectMCPRequest(id: String, message: String) {
+      let idJson = GalleryMCPWidgetPayload.jsString(id)
+      let messageJson = GalleryMCPWidgetPayload.jsString(message)
+      evaluate("window.__galleryMcpRejectRequest && window.__galleryMcpRejectRequest(\(idJson), \(messageJson)); window.__galleryMcpRejectCall && window.__galleryMcpRejectCall(\(idJson), \(messageJson));")
     }
 
     @MainActor
@@ -110,7 +163,16 @@ struct GalleryMCPWidgetWebView: UIViewRepresentable {
 
     private enum WidgetBridgeError: LocalizedError {
       case missingAuth
-      var errorDescription: String? { "UGOT 로그인이 필요해요." }
+      case invalidRequest(String)
+
+      var errorDescription: String? {
+        switch self {
+        case .missingAuth:
+          return "UGOT 로그인이 필요해요."
+        case .invalidRequest(let message):
+          return message
+        }
+      }
     }
   }
 }
@@ -144,51 +206,233 @@ private struct GalleryMCPWidgetPayload {
   }
 
   var injectedHTML: String {
-    let bridge = Self.bridgeScript(
+    let innerBridge = Self.innerBridgeScript(
       toolName: toolName,
       toolInputJson: toolInputJson,
       toolOutputJson: toolOutputJson,
       widgetStateJson: widgetStateJson
     )
+    let widgetHTML = Self.inject(script: innerBridge, into: html, baseURL: baseURL)
+    return Self.hostWrapperHTML(
+      widgetHTML: widgetHTML,
+      toolName: toolName,
+      toolInputJson: toolInputJson,
+      toolOutputJson: toolOutputJson,
+      widgetStateJson: widgetStateJson
+    )
+  }
+
+  static func inject(script: String, into html: String, baseURL: URL?) -> String {
+    var scriptAndBase = script
+    if let baseURL {
+      scriptAndBase += "\n<base href=\"\(escapeHTMLAttribute(baseURL.absoluteString))\">"
+    }
     if html.range(of: "<head>", options: [.caseInsensitive]) != nil {
       return html.replacingOccurrences(
         of: "<head>",
-        with: "<head>\n\(bridge)",
+        with: "<head>\n\(scriptAndBase)",
         options: [.caseInsensitive],
         range: nil
       )
     }
-    return "\(bridge)\n\(html)"
+    return "\(scriptAndBase)\n\(html)"
   }
 
-  static func bridgeScript(toolName: String?, toolInputJson: String, toolOutputJson: String, widgetStateJson: String) -> String {
+  static func hostWrapperHTML(
+    widgetHTML: String,
+    toolName: String?,
+    toolInputJson: String,
+    toolOutputJson: String,
+    widgetStateJson: String
+  ) -> String {
+    let widgetHTMLBase64 = Data(widgetHTML.utf8).base64EncodedString()
+    return """
+    <!doctype html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+      <style>
+        html, body { margin: 0; padding: 0; background: transparent; color-scheme: light dark; width: 100%; min-height: 100%; }
+        #mcpFrame { width: 100%; min-height: 360px; height: 620px; border: 0; display: block; background: transparent; }
+      </style>
+    </head>
+    <body>
+      <iframe id="mcpFrame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"></iframe>
+      <script>
+      (function() {
+        const widgetHtmlBase64 = \(jsString(widgetHTMLBase64));
+        const widgetHtml = new TextDecoder('utf-8').decode(Uint8Array.from(atob(widgetHtmlBase64), c => c.charCodeAt(0)));
+        const parseJson = (raw, fallback) => {
+          try { return raw ? JSON.parse(raw) : fallback; }
+          catch (error) { console.warn('[McpUiHost] JSON parse failed', error); return fallback; }
+        };
+        const postNative = (payload) => {
+          try { window.webkit.messageHandlers.mcpWidget.postMessage(payload || {}); }
+          catch (error) { console.warn('[McpUiHost] native bridge missing', error); }
+        };
+        const frame = document.getElementById('mcpFrame');
+        const pending = {};
+        let nativeId = 1;
+        let didSendInitialToolData = false;
+        const widgetState = parseJson(\(jsString(widgetStateJson)), {});
+        let toolOutput = parseJson(\(jsString(toolOutputJson)), null);
+        const toolInput = parseJson(\(jsString(toolInputJson)), {});
+        const toolName = \(jsString(toolName));
+        const hostContext = {
+          theme: window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
+          locale: navigator.language || 'ko',
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Seoul',
+          platform: 'mobile',
+          displayMode: 'inline',
+          availableDisplayModes: ['inline', 'fullscreen'],
+          containerDimensions: { maxHeight: 6000 },
+          userAgent: navigator.userAgent,
+          deviceCapabilities: { touch: true, hover: false },
+          toolInfo: { tool: widgetState.toolDefinition || { name: toolName || 'tool', inputSchema: { type: 'object' } } }
+        };
+        function postToApp(message) {
+          if (!frame.contentWindow) return;
+          frame.contentWindow.postMessage(Object.assign({ jsonrpc: '2.0' }, message || {}), '*');
+        }
+        function notifyApp(method, params) { postToApp({ method, params: params || {} }); }
+        function requestNative(method, params) {
+          const id = String(nativeId++);
+          return new Promise((resolve, reject) => {
+            pending[id] = { resolve, reject, method };
+            postNative({ type: 'mcpRequest', id, method, params: params || {} });
+          });
+        }
+        function sendInitialToolData(force) {
+          if (didSendInitialToolData && !force) return;
+          didSendInitialToolData = true;
+          notifyApp('ui/notifications/host-context-changed', hostContext);
+          notifyApp('ui/notifications/tool-input', { arguments: toolInput || {} });
+          if (toolOutput != null) notifyApp('ui/notifications/tool-result', toolOutput || {});
+        }
+        function resolveNative(id, result) {
+          const item = pending[id];
+          if (!item) return;
+          delete pending[id];
+          item.resolve(result || {});
+        }
+        function rejectNative(id, message) {
+          const item = pending[id];
+          if (!item) return;
+          delete pending[id];
+          item.reject(new Error(message || 'MCP request failed'));
+        }
+        window.__galleryMcpResolveRequest = resolveNative;
+        window.__galleryMcpRejectRequest = rejectNative;
+        window.__galleryMcpResolveCall = resolveNative;
+        window.__galleryMcpRejectCall = rejectNative;
+        function handleAppJsonRpc(message) {
+          if (!message || message.jsonrpc !== '2.0' || !message.method) return;
+          if (message.id == null) {
+            if (message.method === 'ui/notifications/initialized') sendInitialToolData(true);
+            if (message.method === 'ui/notifications/size-changed' && message.params && message.params.height) {
+              const h = Math.max(180, Math.min(6000, Number(message.params.height) || 620));
+              frame.style.height = h + 'px';
+            }
+            return;
+          }
+          const id = message.id;
+          const params = message.params || {};
+          const respond = (result) => postToApp({ id, result: result || {} });
+          const reject = (error) => postToApp({ id, error: { code: -32603, message: String(error && error.message || error || 'MCP Apps host error') } });
+          switch (message.method) {
+            case 'ui/initialize':
+              respond({
+                protocolVersion: '2026-01-26',
+                hostInfo: { name: 'gallery-ios', version: '0.1.0' },
+                hostCapabilities: {
+                  openLinks: {},
+                  serverTools: { listChanged: false },
+                  serverResources: { listChanged: false },
+                  logging: {},
+                  updateModelContext: { text: {}, image: {}, audio: {}, resource: {}, resourceLink: {}, structuredContent: {} },
+                  message: { text: {}, image: {}, audio: {}, structuredContent: {} }
+                },
+                hostContext
+              });
+              break;
+            case 'tools/call':
+            case 'tools/list':
+            case 'resources/list':
+            case 'resources/read':
+              requestNative(message.method, params).then((result) => {
+                if (message.method === 'tools/call') {
+                  toolOutput = result || {};
+                  notifyApp('ui/notifications/tool-result', toolOutput);
+                }
+                respond(result);
+              }).catch(reject);
+              break;
+            case 'ui/open-link':
+              if (params.url) postNative({ type: 'openExternal', url: params.url });
+              respond({});
+              break;
+            case 'ui/request-display-mode':
+              hostContext.displayMode = params.mode === 'fullscreen' ? 'fullscreen' : 'inline';
+              notifyApp('ui/notifications/host-context-changed', { displayMode: hostContext.displayMode });
+              respond({ mode: hostContext.displayMode });
+              break;
+            case 'ui/update-model-context':
+              window.__galleryModelContext = params;
+              respond({});
+              break;
+            case 'ui/message':
+              window.__galleryLastAppMessage = params;
+              respond({});
+              break;
+            case 'ping':
+              respond({});
+              break;
+            default:
+              reject('Unsupported MCP Apps method: ' + message.method);
+          }
+        }
+        window.addEventListener('message', (event) => {
+          if (event.source !== frame.contentWindow) return;
+          if (event.data && event.data.__galleryWidgetMessage === 'setWidgetState') {
+            postNative({ type: 'setWidgetState', widgetState: event.data.widgetState || {} });
+            return;
+          }
+          handleAppJsonRpc(event.data);
+        });
+        frame.addEventListener('load', () => setTimeout(() => sendInitialToolData(false), 25));
+        frame.srcdoc = widgetHtml;
+      })();
+      </script>
+    </body>
+    </html>
+    """
+  }
+
+  static func innerBridgeScript(toolName: String?, toolInputJson: String, toolOutputJson: String, widgetStateJson: String) -> String {
     """
     <script>
     (function() {
       const parseJson = (raw, fallback) => {
         try { return raw ? JSON.parse(raw) : fallback; }
-        catch (error) { console.warn('[McpUiHost] JSON parse failed', error); return fallback; }
+        catch (error) { console.warn('[McpUiAppCompat] JSON parse failed', error); return fallback; }
       };
-      const postNative = (payload) => {
-        try { window.webkit.messageHandlers.mcpWidget.postMessage(payload || {}); }
-        catch (error) { console.warn('[McpUiHost] native bridge missing', error); }
-      };
-      const postJsonRpc = (message) => window.postMessage(Object.assign({ jsonrpc: '2.0' }, message || {}), '*');
-      const notifyMcpApp = (method, params) => postJsonRpc({ method, params: params || {} });
-      const dispatchGlobals = (globals) => window.dispatchEvent(new CustomEvent('openai:set_globals', { detail: { globals } }));
       const pending = {};
-      let callId = 1;
+      let requestId = 1;
+      const dispatchGlobals = (globals) => window.dispatchEvent(new CustomEvent('openai:set_globals', { detail: { globals } }));
+      function rpc(method, params) {
+        const id = String(requestId++);
+        return new Promise((resolve, reject) => {
+          pending[id] = { resolve, reject, method };
+          window.parent.postMessage({ jsonrpc: '2.0', id, method, params: params || {} }, '*');
+        });
+      }
       const hostContext = {
         theme: window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
         locale: navigator.language || 'ko',
-        platform: 'ios',
+        platform: 'mobile',
         displayMode: 'inline',
         userAgent: navigator.userAgent,
-      };
-      const updateWidgetState = (nextState) => {
-        host.widgetState = nextState || {};
-        postNative({ type: 'setWidgetState', widgetState: host.widgetState });
-        dispatchGlobals({ widgetState: host.widgetState });
       };
       const host = {
         __hostType: 'mcp-apps',
@@ -206,46 +450,47 @@ private struct GalleryMCPWidgetPayload {
         view: {},
         modelContext: null,
         callTool(name, args) {
-          const id = String(callId++);
-          notifyMcpApp('ui/notifications/tool-input', { arguments: args || {} });
-          return new Promise((resolve, reject) => {
-            pending[id] = { resolve, reject };
-            postNative({ type: 'callTool', id, name, arguments: args || {} });
+          return rpc('tools/call', { name, arguments: args || {} }).then((result) => {
+            host.toolOutput = result || {};
+            host.toolResponseMetadata = result && result._meta ? result._meta : {};
+            dispatchGlobals({ toolOutput: host.toolOutput, toolResponseMetadata: host.toolResponseMetadata, widgetState: host.widgetState });
+            return result;
           });
         },
         setWidgetState(nextState) {
-          const merged = Object.assign({}, host.widgetState || {}, nextState || {});
-          updateWidgetState(merged);
-          return Promise.resolve(merged);
+          host.widgetState = Object.assign({}, host.widgetState || {}, nextState || {});
+          window.parent.postMessage({ __galleryWidgetMessage: 'setWidgetState', widgetState: host.widgetState }, '*');
+          dispatchGlobals({ widgetState: host.widgetState });
+          return Promise.resolve(host.widgetState);
         },
         requestDisplayMode({ mode } = {}) {
-          host.displayMode = mode || 'inline';
-          hostContext.displayMode = host.displayMode;
-          document.documentElement.dataset.displayMode = host.displayMode;
-          notifyMcpApp('ui/notifications/host-context-changed', hostContext);
-          dispatchGlobals({ displayMode: host.displayMode, theme: host.theme, locale: host.locale });
-          return Promise.resolve({ mode: host.displayMode });
+          return rpc('ui/request-display-mode', { mode: mode || 'inline' }).then((result) => {
+            host.displayMode = result && result.mode || mode || 'inline';
+            hostContext.displayMode = host.displayMode;
+            document.documentElement.dataset.displayMode = host.displayMode;
+            dispatchGlobals({ displayMode: host.displayMode, theme: host.theme, locale: host.locale });
+            return { mode: host.displayMode };
+          });
         },
         requestModal(payload = {}) { return Promise.resolve(payload); },
         requestClose() { return Promise.resolve(true); },
-        updateModelContext(payload = {}) { host.modelContext = payload; return Promise.resolve(payload); },
-        sendFollowUpMessage(payload = {}) { return Promise.resolve(payload); },
+        updateModelContext(payload = {}) { host.modelContext = payload; return rpc('ui/update-model-context', payload).catch(() => ({})); },
+        sendFollowUpMessage(payload = {}) {
+          const message = typeof payload === 'string' ? { role: 'user', content: [{ type: 'text', text: payload }] } : payload;
+          return rpc('ui/message', message).catch(() => ({}));
+        },
         openExternal({ href, url } = {}) {
           const target = href || url;
-          if (target) postNative({ type: 'openExternal', url: target });
-          return Promise.resolve({ href: target });
+          return target ? rpc('ui/open-link', { url: target }).catch(() => ({})) : Promise.resolve({});
         },
-        notifyIntrinsicHeight(height) { host.maxHeight = height || null; return Promise.resolve({ height }); },
+        notifyIntrinsicHeight(height) { host.maxHeight = height || null; window.parent.postMessage({ jsonrpc: '2.0', method: 'ui/notifications/size-changed', params: { height } }, '*'); return Promise.resolve({ height }); },
         notifyToolsListChanged() { return Promise.resolve(true); }
       };
       const mcpApp = {
         callTool(name, args) { return host.callTool(name, args || {}); },
-        sendMessage(text, role) {
-          host.lastMessage = { role: role || 'user', content: [{ type: 'text', text: String(text || '') }] };
-          return Promise.resolve({});
-        },
-        updateContext(contentBlocks) { host.modelContext = { content: Array.isArray(contentBlocks) ? contentBlocks : [{ type: 'text', text: String(contentBlocks || '') }] }; return Promise.resolve({}); },
-        openLink(url) { if (url) postNative({ type: 'openExternal', url }); return Promise.resolve({}); },
+        sendMessage(text, role) { return host.sendFollowUpMessage({ role: role || 'user', content: [{ type: 'text', text: String(text || '') }] }); },
+        updateContext(contentBlocks) { return host.updateModelContext({ content: Array.isArray(contentBlocks) ? contentBlocks : [{ type: 'text', text: String(contentBlocks || '') }] }); },
+        openLink(url) { return host.openExternal({ url }); },
         get hostContext() { return hostContext; },
         get initialized() { return true; },
         onToolInput(callback) { if (typeof callback === 'function') callback({ arguments: host.toolInput || {} }); },
@@ -254,54 +499,38 @@ private struct GalleryMCPWidgetPayload {
         onHostContextChanged(callback) { if (typeof callback === 'function') callback(hostContext); },
         onTeardown(callback) {},
       };
-      window.__galleryMcpResolveCall = (id, result) => {
-        const item = pending[id];
-        if (!item) return;
-        delete pending[id];
-        host.toolOutput = result;
-        host.toolResponseMetadata = result && result._meta ? result._meta : {};
-        updateWidgetState(Object.assign({}, host.widgetState || {}, { lastToolOutput: result, currentToolName: host.toolName }));
-        notifyMcpApp('ui/notifications/tool-result', result || {});
-        dispatchGlobals({ toolOutput: host.toolOutput, toolResponseMetadata: host.toolResponseMetadata, widgetState: host.widgetState });
-        item.resolve(result);
-      };
-      window.__galleryMcpRejectCall = (id, message) => {
-        const item = pending[id];
-        if (!item) return;
-        delete pending[id];
-        item.reject(new Error(message || 'Tool call failed'));
-      };
-      window.__mcpBridge = (message) => {
-        if (!message || message.jsonrpc !== '2.0' || !message.method) return;
-        const id = message.id;
-        const respond = (result) => postJsonRpc({ id, result: result || {} });
-        switch (message.method) {
-          case 'ui/initialize':
-            respond({ protocolVersion: '2026-01-26', hostInfo: { name: 'gallery-ios', version: '0.1.0' }, hostCapabilities: { serverTools: {}, openLinks: {}, logging: {} }, hostContext });
-            notifyMcpApp('ui/notifications/host-context-changed', hostContext);
-            notifyMcpApp('ui/notifications/tool-input', { arguments: host.toolInput || {} });
-            if (host.toolOutput != null) notifyMcpApp('ui/notifications/tool-result', host.toolOutput || {});
-            break;
-          case 'tools/call':
-            host.callTool(message.params && message.params.name, (message.params && message.params.arguments) || {}).then(respond);
-            break;
-          case 'ui/open-link':
-            mcpApp.openLink(message.params && message.params.url); respond({}); break;
-          case 'ping': respond({}); break;
-          default: postJsonRpc({ id, error: { code: -32603, message: 'Unsupported MCP bridge method: ' + message.method } });
+      window.addEventListener('message', (event) => {
+        if (event.source !== window.parent) return;
+        const message = event.data;
+        if (!message || message.jsonrpc !== '2.0') return;
+        if (message.id != null && pending[message.id]) {
+          const item = pending[message.id];
+          delete pending[message.id];
+          if (message.error) item.reject(new Error(message.error.message || 'MCP request failed'));
+          else item.resolve(message.result || {});
+          return;
         }
-      };
+        if (message.method === 'ui/notifications/tool-input') {
+          host.toolInput = message.params && message.params.arguments || {};
+          dispatchGlobals({ toolInput: host.toolInput });
+        } else if (message.method === 'ui/notifications/tool-result') {
+          host.toolOutput = message.params || {};
+          host.toolResponseMetadata = host.toolOutput && host.toolOutput._meta ? host.toolOutput._meta : {};
+          dispatchGlobals({ toolOutput: host.toolOutput, toolResponseMetadata: host.toolResponseMetadata });
+        } else if (message.method === 'ui/notifications/host-context-changed') {
+          Object.assign(hostContext, message.params || {});
+          host.theme = hostContext.theme || host.theme;
+          host.locale = hostContext.locale || host.locale;
+          host.displayMode = hostContext.displayMode || host.displayMode;
+          dispatchGlobals({ theme: host.theme, locale: host.locale, displayMode: host.displayMode });
+        }
+      });
       window.mcpApp = mcpApp;
       window.__mcpAppsCompatOpenAI = host;
       window.openai = host;
       document.documentElement.lang = host.locale || document.documentElement.lang || 'ko';
       document.documentElement.dataset.displayMode = host.displayMode;
       dispatchGlobals({ toolName: host.toolName, toolInput: host.toolInput, toolOutput: host.toolOutput, toolResponseMetadata: host.toolResponseMetadata, widgetState: host.widgetState, theme: host.theme, locale: host.locale, displayMode: host.displayMode });
-      setTimeout(() => {
-        notifyMcpApp('ui/notifications/host-context-changed', hostContext);
-        notifyMcpApp('ui/notifications/tool-input', { arguments: host.toolInput || {} });
-        if (host.toolOutput != null) notifyMcpApp('ui/notifications/tool-result', host.toolOutput || {});
-      }, 0);
     })();
     </script>
     """
@@ -309,6 +538,14 @@ private struct GalleryMCPWidgetPayload {
 
   static func jsString(_ value: String?) -> String {
     jsonLiteral(value ?? "")
+  }
+
+  static func escapeHTMLAttribute(_ value: String) -> String {
+    value
+      .replacingOccurrences(of: "&", with: "&amp;")
+      .replacingOccurrences(of: "\"", with: "&quot;")
+      .replacingOccurrences(of: "<", with: "&lt;")
+      .replacingOccurrences(of: ">", with: "&gt;")
   }
 
   static func jsonLiteral(_ value: Any) -> String {
