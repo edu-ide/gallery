@@ -71,6 +71,7 @@ import com.google.ai.edge.gallery.ui.unifiedchat.messages.ChatMessageMcpWidgetCa
 import com.google.ai.edge.gallery.ui.unifiedchat.session.UnifiedChatPersistedSession
 import com.google.ai.edge.gallery.ui.unifiedchat.session.UnifiedChatSessionFileStore
 import com.google.ai.edge.gallery.ui.unifiedchat.session.decodePersistedChatMessage
+import com.google.ai.edge.gallery.ui.unifiedchat.session.buildUnifiedChatSessionId
 import com.google.ai.edge.gallery.ui.unifiedchat.session.encodePersistableChatMessage
 import com.google.ai.edge.gallery.ui.unifiedchat.session.deriveConversationTitleFromUnifiedMessages
 import com.google.ai.edge.gallery.ui.unifiedchat.session.toUnifiedChatMessages
@@ -588,28 +589,10 @@ fun ChatViewWrapper(
   )
 }
 
-private fun buildUnifiedChatSessionId(
-  taskId: String,
-  modelName: String,
-  entryHint: UnifiedChatEntryHint,
-): String = "$taskId::$modelName::${entryHint.toPersistenceKey()}"
-
 internal fun shouldRestorePersistedUnifiedSession(
   hasHandledRestoreForSession: Boolean,
   currentMessages: List<ChatMessage>,
 ): Boolean = !hasHandledRestoreForSession && currentMessages.isEmpty()
-
-private fun UnifiedChatEntryHint.toPersistenceKey(): String =
-  buildString {
-    append("image=")
-    append(activateImage)
-    append(";audio=")
-    append(activateAudio)
-    append(";skills=")
-    append(activateSkills)
-    append(";mcp=")
-    append(activateMcpConnectorIds.sorted().joinToString(","))
-  }
 
 private fun persistUnifiedSessionSnapshot(
   sessionFileStore: UnifiedChatSessionFileStore,

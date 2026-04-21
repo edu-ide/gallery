@@ -16,6 +16,7 @@
 
 package com.google.ai.edge.gallery.ui.unifiedchat.session
 
+import com.google.ai.edge.gallery.ui.unifiedchat.UnifiedChatEntryHint
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSnapshot
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -59,6 +60,12 @@ fun decodeUnifiedChatPersistedSession(jsonValue: String): UnifiedChatPersistedSe
       persistedJson.decodeFromString(PersistedSessionSchema.serializer(), jsonValue).toValidatedSession()
     }
     .getOrNull()
+
+fun buildUnifiedChatSessionId(
+  taskId: String,
+  modelName: String,
+  entryHint: UnifiedChatEntryHint,
+): String = "$taskId::$modelName::${entryHint.toPersistenceKey()}"
 
 fun unifiedChatSessionFileName(id: String): String = "${percentEncode(id)}.json"
 
@@ -145,3 +152,15 @@ private fun Char.isUnreservedUrlChar(): Boolean =
     this == '.' ||
     this == '_' ||
     this == '~'
+
+private fun UnifiedChatEntryHint.toPersistenceKey(): String =
+  buildString {
+    append("image=")
+    append(activateImage)
+    append(";audio=")
+    append(activateAudio)
+    append(";skills=")
+    append(activateSkills)
+    append(";mcp=")
+    append(activateMcpConnectorIds.sorted().joinToString(","))
+  }

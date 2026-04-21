@@ -6,23 +6,35 @@ struct GalleryChatView: View {
   let connectors: [GalleryConnector]
   let entryHint: UnifiedChatEntryHint
 
+  private let sessionId: String
+  private let sessionStore = GallerySessionStore()
   @State private var sessionState: UnifiedChatSessionState
 
   init(model: GalleryModel, connectors: [GalleryConnector], entryHint: UnifiedChatEntryHint) {
     self.model = model
     self.connectors = connectors
     self.entryHint = entryHint
-    _sessionState = State(
-      initialValue: UnifiedChatSessionStateKt.createUnifiedChatSessionState(
-        modelName: model.name,
-        modelDisplayName: model.shortName,
-        taskId: model.taskId,
-        modelCapabilities: model.capabilities,
-        entryHint: entryHint,
-        visibleConnectorIds: connectors.map(\.id),
-        initialDraft: model.recommendedPrompt
-      )
+    let computedSessionId = UnifiedChatPersistedSessionKt.buildUnifiedChatSessionId(
+      taskId: model.taskId,
+      modelName: model.name,
+      entryHint: entryHint
     )
+    self.sessionId = computedSessionId
+    let initialState = UnifiedChatSessionStateKt.createUnifiedChatSessionState(
+      modelName: model.name,
+      modelDisplayName: model.shortName,
+      taskId: model.taskId,
+      modelCapabilities: model.capabilities,
+      entryHint: entryHint,
+      visibleConnectorIds: connectors.map(\.id),
+      initialDraft: model.recommendedPrompt
+    )
+    let store = GallerySessionStore()
+    if let persisted = store.load(id: computedSessionId) {
+      _sessionState = State(initialValue: initialState.restoring(persisted))
+    } else {
+      _sessionState = State(initialValue: initialState)
+    }
   }
 
   var body: some View {
@@ -68,6 +80,9 @@ struct GalleryChatView: View {
         }
       }
     }
+    .onChange(of: sessionState.messages.count) { _, _ in persistSession() }
+    .onChange(of: sessionState.connectorBarState.activeConnectorIds.count) { _, _ in persistSession() }
+    .onDisappear { persistSession() }
   }
 
   private var statusHeader: some View {
@@ -170,6 +185,14 @@ struct GalleryChatView: View {
     }
     .padding()
     .background(.bar)
+  }
+
+  private func persistSession() {
+    if let persisted = sessionState.persistedSession(id: sessionId) {
+      sessionStore.save(persisted)
+    } else {
+      sessionStore.delete(id: sessionId)
+    }
   }
 
   private func supports(_ capability: UnifiedChatCapability) -> Bool {
