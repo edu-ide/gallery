@@ -16,8 +16,6 @@
 
 package com.google.ai.edge.gallery.ui.unifiedchat
 
-import com.google.ai.edge.gallery.data.Model
-
 fun interface UnifiedChatCapabilityProvider {
-  fun isEnabled(model: Model, entryHint: UnifiedChatEntryHint): Boolean
+  fun isEnabled(modelCapabilities: UnifiedChatModelCapabilities, entryHint: UnifiedChatEntryHint): Boolean
 }

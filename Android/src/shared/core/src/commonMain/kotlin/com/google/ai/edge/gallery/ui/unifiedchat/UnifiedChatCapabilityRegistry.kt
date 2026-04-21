@@ -16,16 +16,18 @@
 
 package com.google.ai.edge.gallery.ui.unifiedchat
 
-import com.google.ai.edge.gallery.data.Model
-
 class UnifiedChatCapabilityRegistry(
   private val providers: Map<UnifiedChatCapability, UnifiedChatCapabilityProvider>,
 ) {
-  fun resolve(model: Model, entryHint: UnifiedChatEntryHint): UnifiedChatCapabilityResolution {
+  fun resolve(
+    modelCapabilities: UnifiedChatModelCapabilities,
+    entryHint: UnifiedChatEntryHint,
+  ): UnifiedChatCapabilityResolution {
     val enabled =
       providers.entries
         .filter { (capability, provider) ->
-          model.supportsUnifiedChatCapability(capability) && provider.isEnabled(model, entryHint)
+          modelCapabilities.supportsUnifiedChatCapability(capability) &&
+            provider.isEnabled(modelCapabilities, entryHint)
         }
         .map { it.key }
         .toSet()

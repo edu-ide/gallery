@@ -16,19 +16,29 @@
 
 package com.google.ai.edge.gallery.ui.unifiedchat.mcp
 
-import com.google.gson.Gson
+enum class McpWidgetDisplayMode {
+  INLINE,
+  FULLSCREEN,
+}
 
-data class McpWidgetSnapshot(
-  val connectorId: String,
-  val title: String,
-  val summary: String,
-  val widgetStateJson: String,
+data class McpWidgetHostState(
+  val activeSnapshot: McpWidgetSnapshot? = null,
+  val displayMode: McpWidgetDisplayMode = McpWidgetDisplayMode.INLINE,
 ) {
-  fun toJson(): String = gson.toJson(this)
+  fun activate(snapshot: McpWidgetSnapshot, fullscreen: Boolean): McpWidgetHostState =
+    copy(
+      activeSnapshot = snapshot,
+      displayMode =
+        if (fullscreen) {
+          McpWidgetDisplayMode.FULLSCREEN
+        } else {
+          McpWidgetDisplayMode.INLINE
+        },
+    )
 
-  companion object {
-    private val gson = Gson()
-
-    fun fromJson(json: String): McpWidgetSnapshot = gson.fromJson(json, McpWidgetSnapshot::class.java)
-  }
+  fun close(): McpWidgetHostState =
+    copy(
+      activeSnapshot = null,
+      displayMode = McpWidgetDisplayMode.INLINE,
+    )
 }

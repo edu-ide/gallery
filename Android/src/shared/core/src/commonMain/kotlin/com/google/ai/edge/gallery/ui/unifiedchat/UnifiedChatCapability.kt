@@ -16,8 +16,6 @@
 
 package com.google.ai.edge.gallery.ui.unifiedchat
 
-import com.google.ai.edge.gallery.data.Model
-
 enum class UnifiedChatCapability {
   TEXT,
   IMAGE,
@@ -26,38 +24,46 @@ enum class UnifiedChatCapability {
   MCP_CONNECTOR,
 }
 
+data class UnifiedChatModelCapabilities(
+  val supportsImage: Boolean = false,
+  val supportsAudio: Boolean = false,
+)
+
 data class UnifiedChatCapabilityResolution(
   val enabledCapabilities: Set<UnifiedChatCapability>,
   val activeConnectorIds: List<String>,
 )
 
-internal fun Model.supportsUnifiedChatCapability(
+fun UnifiedChatModelCapabilities.supportsUnifiedChatCapability(
   requiredCapability: UnifiedChatCapability
 ): Boolean {
   return when (requiredCapability) {
     UnifiedChatCapability.TEXT,
     UnifiedChatCapability.SKILLS,
     UnifiedChatCapability.MCP_CONNECTOR -> true
-    UnifiedChatCapability.IMAGE -> llmSupportImage
-    UnifiedChatCapability.AUDIO -> llmSupportAudio
+    UnifiedChatCapability.IMAGE -> supportsImage
+    UnifiedChatCapability.AUDIO -> supportsAudio
   }
 }
 
-internal fun recommendCompatibleModelFromPools(
-  currentTaskModels: List<Model>,
-  unifiedChatModels: List<Model>,
+fun <T> recommendCompatibleModelFromPools(
+  currentTaskModels: List<T>,
+  unifiedChatModels: List<T>,
   requiredCapability: UnifiedChatCapability,
-): Model? {
+  modelKey: (T) -> String,
+  modelCapabilities: (T) -> UnifiedChatModelCapabilities,
+): T? {
+  val currentKeys = currentTaskModels.map(modelKey).toSet()
   val dedupedModelPool =
     buildList {
       addAll(currentTaskModels)
       unifiedChatModels.forEach { candidate ->
-        if (currentTaskModels.none { existing -> existing.name == candidate.name }) {
+        if (!currentKeys.contains(modelKey(candidate))) {
           add(candidate)
         }
       }
     }
   return dedupedModelPool.firstOrNull { model ->
-    model.supportsUnifiedChatCapability(requiredCapability)
+    modelCapabilities(model).supportsUnifiedChatCapability(requiredCapability)
   }
 }

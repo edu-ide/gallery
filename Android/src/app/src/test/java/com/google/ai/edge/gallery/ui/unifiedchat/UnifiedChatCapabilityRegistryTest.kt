@@ -9,11 +9,11 @@ class UnifiedChatCapabilityRegistryTest {
     mapOf(
       UnifiedChatCapability.IMAGE to
         UnifiedChatCapabilityProvider { candidate, hint ->
-          hint.activateImage && candidate.llmSupportImage
+          hint.activateImage && candidate.supportsImage
         },
       UnifiedChatCapability.AUDIO to
         UnifiedChatCapabilityProvider { candidate, hint ->
-          hint.activateAudio && candidate.llmSupportAudio
+          hint.activateAudio && candidate.supportsAudio
         },
       UnifiedChatCapability.SKILLS to
         UnifiedChatCapabilityProvider { _, hint -> hint.activateSkills },
@@ -33,7 +33,7 @@ class UnifiedChatCapabilityRegistryTest {
 
     val result =
       UnifiedChatCapabilityRegistry(providers).resolve(
-        model = model,
+        modelCapabilities = model.toUnifiedChatModelCapabilities(),
         entryHint =
           UnifiedChatEntryHint(
             activateImage = true,
@@ -64,7 +64,7 @@ class UnifiedChatCapabilityRegistryTest {
       UnifiedChatCapabilityRegistry(
         providers = providers + (UnifiedChatCapability.MCP_CONNECTOR to UnifiedChatCapabilityProvider { _, _ -> false })
       ).resolve(
-        model = model,
+        modelCapabilities = model.toUnifiedChatModelCapabilities(),
         entryHint =
           UnifiedChatEntryHint(
             activateMcpConnectorIds = listOf("ugot_fortune"),
@@ -87,7 +87,7 @@ class UnifiedChatCapabilityRegistryTest {
             UnifiedChatCapability.AUDIO to UnifiedChatCapabilityProvider { _, hint -> hint.activateAudio },
           )
       ).resolve(
-        model = textOnlyModel,
+        modelCapabilities = textOnlyModel.toUnifiedChatModelCapabilities(),
         entryHint =
           UnifiedChatEntryHint(
             activateImage = true,

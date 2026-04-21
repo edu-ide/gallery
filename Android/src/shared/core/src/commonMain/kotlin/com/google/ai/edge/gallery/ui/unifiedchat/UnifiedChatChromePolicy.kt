@@ -16,7 +16,7 @@
 
 package com.google.ai.edge.gallery.ui.unifiedchat
 
-internal data class UnifiedChatChromePolicy(
+data class UnifiedChatChromePolicy(
   val showInputHistoryInTopBar: Boolean,
   val showInputHistoryInComposerMenu: Boolean,
   val showConnectorLauncherInComposer: Boolean,
@@ -24,7 +24,7 @@ internal data class UnifiedChatChromePolicy(
   val showStandaloneAudioRecordButtonInComposer: Boolean,
 )
 
-internal fun resolveUnifiedChatChromePolicy(
+fun resolveUnifiedChatChromePolicy(
   hasVisibleConnectors: Boolean,
   supportsAudioInput: Boolean = false,
 ): UnifiedChatChromePolicy =
@@ -36,7 +36,7 @@ internal fun resolveUnifiedChatChromePolicy(
     showStandaloneAudioRecordButtonInComposer = supportsAudioInput,
   )
 
-internal fun buildConnectorLauncherLabel(activeConnectorCount: Int): String =
+fun buildConnectorLauncherLabel(activeConnectorCount: Int): String =
   if (activeConnectorCount > 0) {
     "Connectors ($activeConnectorCount)"
   } else {

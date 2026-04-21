@@ -16,11 +16,22 @@
 
 package com.google.ai.edge.gallery.ui.unifiedchat.mcp
 
-import android.content.Context
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 
-interface McpWidgetSessionHost {
-  val injectedWidgetHtml: String
-  val widgetBaseUrl: String
+@Serializable
+data class McpWidgetSnapshot(
+  val connectorId: String,
+  val title: String,
+  val summary: String,
+  val widgetStateJson: String,
+) {
+  fun toJson(): String = json.encodeToString(serializer(), this)
 
-  fun createJavascriptBridge(context: Context): Any
+  companion object {
+    private val json = Json { ignoreUnknownKeys = true }
+
+    fun fromJson(jsonValue: String): McpWidgetSnapshot =
+      json.decodeFromString(serializer(), jsonValue)
+  }
 }
