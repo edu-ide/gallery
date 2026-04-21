@@ -3,6 +3,10 @@ options:
   bundleIdPrefix: com.ugot
   deploymentTarget:
     iOS: "17.0"
+packages:
+  GoogleSignIn:
+    url: https://github.com/google/GoogleSignIn-iOS
+    from: 8.0.0
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -22,6 +26,14 @@ targets:
       properties:
         CFBundleDisplayName: Gallery iOS
         UILaunchScreen: {}
+        GIDClientID: "133048024494-v9q4qimam6cl70set38o8tdbj3mcr0ss.apps.googleusercontent.com"
+        GIDServerClientID: "133048024494-v9q4qimam6cl70set38o8tdbj3mcr0ss.apps.googleusercontent.com"
+        CFBundleURLTypes:
+          - CFBundleURLSchemes:
+              - "com.googleusercontent.apps.133048024494-v9q4qimam6cl70set38o8tdbj3mcr0ss"
+        NSCameraUsageDescription: "Use the camera to attach images to AI Chat."
+        NSMicrophoneUsageDescription: "Use the microphone to record audio for AI Chat."
+        NSPhotoLibraryUsageDescription: "Choose photos to attach to AI Chat."
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
@@ -52,6 +64,8 @@ targets:
         embed: false
       - framework: Vendor/LiteRTLM/GemmaModelConstraintProvider.xcframework
         embed: true
+      - package: GoogleSignIn
+        product: GoogleSignIn
     preBuildScripts:
       - name: Build LiteRT-LM iOS XCFrameworks
         basedOnDependencyAnalysis: false

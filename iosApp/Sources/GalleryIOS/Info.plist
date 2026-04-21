@@ -18,8 +18,27 @@
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.133048024494-v9q4qimam6cl70set38o8tdbj3mcr0ss</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>GIDClientID</key>
+	<string>133048024494-v9q4qimam6cl70set38o8tdbj3mcr0ss.apps.googleusercontent.com</string>
+	<key>GIDServerClientID</key>
+	<string>133048024494-v9q4qimam6cl70set38o8tdbj3mcr0ss.apps.googleusercontent.com</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Use the camera to attach images to AI Chat.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Use the microphone to record audio for AI Chat.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Choose photos to attach to AI Chat.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

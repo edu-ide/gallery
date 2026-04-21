@@ -2,13 +2,20 @@ import SwiftUI
 import GallerySharedCore
 
 struct ContentView: View {
+  @StateObject private var authViewModel = UgotAuthViewModel()
   @State private var didStartSmokeRun = false
 
   var body: some View {
-    GalleryHomeView()
-      .task {
-        await runLaunchSmokeTestIfRequested()
+    Group {
+      if authViewModel.isAuthenticated || ProcessInfo.processInfo.environment["GALLERY_IOS_BYPASS_AUTH"] == "1" {
+        GalleryHomeView(authViewModel: authViewModel)
+      } else {
+        UgotLoginView(authViewModel: authViewModel)
       }
+    }
+    .task {
+      await runLaunchSmokeTestIfRequested()
+    }
   }
 
   private func runLaunchSmokeTestIfRequested() async {

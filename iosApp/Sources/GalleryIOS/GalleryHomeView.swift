@@ -2,6 +2,7 @@ import SwiftUI
 import GallerySharedCore
 
 struct GalleryHomeView: View {
+  @ObservedObject var authViewModel: UgotAuthViewModel
   @State private var selectedConnectorIds: Set<String> = Set(GalleryConnector.defaultSelectedIds)
   @State private var recentSessions: [GallerySessionSummary] = []
   @State private var selectedModelId: String = GalleryModel.samples[0].id
@@ -40,6 +41,12 @@ struct GalleryHomeView: View {
       .navigationTitle("UGOT AI")
       .background(Color(.systemGroupedBackground))
       .onAppear { refreshRecentSessions() }
+    .toolbar {
+      ToolbarItem(placement: .topBarTrailing) {
+        Button("Sign out") { authViewModel.signOut() }
+          .font(.caption.weight(.semibold))
+      }
+    }
     }
   }
 
@@ -456,5 +463,5 @@ struct FlowLayout<Content: View>: View {
 }
 
 #Preview {
-  GalleryHomeView()
+  GalleryHomeView(authViewModel: UgotAuthViewModel())
 }
