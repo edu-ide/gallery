@@ -234,4 +234,26 @@ class SharedUnifiedChatCoreTest {
     assertEquals(null, parseUnifiedChatSessionId("bad-session-id"))
   }
 
+  @Test
+  fun unifiedChatSessionState_canAppendUserAndAssistantSeparatelyForRuntimeAdapters() {
+    val state =
+      createUnifiedChatSessionState(
+        modelName = "Gemma-4-E2B-it",
+        modelDisplayName = "Gemma E2B",
+        taskId = "llm_chat",
+        modelCapabilities = UnifiedChatModelCapabilities(),
+        entryHint = UnifiedChatEntryHint(),
+        visibleConnectorIds = emptyList(),
+        initialDraft = "  hello runtime  ",
+      )
+
+    val updated = state.appendUserMessage(state.draft).appendAssistantMessage("runtime response")
+
+    assertEquals("", updated.draft)
+    assertEquals(UnifiedChatMessageRole.USER, updated.messages[2].role)
+    assertEquals("hello runtime", updated.messages[2].text)
+    assertEquals(UnifiedChatMessageRole.ASSISTANT, updated.messages[3].role)
+    assertEquals("runtime response", updated.messages[3].text)
+  }
+
 }

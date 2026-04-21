@@ -13,11 +13,13 @@
 		45224C16D02F9E28798ABBC2 /* GallerySessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66C2D5A7B58BFC9562C5E7F3 /* GallerySessionStore.swift */; };
 		4BD5499ABD9192F4CCC34975 /* GalleryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA7EFE460A55FDE59E8B835E /* GalleryModel.swift */; };
 		6D059D4E41524FD7930DC7CF /* GalleryChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4081138E2A43FFE74CCA921 /* GalleryChatView.swift */; };
+		765C685217082553D39789A8 /* GalleryInferenceRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17BE82697D8BE3E8B0A08B88 /* GalleryInferenceRuntime.swift */; };
 		F4BE7EA22DF6575666C6C654 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AE27BD8E6AAC0726356E35B /* ContentView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		024400A0E7FEC65CE325154E /* GalleryHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryHomeView.swift; sourceTree = "<group>"; };
+		17BE82697D8BE3E8B0A08B88 /* GalleryInferenceRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryInferenceRuntime.swift; sourceTree = "<group>"; };
 		249D1AA722EC6D4A13162CDB /* GalleryIOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = GalleryIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		66C2D5A7B58BFC9562C5E7F3 /* GallerySessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GallerySessionStore.swift; sourceTree = "<group>"; };
 		6AE27BD8E6AAC0726356E35B /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -46,6 +48,7 @@
 				6AE27BD8E6AAC0726356E35B /* ContentView.swift */,
 				C4081138E2A43FFE74CCA921 /* GalleryChatView.swift */,
 				024400A0E7FEC65CE325154E /* GalleryHomeView.swift */,
+				17BE82697D8BE3E8B0A08B88 /* GalleryInferenceRuntime.swift */,
 				BBEADB975A13B5134A4073A4 /* GalleryIOSApp.swift */,
 				FA7EFE460A55FDE59E8B835E /* GalleryModel.swift */,
 				66C2D5A7B58BFC9562C5E7F3 /* GallerySessionStore.swift */,
@@ -172,6 +175,7 @@
 				6D059D4E41524FD7930DC7CF /* GalleryChatView.swift in Sources */,
 				001D1C10C1E418CE2B5EACDE /* GalleryHomeView.swift in Sources */,
 				115798245986EF1D6FA7942D /* GalleryIOSApp.swift in Sources */,
+				765C685217082553D39789A8 /* GalleryInferenceRuntime.swift in Sources */,
 				4BD5499ABD9192F4CCC34975 /* GalleryModel.swift in Sources */,
 				45224C16D02F9E28798ABBC2 /* GallerySessionStore.swift in Sources */,
 			);

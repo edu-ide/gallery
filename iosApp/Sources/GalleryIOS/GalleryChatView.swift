@@ -8,7 +8,9 @@ struct GalleryChatView: View {
 
   private let sessionId: String
   private let sessionStore = GallerySessionStore()
+  private let runtime: GalleryInferenceRuntime = StubGalleryInferenceRuntime()
   @State private var sessionState: UnifiedChatSessionState
+  @State private var isGenerating = false
 
   init(model: GalleryModel, connectors: [GalleryConnector], entryHint: UnifiedChatEntryHint) {
     self.model = model
@@ -175,16 +177,49 @@ struct GalleryChatView: View {
         .lineLimit(1...4)
         .textFieldStyle(.roundedBorder)
         Button {
-          sessionState = sessionState.submitDraft(responsePrefix: "Stub response")
+          sendDraftThroughRuntime()
         } label: {
-          Image(systemName: "arrow.up.circle.fill")
-            .font(.title2)
+          if isGenerating {
+            ProgressView()
+              .controlSize(.small)
+          } else {
+            Image(systemName: "arrow.up.circle.fill")
+              .font(.title2)
+          }
         }
-        .disabled(sessionState.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .disabled(isGenerating || sessionState.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
       }
     }
     .padding()
     .background(.bar)
+  }
+
+  private func sendDraftThroughRuntime() {
+    let prompt = sessionState.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !prompt.isEmpty, !isGenerating else { return }
+
+    let request = GalleryInferenceRequest(
+      modelName: sessionState.modelName,
+      modelDisplayName: sessionState.modelDisplayName,
+      prompt: prompt,
+      route: sessionState.route(),
+      activeConnectorIds: Array(sessionState.connectorBarState.activeConnectorIds).sorted(),
+      supportsImage: supports(.image),
+      supportsAudio: supports(.audio)
+    )
+
+    sessionState = sessionState.appendUserMessage(text: prompt)
+    isGenerating = true
+    persistSession()
+
+    Task {
+      let result = await runtime.generate(request: request)
+      await MainActor.run {
+        sessionState = sessionState.appendAssistantMessage(text: "[\(result.runtimeName)] \(result.text)")
+        isGenerating = false
+        persistSession()
+      }
+    }
   }
 
   private func persistSession() {

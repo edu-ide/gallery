@@ -56,6 +56,15 @@ data class UnifiedChatSessionState(
   fun toggleConnector(connectorId: String): UnifiedChatSessionState =
     copy(connectorBarState = connectorBarState.toggle(connectorId))
 
+  fun appendUserMessage(text: String): UnifiedChatSessionState {
+    val trimmedText = text.trim()
+    if (trimmedText.isEmpty()) {
+      return this
+    }
+    val appended = nextMessage(role = UnifiedChatMessageRole.USER, text = trimmedText)
+    return copy(messages = messages + appended.message, draft = "", nextMessageIndex = appended.nextIndex)
+  }
+
   fun appendAssistantMessage(text: String): UnifiedChatSessionState =
     appendMessage(role = UnifiedChatMessageRole.ASSISTANT, text = text)
 
@@ -68,7 +77,7 @@ data class UnifiedChatSessionState(
       return this
     }
 
-    val userMessage = nextMessage(role = UnifiedChatMessageRole.USER, text = trimmedDraft)
+    val withUserMessage = appendUserMessage(trimmedDraft)
     val activeConnectors = connectorBarState.activeConnectorIds.sorted()
     val connectorSummary =
       if (activeConnectors.isEmpty()) {
@@ -76,16 +85,9 @@ data class UnifiedChatSessionState(
       } else {
         activeConnectors.joinToString(", ")
       }
-    val assistantMessage =
-      userMessage.next(
-        role = UnifiedChatMessageRole.ASSISTANT,
-        text = "$responsePrefix from $modelDisplayName. Active connectors: $connectorSummary.",
-      )
 
-    return copy(
-      messages = messages + userMessage.message + assistantMessage.message,
-      draft = "",
-      nextMessageIndex = assistantMessage.nextIndex,
+    return withUserMessage.appendAssistantMessage(
+      "$responsePrefix from $modelDisplayName. Active connectors: $connectorSummary."
     )
   }
 
