@@ -8,26 +8,49 @@
 
 /* Begin PBXBuildFile section */
 		001D1C10C1E418CE2B5EACDE /* GalleryHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 024400A0E7FEC65CE325154E /* GalleryHomeView.swift */; };
+		02F114BB6CAF697F8372C153 /* GemmaModelConstraintProvider.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 5459EBE807B9509DD8E7F3AD /* GemmaModelConstraintProvider.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		0A2C28980BFBEAB26B6EE591 /* GallerySharedCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = FCEC6975CCF9D6917AE6D6F3 /* GallerySharedCore.xcframework */; };
+		0C3497332CDE02A3C90B5A10 /* LiteRTLM.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 058841216256B13C493F9A07 /* LiteRTLM.xcframework */; };
 		115798245986EF1D6FA7942D /* GalleryIOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBEADB975A13B5134A4073A4 /* GalleryIOSApp.swift */; };
 		2F3816210012D410429D6994 /* GalleryModelManagerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10CB47627EC18A453ABADD59 /* GalleryModelManagerView.swift */; };
 		45224C16D02F9E28798ABBC2 /* GallerySessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66C2D5A7B58BFC9562C5E7F3 /* GallerySessionStore.swift */; };
 		4BD5499ABD9192F4CCC34975 /* GalleryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA7EFE460A55FDE59E8B835E /* GalleryModel.swift */; };
 		6D059D4E41524FD7930DC7CF /* GalleryChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4081138E2A43FFE74CCA921 /* GalleryChatView.swift */; };
 		765C685217082553D39789A8 /* GalleryInferenceRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17BE82697D8BE3E8B0A08B88 /* GalleryInferenceRuntime.swift */; };
+		85E89DFA9C1AB5E675D87E2D /* GalleryLiteRTLMBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = 3227EDD9245CA33E78467C53 /* GalleryLiteRTLMBridge.mm */; };
+		D0F1823DA4FBE38BE2915A78 /* GemmaModelConstraintProvider.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5459EBE807B9509DD8E7F3AD /* GemmaModelConstraintProvider.xcframework */; };
 		F4BE7EA22DF6575666C6C654 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AE27BD8E6AAC0726356E35B /* ContentView.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		6FBAA9EA6687D4FBD08B450A /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				02F114BB6CAF697F8372C153 /* GemmaModelConstraintProvider.xcframework in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		024400A0E7FEC65CE325154E /* GalleryHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryHomeView.swift; sourceTree = "<group>"; };
+		058841216256B13C493F9A07 /* LiteRTLM.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = LiteRTLM.xcframework; path = Vendor/LiteRTLM/LiteRTLM.xcframework; sourceTree = "<group>"; };
 		10CB47627EC18A453ABADD59 /* GalleryModelManagerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryModelManagerView.swift; sourceTree = "<group>"; };
 		17BE82697D8BE3E8B0A08B88 /* GalleryInferenceRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryInferenceRuntime.swift; sourceTree = "<group>"; };
 		249D1AA722EC6D4A13162CDB /* GalleryIOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = GalleryIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3227EDD9245CA33E78467C53 /* GalleryLiteRTLMBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = GalleryLiteRTLMBridge.mm; sourceTree = "<group>"; };
+		5459EBE807B9509DD8E7F3AD /* GemmaModelConstraintProvider.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = GemmaModelConstraintProvider.xcframework; path = Vendor/LiteRTLM/GemmaModelConstraintProvider.xcframework; sourceTree = "<group>"; };
 		66C2D5A7B58BFC9562C5E7F3 /* GallerySessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GallerySessionStore.swift; sourceTree = "<group>"; };
 		6AE27BD8E6AAC0726356E35B /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		923455198CC1BB0067F6E793 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		BB6870C9CB1F1321CE90939A /* GalleryLiteRTLMBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GalleryLiteRTLMBridge.h; sourceTree = "<group>"; };
 		BBEADB975A13B5134A4073A4 /* GalleryIOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryIOSApp.swift; sourceTree = "<group>"; };
 		C4081138E2A43FFE74CCA921 /* GalleryChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryChatView.swift; sourceTree = "<group>"; };
+		E52CD9190ACFA31DD6CB7680 /* GalleryIOS-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "GalleryIOS-Bridging-Header.h"; sourceTree = "<group>"; };
 		FA7EFE460A55FDE59E8B835E /* GalleryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryModel.swift; sourceTree = "<group>"; };
 		FCEC6975CCF9D6917AE6D6F3 /* GallerySharedCore.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = GallerySharedCore.xcframework; path = ../Android/src/shared/core/build/XCFrameworks/release/GallerySharedCore.xcframework; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -38,6 +61,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				0A2C28980BFBEAB26B6EE591 /* GallerySharedCore.xcframework in Frameworks */,
+				0C3497332CDE02A3C90B5A10 /* LiteRTLM.xcframework in Frameworks */,
+				D0F1823DA4FBE38BE2915A78 /* GemmaModelConstraintProvider.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -51,7 +76,10 @@
 				C4081138E2A43FFE74CCA921 /* GalleryChatView.swift */,
 				024400A0E7FEC65CE325154E /* GalleryHomeView.swift */,
 				17BE82697D8BE3E8B0A08B88 /* GalleryInferenceRuntime.swift */,
+				E52CD9190ACFA31DD6CB7680 /* GalleryIOS-Bridging-Header.h */,
 				BBEADB975A13B5134A4073A4 /* GalleryIOSApp.swift */,
+				BB6870C9CB1F1321CE90939A /* GalleryLiteRTLMBridge.h */,
+				3227EDD9245CA33E78467C53 /* GalleryLiteRTLMBridge.mm */,
 				FA7EFE460A55FDE59E8B835E /* GalleryModel.swift */,
 				10CB47627EC18A453ABADD59 /* GalleryModelManagerView.swift */,
 				66C2D5A7B58BFC9562C5E7F3 /* GallerySessionStore.swift */,
@@ -64,6 +92,8 @@
 			isa = PBXGroup;
 			children = (
 				FCEC6975CCF9D6917AE6D6F3 /* GallerySharedCore.xcframework */,
+				5459EBE807B9509DD8E7F3AD /* GemmaModelConstraintProvider.xcframework */,
+				058841216256B13C493F9A07 /* LiteRTLM.xcframework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -100,9 +130,11 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 554EA7C3CF49A06C50B6D2E8 /* Build configuration list for PBXNativeTarget "GalleryIOS" */;
 			buildPhases = (
+				036035927722E64AEB3EC0DD /* Build LiteRT-LM iOS XCFrameworks */,
 				A6A040F762EB70FE8E0DDCFA /* Build GallerySharedCore XCFramework */,
 				C27934DF76E96BF31998BF74 /* Sources */,
 				BE22CA83F139B6857792281C /* Frameworks */,
+				6FBAA9EA6687D4FBD08B450A /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -148,6 +180,25 @@
 /* End PBXProject section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		036035927722E64AEB3EC0DD /* Build LiteRT-LM iOS XCFrameworks */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build LiteRT-LM iOS XCFrameworks";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "cd \"$SRCROOT\"\n./scripts/build_litertlm_ios_frameworks.sh\n";
+		};
 		A6A040F762EB70FE8E0DDCFA /* Build GallerySharedCore XCFramework */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -179,6 +230,7 @@
 				001D1C10C1E418CE2B5EACDE /* GalleryHomeView.swift in Sources */,
 				115798245986EF1D6FA7942D /* GalleryIOSApp.swift in Sources */,
 				765C685217082553D39789A8 /* GalleryInferenceRuntime.swift in Sources */,
+				85E89DFA9C1AB5E675D87E2D /* GalleryLiteRTLMBridge.mm in Sources */,
 				4BD5499ABD9192F4CCC34975 /* GalleryModel.swift in Sources */,
 				2F3816210012D410429D6994 /* GalleryModelManagerView.swift in Sources */,
 				45224C16D02F9E28798ABBC2 /* GallerySessionStore.swift in Sources */,
@@ -249,21 +301,23 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_CXX_LIBRARY = "libc++";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
+					"$(inherited) $(SRCROOT)/Vendor/LiteRTLM",
 					"\"../Android/src/shared/core/build/XCFrameworks/release\"",
+					"\"Vendor/LiteRTLM\"",
 				);
 				INFOPLIST_FILE = Sources/GalleryIOS/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-				);
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				OTHER_LDFLAGS = "$(inherited) -lc++ -framework AVFAudio -framework AudioToolbox -framework GemmaModelConstraintProvider -all_load";
 				PRODUCT_BUNDLE_IDENTIFIER = com.ugot.galleryios;
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/GalleryIOS/GalleryIOS-Bridging-Header.h";
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
@@ -336,21 +390,23 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
+				CLANG_CXX_LIBRARY = "libc++";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
+					"$(inherited) $(SRCROOT)/Vendor/LiteRTLM",
 					"\"../Android/src/shared/core/build/XCFrameworks/release\"",
+					"\"Vendor/LiteRTLM\"",
 				);
 				INFOPLIST_FILE = Sources/GalleryIOS/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-				);
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				OTHER_LDFLAGS = "$(inherited) -lc++ -framework AVFAudio -framework AudioToolbox -framework GemmaModelConstraintProvider -all_load";
 				PRODUCT_BUNDLE_IDENTIFIER = com.ugot.galleryios;
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/GalleryIOS/GalleryIOS-Bridging-Header.h";
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;

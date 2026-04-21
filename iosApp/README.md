@@ -60,11 +60,15 @@ Command-line signed install requires an Xcode account/provisioning profile for `
 - `StubGalleryInferenceRuntime` for local shell development
 - `LiteRTLMGalleryInferenceRuntime` as the selected iOS runtime path
 
-The iOS app targets LiteRT-LM for Gemma `.litertlm` execution. The adapter loads
-the LiteRT-LM C API dynamically, so the app still builds without committing a
-signed vendor framework into this repository. To enable real generation, bundle
-a signed LiteRT-LM iOS framework/dylib that exports symbols such as
-`litert_lm_engine_create` and put model files in one of:
+The iOS app targets LiteRT-LM for Gemma `.litertlm` execution. The Xcode target
+runs `scripts/build_litertlm_ios_frameworks.sh` before compilation; that script
+builds local LiteRT-LM iOS XCFrameworks from source and places them under
+`iosApp/Vendor/LiteRTLM/` (ignored by git because the artifacts are hundreds of
+MB). First build can take 30–60 minutes because Bazel compiles LiteRT-LM and its
+dependencies.
+
+The Swift runtime uses `GalleryLiteRTLMBridge` when the local XCFrameworks are
+linked. Put model files in one of:
 
 - app resources, e.g. `gemma-4-E2B-it.litertlm`
 - `Documents/GalleryModels/`

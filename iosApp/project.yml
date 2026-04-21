@@ -39,10 +39,25 @@ targets:
         SDKROOT: iphoneos
         SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
         SUPPORTS_MACCATALYST: "NO"
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/GalleryIOS/GalleryIOS-Bridging-Header.h
+        CLANG_CXX_LANGUAGE_STANDARD: c++20
+        CLANG_CXX_LIBRARY: libc++
+        FRAMEWORK_SEARCH_PATHS: "$(inherited) $(SRCROOT)/Vendor/LiteRTLM"
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
+        OTHER_LDFLAGS: "$(inherited) -lc++ -framework AVFAudio -framework AudioToolbox -framework GemmaModelConstraintProvider -all_load"
     dependencies:
       - framework: ../Android/src/shared/core/build/XCFrameworks/release/GallerySharedCore.xcframework
         embed: false
+      - framework: Vendor/LiteRTLM/LiteRTLM.xcframework
+        embed: false
+      - framework: Vendor/LiteRTLM/GemmaModelConstraintProvider.xcframework
+        embed: true
     preBuildScripts:
+      - name: Build LiteRT-LM iOS XCFrameworks
+        basedOnDependencyAnalysis: false
+        script: |
+          cd "$SRCROOT"
+          ./scripts/build_litertlm_ios_frameworks.sh
       - name: Build GallerySharedCore XCFramework
         basedOnDependencyAnalysis: false
         script: |

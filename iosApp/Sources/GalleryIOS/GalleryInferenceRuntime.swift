@@ -58,16 +58,44 @@ struct StubGalleryInferenceRuntime: GalleryInferenceRuntime {
 struct LiteRTLMGalleryInferenceRuntime: GalleryInferenceRuntime {
   let id = "litert-lm-ios"
   let displayName = "LiteRT-LM iOS"
-  var isAvailable: Bool { LiteRTLMDynamicCAPI.shared.isLoaded }
-  var statusMessage: String { LiteRTLMDynamicCAPI.shared.statusMessage }
+  var isAvailable: Bool { GalleryLiteRTLMBridge.isCompiledWithLiteRTLM() || LiteRTLMDynamicCAPI.shared.isLoaded }
+  var statusMessage: String {
+    if GalleryLiteRTLMBridge.isCompiledWithLiteRTLM() {
+      return "LiteRT-LM native bridge is linked. Put .litertlm files in Documents/GalleryModels or bundle them as app resources."
+    }
+    return LiteRTLMDynamicCAPI.shared.statusMessage
+  }
 
   func generate(request: GalleryInferenceRequest) async -> GalleryInferenceResult {
     await Task.detached(priority: .userInitiated) {
       GalleryInferenceResult(
-        text: LiteRTLMDynamicCAPI.shared.generate(request: request),
+        text: generateLiteRTLMText(request: request),
         runtimeName: id
       )
     }.value
+  }
+
+  private func generateLiteRTLMText(request: GalleryInferenceRequest) -> String {
+    if GalleryLiteRTLMBridge.isCompiledWithLiteRTLM() {
+      guard let modelPath = LiteRTLMDynamicCAPI.findModelPath(fileName: request.modelFileName) else {
+        return "LiteRT-LM native bridge is linked, but \(request.modelFileName) was not found. Copy it to Documents/GalleryModels/\(request.modelFileName) or add it to the app bundle resources, then run chat again."
+      }
+      do {
+        let text = try GalleryLiteRTLMBridge().generate(
+          withModelPath: modelPath,
+          prompt: request.prompt,
+          cacheDir: LiteRTLMDynamicCAPI.cacheDirectoryPath()
+        )
+        if !text.isEmpty {
+          return text
+        }
+        return "LiteRT-LM native bridge returned an empty response."
+      } catch {
+        return error.localizedDescription
+      }
+    }
+
+    return LiteRTLMDynamicCAPI.shared.generate(request: request)
   }
 }
 
@@ -292,7 +320,7 @@ private final class LiteRTLMDynamicCAPI {
     return paths
   }
 
-  private static func findModelPath(fileName: String) -> String? {
+  static func findModelPath(fileName: String) -> String? {
     let fileBase = (fileName as NSString).deletingPathExtension
     let fileExtension = (fileName as NSString).pathExtension
     if let bundled = Bundle.main.path(forResource: fileBase, ofType: fileExtension) {
@@ -320,7 +348,7 @@ private final class LiteRTLMDynamicCAPI {
     return nil
   }
 
-  private static func cacheDirectoryPath() -> String? {
+  static func cacheDirectoryPath() -> String? {
     let fileManager = FileManager.default
     guard let applicationSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
       return nil

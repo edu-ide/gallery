@@ -4,3 +4,5 @@ iosApp/DerivedData/
 *.xcuserstate
 iosApp/GalleryIOS.xcodeproj/xcuserdata/
 tmp/
+iosApp/Vendor/LiteRTLM/*.xcframework/
+!iosApp/Vendor/LiteRTLM/.gitkeep
