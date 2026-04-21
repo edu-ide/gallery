@@ -72,6 +72,8 @@ import com.google.ai.edge.gallery.ui.unifiedchat.session.UnifiedChatPersistedSes
 import com.google.ai.edge.gallery.ui.unifiedchat.session.UnifiedChatSessionFileStore
 import com.google.ai.edge.gallery.ui.unifiedchat.session.decodePersistedChatMessage
 import com.google.ai.edge.gallery.ui.unifiedchat.session.encodePersistableChatMessage
+import com.google.ai.edge.gallery.ui.unifiedchat.session.deriveConversationTitleFromUnifiedMessages
+import com.google.ai.edge.gallery.ui.unifiedchat.session.toUnifiedChatMessages
 import com.google.ai.edge.gallery.ui.theme.emptyStateContent
 import com.google.ai.edge.gallery.ui.theme.emptyStateTitle
 import java.io.File
@@ -629,34 +631,12 @@ private fun persistUnifiedSessionSnapshot(
   sessionFileStore.save(
     UnifiedChatPersistedSession(
       id = sessionId,
-      title = deriveConversationTitle(messages),
+      title = deriveConversationTitleFromUnifiedMessages(messages.toUnifiedChatMessages()),
       activeConnectorIds = activeConnectorIds,
       messagesJson = encodedMessages,
       widgetSnapshots = persistedWidgetSnapshots,
     )
   )
-}
-
-private fun deriveConversationTitle(messages: List<ChatMessage>): String {
-  val firstUserText =
-    messages
-      .filterIsInstance<ChatMessageText>()
-      .firstOrNull { it.side == ChatSide.USER && it.content.isNotBlank() }
-      ?.content
-      ?.lineSequence()
-      ?.firstOrNull()
-      ?.trim()
-  if (!firstUserText.isNullOrEmpty()) {
-    return firstUserText.take(60)
-  }
-
-  val firstWidgetTitle =
-    messages.filterIsInstance<ChatMessageMcpWidgetCard>().firstOrNull()?.title?.trim()
-  if (!firstWidgetTitle.isNullOrEmpty()) {
-    return firstWidgetTitle.take(60)
-  }
-
-  return "New chat"
 }
 
 private fun List<ChatMessage>.collectPersistedWidgetSnapshots(): List<McpWidgetSnapshot> =
