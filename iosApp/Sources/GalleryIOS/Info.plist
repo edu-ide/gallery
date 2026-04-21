@@ -23,14 +23,14 @@
 		<dict>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>com.googleusercontent.apps.133048024494-v9q4qimam6cl70set38o8tdbj3mcr0ss</string>
+				<string>com.googleusercontent.apps.133048024494-k34fhrbpp4isrnsvmgkkhso8jk0kl132</string>
 			</array>
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>GIDClientID</key>
-	<string>133048024494-v9q4qimam6cl70set38o8tdbj3mcr0ss.apps.googleusercontent.com</string>
+	<string>133048024494-k34fhrbpp4isrnsvmgkkhso8jk0kl132.apps.googleusercontent.com</string>
 	<key>GIDServerClientID</key>
 	<string>133048024494-v9q4qimam6cl70set38o8tdbj3mcr0ss.apps.googleusercontent.com</string>
 	<key>NSCameraUsageDescription</key>

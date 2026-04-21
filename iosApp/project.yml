@@ -26,11 +26,11 @@ targets:
       properties:
         CFBundleDisplayName: Gallery iOS
         UILaunchScreen: {}
-        GIDClientID: "133048024494-v9q4qimam6cl70set38o8tdbj3mcr0ss.apps.googleusercontent.com"
+        GIDClientID: "133048024494-k34fhrbpp4isrnsvmgkkhso8jk0kl132.apps.googleusercontent.com"
         GIDServerClientID: "133048024494-v9q4qimam6cl70set38o8tdbj3mcr0ss.apps.googleusercontent.com"
         CFBundleURLTypes:
           - CFBundleURLSchemes:
-              - "com.googleusercontent.apps.133048024494-v9q4qimam6cl70set38o8tdbj3mcr0ss"
+              - "com.googleusercontent.apps.133048024494-k34fhrbpp4isrnsvmgkkhso8jk0kl132"
         NSCameraUsageDescription: "Use the camera to attach images to AI Chat."
         NSMicrophoneUsageDescription: "Use the microphone to record audio for AI Chat."
         NSPhotoLibraryUsageDescription: "Choose photos to attach to AI Chat."
