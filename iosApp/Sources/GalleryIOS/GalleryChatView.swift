@@ -8,7 +8,7 @@ struct GalleryChatView: View {
 
   private let sessionId: String
   private let sessionStore = GallerySessionStore()
-  private let runtime: GalleryInferenceRuntime = StubGalleryInferenceRuntime()
+  private let runtime: GalleryInferenceRuntime = GalleryRuntimeFactory.defaultRuntime()
   @State private var sessionState: UnifiedChatSessionState
   @State private var isGenerating = false
 
@@ -105,6 +105,9 @@ struct GalleryChatView: View {
         CapabilityPill(title: "audio", enabled: supports(.audio), symbol: "waveform")
         CapabilityPill(title: "skills", enabled: sessionState.currentEntryHint().activateSkills, symbol: "wand.and.stars")
       }
+      Text("Runtime: \(runtime.displayName)")
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(runtime.isAvailable ? .green : .orange)
       Text(sessionState.route())
         .font(.caption2.monospaced())
         .foregroundStyle(.secondary)

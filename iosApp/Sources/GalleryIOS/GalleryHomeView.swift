@@ -39,6 +39,9 @@ struct GalleryHomeView: View {
         CapabilityBadge(title: "SwiftUI", symbol: "iphone")
         CapabilityBadge(title: "iOS 17+", symbol: "checkmark.seal")
       }
+      Text(GalleryRuntimeFactory.runtimeStatusSummary())
+        .font(.caption)
+        .foregroundStyle(.secondary)
     }
     .padding(18)
     .frame(maxWidth: .infinity, alignment: .leading)

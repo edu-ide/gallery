@@ -50,3 +50,14 @@ xcodebuild -project iosApp/GalleryIOS.xcodeproj \
 Open `iosApp/GalleryIOS.xcodeproj` in Xcode, select your Apple Development team for the `GalleryIOS` target, then run on the connected iPhone.
 
 Command-line signed install requires an Xcode account/provisioning profile for `com.ugot.galleryios`.
+
+
+## Runtime adapter seam
+
+`GalleryInferenceRuntime.swift` defines the iOS model runtime seam:
+
+- `GalleryInferenceRuntime` protocol
+- `StubGalleryInferenceRuntime` for local shell development
+- `LiteRTLMGalleryInferenceRuntime` placeholder for the official LiteRT-LM Swift API
+
+As of April 21, 2026, the public LiteRT-LM repository marks Swift as In Dev / Coming Soon. The iOS shell therefore compiles and runs with the stub runtime while keeping a dedicated LiteRT-LM adapter boundary ready for the future API.
