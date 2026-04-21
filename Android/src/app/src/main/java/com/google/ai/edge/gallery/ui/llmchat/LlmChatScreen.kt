@@ -33,6 +33,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -60,7 +61,8 @@ import com.google.ai.edge.gallery.ui.unifiedchat.ConnectorBar
 import com.google.ai.edge.gallery.ui.unifiedchat.ConnectorBarDisplayMode
 import com.google.ai.edge.gallery.ui.unifiedchat.ConnectorBarState
 import com.google.ai.edge.gallery.ui.unifiedchat.UnifiedChatEntryHint
-import com.google.ai.edge.gallery.ui.unifiedchat.resolveUnifiedChatChromePolicy
+import com.google.ai.edge.gallery.ui.unifiedchat.createUnifiedChatSessionState
+import com.google.ai.edge.gallery.ui.unifiedchat.toUnifiedChatModelCapabilities
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetFullscreenOverlay
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetHostState
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSessionHost
@@ -273,11 +275,37 @@ fun ChatViewWrapper(
   val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
   val selectedModel = selectedModelOverride ?: modelManagerUiState.selectedModel
   val visibleConnectorIds = entryHint.activateMcpConnectorIds.distinct()
-  val chromePolicy =
-    resolveUnifiedChatChromePolicy(
-      hasVisibleConnectors = visibleConnectorIds.isNotEmpty(),
-      supportsAudioInput = showAudioPicker,
+  val sessionId =
+    buildUnifiedChatSessionId(
+      taskId = taskId,
+      modelName = selectedModel.name,
+      entryHint = entryHint,
     )
+  var unifiedSessionState by
+    remember(sessionId, selectedModel.name, visibleConnectorIds) {
+      mutableStateOf(
+        createUnifiedChatSessionState(
+          modelName = selectedModel.name,
+          modelDisplayName = selectedModel.displayName,
+          taskId = taskId,
+          modelCapabilities = selectedModel.toUnifiedChatModelCapabilities(),
+          entryHint = entryHint,
+          visibleConnectorIds = visibleConnectorIds,
+        )
+      )
+    }
+  val chromePolicy = unifiedSessionState.chromePolicy()
+  val activeConnectorIds = unifiedSessionState.connectorBarState.activeConnectorIds.toList()
+  fun setActiveConnectorIds(connectorIds: List<String>) {
+    unifiedSessionState =
+      unifiedSessionState.copy(
+        connectorBarState =
+          ConnectorBarState(
+            visibleConnectorIds = visibleConnectorIds,
+            activeConnectorIds = connectorIds.toSet(),
+          )
+      )
+  }
   // Foundation scope: only persist the text/MCP unified chat path for now.
   val canPersistUnifiedSession =
     taskId == BuiltInTaskId.LLM_CHAT && !entryHint.activateImage && !entryHint.activateAudio
@@ -286,17 +314,9 @@ fun ChatViewWrapper(
     remember(appContext) {
       UnifiedChatSessionFileStore(File(appContext.filesDir, "unified_chat_sessions"))
     }
-  val sessionId =
-    buildUnifiedChatSessionId(
-      taskId = taskId,
-      modelName = selectedModel.name,
-      entryHint = entryHint,
-    )
   val restoredSessionIds = remember { mutableStateMapOf<String, Boolean>() }
   val pendingSnapshotsBySession = remember { mutableStateMapOf<String, PendingUnifiedSessionSnapshot>() }
   val (sessionRestored, setSessionRestored) = remember(sessionId) { mutableStateOf(false) }
-  val (activeConnectorIds, setActiveConnectorIds) =
-    remember(sessionId) { mutableStateOf(visibleConnectorIds) }
   val latestCanPersistUnifiedSession by rememberUpdatedState(canPersistUnifiedSession)
   val latestSessionId by rememberUpdatedState(sessionId)
   val latestSessionRestored by rememberUpdatedState(sessionRestored)
@@ -438,18 +458,13 @@ fun ChatViewWrapper(
   val connectorBarContent: (@Composable () -> Unit)? =
     if (chromePolicy.showConnectorLauncherInComposer) {
       {
-        val connectorBarState =
-          ConnectorBarState(
-            visibleConnectorIds = visibleConnectorIds,
-            activeConnectorIds = activeConnectorIds.toSet(),
-          )
         ConnectorBar(
-          state = connectorBarState,
+          state = unifiedSessionState.connectorBarState,
           onConnectorClicked = { connectorId ->
             if (!sessionRestored) {
               return@ConnectorBar
             }
-            setActiveConnectorIds(connectorBarState.toggle(connectorId).activeConnectorIds.toList())
+            unifiedSessionState = unifiedSessionState.toggleConnector(connectorId)
           },
           onOpenConnectorSheet = {},
           displayMode = ConnectorBarDisplayMode.ComposerLauncher,
