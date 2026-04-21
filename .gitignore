@@ -1,1 +1,4 @@
 .DS_Store
+iosApp/build/
+iosApp/DerivedData/
+*.xcuserstate
