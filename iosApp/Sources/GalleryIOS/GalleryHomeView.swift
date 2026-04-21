@@ -67,19 +67,6 @@ struct GalleryHomeView: View {
           .frame(width: 62, height: 62)
           .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
       }
-
-      HStack(spacing: 10) {
-        CapabilityBadge(title: "Private", symbol: "lock")
-        CapabilityBadge(title: "Fast", symbol: "bolt")
-        CapabilityBadge(title: "Personal", symbol: "person.crop.circle")
-      }
-
-      Text("Start a chat, add photos or audio when helpful, and use connected tools when you choose.")
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
     .padding(20)
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -112,15 +99,9 @@ struct GalleryHomeView: View {
               .font(.title2)
               .foregroundStyle(Color.accentColor)
           }
-          Text("Ask anything, attach context, and continue privately.")
+          Text("Ask anything and continue privately.")
             .font(.subheadline)
             .foregroundStyle(.secondary)
-          HStack(spacing: 8) {
-            CapabilityBadge(title: "Text chat", symbol: "text.bubble")
-            if selectedModel.supportsImage { CapabilityBadge(title: "Photos", symbol: "photo") }
-            if selectedModel.supportsAudio { CapabilityBadge(title: "Audio", symbol: "waveform") }
-            CapabilityBadge(title: "Tools", symbol: "sparkles")
-          }
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
