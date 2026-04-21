@@ -459,7 +459,7 @@ fun ChatViewWrapper(
   }
 
   val connectorBarContent: (@Composable () -> Unit)? =
-    if (chromePolicy.showConnectorLauncherInComposer) {
+    if (chromePolicy.showInlineConnectorRowAboveComposer) {
       {
         ConnectorBar(
           state = unifiedSessionState.connectorBarState,
@@ -470,7 +470,7 @@ fun ChatViewWrapper(
             unifiedSessionState = unifiedSessionState.toggleConnector(connectorId)
           },
           onOpenConnectorSheet = {},
-          displayMode = ConnectorBarDisplayMode.ComposerLauncher,
+          displayMode = ConnectorBarDisplayMode.InlineRow,
         )
       }
     } else {

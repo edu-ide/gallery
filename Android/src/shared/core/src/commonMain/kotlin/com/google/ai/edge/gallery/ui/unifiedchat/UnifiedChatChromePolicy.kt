@@ -31,8 +31,8 @@ fun resolveUnifiedChatChromePolicy(
   UnifiedChatChromePolicy(
     showInputHistoryInTopBar = true,
     showInputHistoryInComposerMenu = false,
-    showConnectorLauncherInComposer = hasVisibleConnectors,
-    showInlineConnectorRowAboveComposer = false,
+    showConnectorLauncherInComposer = false,
+    showInlineConnectorRowAboveComposer = hasVisibleConnectors,
     showStandaloneAudioRecordButtonInComposer = supportsAudioInput,
   )
 

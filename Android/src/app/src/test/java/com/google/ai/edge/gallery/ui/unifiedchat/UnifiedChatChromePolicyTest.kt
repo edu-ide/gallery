@@ -7,23 +7,26 @@ import org.junit.Test
 
 class UnifiedChatChromePolicyTest {
   @Test
-  fun resolveUnifiedChatChromePolicy_movesHistoryToTopBarAndRemovesComposerHistoryEntry() {
+  fun resolveUnifiedChatChromePolicy_keepsHistoryInTopBarAndRestoresInlineConnectorRow() {
     val policy =
       resolveUnifiedChatChromePolicy(hasVisibleConnectors = true, supportsAudioInput = true)
 
     assertTrue(policy.showInputHistoryInTopBar)
     assertFalse(policy.showInputHistoryInComposerMenu)
-    assertFalse(policy.showInlineConnectorRowAboveComposer)
+    assertTrue(policy.showInlineConnectorRowAboveComposer)
+    assertFalse(policy.showConnectorLauncherInComposer)
   }
 
   @Test
-  fun resolveUnifiedChatChromePolicy_showsComposerConnectorLauncherOnlyWhenConnectorsExist() {
+  fun resolveUnifiedChatChromePolicy_showsInlineConnectorRowOnlyWhenConnectorsExist() {
     val withConnectors =
       resolveUnifiedChatChromePolicy(hasVisibleConnectors = true, supportsAudioInput = false)
     val withoutConnectors =
       resolveUnifiedChatChromePolicy(hasVisibleConnectors = false, supportsAudioInput = false)
 
-    assertTrue(withConnectors.showConnectorLauncherInComposer)
+    assertTrue(withConnectors.showInlineConnectorRowAboveComposer)
+    assertFalse(withConnectors.showConnectorLauncherInComposer)
+    assertFalse(withoutConnectors.showInlineConnectorRowAboveComposer)
     assertFalse(withoutConnectors.showConnectorLauncherInComposer)
   }
 

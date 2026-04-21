@@ -77,7 +77,8 @@ class SharedUnifiedChatCoreTest {
 
     assertTrue(policy.showInputHistoryInTopBar)
     assertFalse(policy.showInputHistoryInComposerMenu)
-    assertTrue(policy.showConnectorLauncherInComposer)
+    assertFalse(policy.showConnectorLauncherInComposer)
+    assertTrue(policy.showInlineConnectorRowAboveComposer)
     assertTrue(policy.showStandaloneAudioRecordButtonInComposer)
   }
 

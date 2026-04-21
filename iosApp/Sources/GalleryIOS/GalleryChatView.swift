@@ -122,7 +122,7 @@ struct GalleryChatView: View {
     let policy = sessionState.chromePolicy()
 
     return VStack(alignment: .leading, spacing: 8) {
-      if policy.showConnectorLauncherInComposer {
+      if policy.showConnectorLauncherInComposer || policy.showInlineConnectorRowAboveComposer {
         HStack {
           Text(sessionState.connectorLauncherLabel())
             .font(.caption.weight(.semibold))
