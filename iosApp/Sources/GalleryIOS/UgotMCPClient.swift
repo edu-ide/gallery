@@ -72,7 +72,7 @@ final class UgotMCPClient {
         "jsonrpc": "2.0",
         "id": nextRequestId(),
         "method": method,
-        "params": params,
+        "params": Self.paramsWithLocaleMeta(params),
       ],
       expectsResponse: true
     )
@@ -254,6 +254,7 @@ final class UgotMCPClient {
     request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
+    request.setValue(UgotMCPLocale.acceptLanguageHeader, forHTTPHeaderField: "Accept-Language")
     if let sessionId {
       request.setValue(sessionId, forHTTPHeaderField: "Mcp-Session-Id")
     }
@@ -289,6 +290,15 @@ final class UgotMCPClient {
   private func nextRequestId() -> Int {
     defer { nextId += 1 }
     return nextId
+  }
+
+  private static func paramsWithLocaleMeta(_ params: [String: Any]) -> [String: Any] {
+    var out = params
+    var meta = out["_meta"] as? [String: Any] ?? [:]
+    meta["locale"] = UgotMCPLocale.preferredLanguageTag
+    meta["openai/locale"] = UgotMCPLocale.preferredLanguageTag
+    out["_meta"] = meta
+    return out
   }
 
   private static func dataWithLocalNetworkRetry(

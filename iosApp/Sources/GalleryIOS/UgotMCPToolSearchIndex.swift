@@ -30,8 +30,6 @@ struct UgotMCPToolSearchIndex {
     guard !terms.isEmpty else { return [] }
 
     let queryCompact = Self.compact(query)
-    let allowsMutation = Self.queryImpliesMutation(query)
-
     let results = tools.compactMap { tool -> UgotMCPToolSearchResult? in
       guard let name = tool["name"] as? String, !name.isEmpty else { return nil }
       let document = Self.document(for: tool)
@@ -45,26 +43,9 @@ struct UgotMCPToolSearchIndex {
         matched.append(name)
       }
 
-      for term in terms {
-        let normalized = Self.normalized(term.value)
-        let compact = Self.compact(term.value)
-        guard !normalized.isEmpty || !compact.isEmpty else { continue }
-
-        let didMatch =
-          (!normalized.isEmpty && document.contains(normalized)) ||
-          (!compact.isEmpty && compactDocument.contains(compact))
-        guard didMatch else { continue }
-
-        score += term.weight
-        matched.append(term.value)
-      }
-
-      if Self.toolImpliesMutation(tool), !allowsMutation {
-        score -= 18
-      }
-      if Self.toolImpliesDestructiveMutation(tool), !Self.queryImpliesDestructiveMutation(query) {
-        score -= 80
-      }
+      let termScore = Self.searchScore(terms: terms, normalizedDocument: document, compactDocument: compactDocument)
+      score += termScore.score
+      matched.append(contentsOf: termScore.matchedTerms)
 
       guard score > 0 else { return nil }
       return UgotMCPToolSearchResult(
@@ -85,6 +66,14 @@ struct UgotMCPToolSearchIndex {
       .map { $0 }
   }
 
+  static func searchScore(query: String, document: String) -> (score: Int, matchedTerms: [String]) {
+    let terms = queryTerms(for: query)
+    guard !terms.isEmpty else { return (0, []) }
+    let normalizedDocument = normalized(document)
+    let compactDocument = compact(document)
+    return searchScore(terms: terms, normalizedDocument: normalizedDocument, compactDocument: compactDocument)
+  }
+
   static func document(for tool: [String: Any]) -> String {
     var parts: [String] = []
     appendStrings(from: tool, to: &parts)
@@ -101,15 +90,29 @@ struct UgotMCPToolSearchIndex {
   }
 
   private static func appendStrings(from dict: [String: Any], to parts: inout [String]) {
-    for (key, value) in dict {
-      parts.append(key)
-      if let string = value as? String {
-        parts.append(string)
-      } else if let bool = value as? Bool {
-        parts.append(bool ? "true" : "false")
-      } else if let number = value as? NSNumber {
-        parts.append(number.stringValue)
+    appendValue(dict, to: &parts, depth: 0)
+  }
+
+  private static func appendValue(_ value: Any, to parts: inout [String], depth: Int) {
+    guard depth <= 5 else { return }
+    switch value {
+    case let string as String:
+      parts.append(string)
+    case let bool as Bool:
+      parts.append(bool ? "true" : "false")
+    case let number as NSNumber:
+      parts.append(number.stringValue)
+    case let array as [Any]:
+      for item in array {
+        appendValue(item, to: &parts, depth: depth + 1)
       }
+    case let dict as [String: Any]:
+      for (key, nested) in dict {
+        parts.append(key)
+        appendValue(nested, to: &parts, depth: depth + 1)
+      }
+    default:
+      break
     }
   }
 
@@ -129,6 +132,29 @@ struct UgotMCPToolSearchIndex {
     if let required = schema["required"] as? [String] {
       parts.append(required.joined(separator: " "))
     }
+  }
+
+  private static func searchScore(
+    terms: [WeightedTerm],
+    normalizedDocument: String,
+    compactDocument: String
+  ) -> (score: Int, matchedTerms: [String]) {
+    var score = 0
+    var matched: [String] = []
+    for term in terms {
+      let normalized = Self.normalized(term.value)
+      let compact = Self.compact(term.value)
+      guard !normalized.isEmpty || !compact.isEmpty else { continue }
+
+      let didMatch =
+        (!normalized.isEmpty && normalizedDocument.contains(normalized)) ||
+        (!compact.isEmpty && compactDocument.contains(compact))
+      guard didMatch else { continue }
+
+      score += term.weight
+      matched.append(term.value)
+    }
+    return (score, unique(matched).prefixArray(12))
   }
 
   private static func queryTerms(for query: String) -> [WeightedTerm] {
@@ -171,10 +197,6 @@ struct UgotMCPToolSearchIndex {
       .replacingOccurrences(of: "[^\\p{L}\\p{N}]+", with: "", options: .regularExpression)
   }
 
-  private static func containsAny(_ text: String, _ terms: [String]) -> Bool {
-    terms.contains { text.contains($0) }
-  }
-
   private static func unique(_ values: [String]) -> [String] {
     var seen = Set<String>()
     var out: [String] = []
@@ -185,28 +207,6 @@ struct UgotMCPToolSearchIndex {
       out.append(value)
     }
     return out
-  }
-
-  private static func queryImpliesMutation(_ query: String) -> Bool {
-    containsAny(compact(query), ["save", "set", "update", "change", "select", "create", "configure", "clear", "delete", "remove", "reset", "unset"])
-  }
-
-  private static func queryImpliesDestructiveMutation(_ query: String) -> Bool {
-    containsAny(compact(query), ["clear", "delete", "remove", "reset", "unset"])
-  }
-
-  private static func toolImpliesMutation(_ tool: [String: Any]) -> Bool {
-    let document = document(for: tool)
-    return containsAny(document, ["save", "set", "update", "create", "delete", "remove", "clear", "reset", "preference", "default"])
-  }
-
-  private static func toolImpliesDestructiveMutation(_ tool: [String: Any]) -> Bool {
-    if let annotations = tool["annotations"] as? [String: Any],
-       let destructive = annotations["destructiveHint"] as? Bool {
-      return destructive
-    }
-    let document = document(for: tool)
-    return containsAny(document, ["delete", "remove", "clear", "reset", "unset"])
   }
 
   private struct WeightedTerm {

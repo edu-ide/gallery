@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A47C7E0DAF19E716F1B80001 /* UgotMCPRuntimeClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A47C7E0DAF19E716F1B80002 /* UgotMCPRuntimeClient.swift */; };
 		001D1C10C1E418CE2B5EACDE /* GalleryHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 024400A0E7FEC65CE325154E /* GalleryHomeView.swift */; };
 		012905427D7B2A27104B3D15 /* UgotMCPCompatibilityContextRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F08D67BBE47C3B43D6E4D098 /* UgotMCPCompatibilityContextRenderer.swift */; };
 		02F114BB6CAF697F8372C153 /* GemmaModelConstraintProvider.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 5459EBE807B9509DD8E7F3AD /* GemmaModelConstraintProvider.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -50,6 +51,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A47C7E0DAF19E716F1B80002 /* UgotMCPRuntimeClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UgotMCPRuntimeClient.swift; sourceTree = "<group>"; };
 		024400A0E7FEC65CE325154E /* GalleryHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryHomeView.swift; sourceTree = "<group>"; };
 		058841216256B13C493F9A07 /* LiteRTLM.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = LiteRTLM.xcframework; path = Vendor/LiteRTLM/LiteRTLM.xcframework; sourceTree = "<group>"; };
 		10CB47627EC18A453ABADD59 /* GalleryModelManagerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryModelManagerView.swift; sourceTree = "<group>"; };
@@ -119,6 +121,7 @@
 				509F436E46B19F9A11103D7E /* UgotMCPClient.swift */,
 				F08D67BBE47C3B43D6E4D098 /* UgotMCPCompatibilityContextRenderer.swift */,
 				CB8A6C3C53121962982A20FE /* UgotMCPPrompts.swift */,
+				A47C7E0DAF19E716F1B80002 /* UgotMCPRuntimeClient.swift */,
 				7B4F8628C19E6D0B33F341BA /* UgotMCPToolSearchIndex.swift */,
 				7AAB72A45625CA892C9A2EC4 /* UgotMCPWidgetWebView.swift */,
 			);
@@ -169,6 +172,7 @@
 			buildPhases = (
 				036035927722E64AEB3EC0DD /* Build LiteRT-LM iOS XCFrameworks */,
 				A6A040F762EB70FE8E0DDCFA /* Build GallerySharedCore XCFramework */,
+				A47C7E0DAF19E716F1B80003 /* Build Embedded MailMCP Rust FFI */,
 				C27934DF76E96BF31998BF74 /* Sources */,
 				D397F100F8EA64D088F49A85 /* Copy MCP Apps Host Shell */,
 				BE22CA83F139B6857792281C /* Frameworks */,
@@ -263,6 +267,27 @@
 			shellPath = /bin/sh;
 			shellScript = "cd \"$SRCROOT/..\"\n./Android/src/gradlew -p Android/src :shared:core:assembleGallerySharedCoreReleaseXCFramework\n";
 		};
+		A47C7E0DAF19E716F1B80003 /* Build Embedded MailMCP Rust FFI */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Embedded MailMCP Rust FFI";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "cd \"$SRCROOT\"
+./scripts/build_mail_mcp_rs_ios.sh
+";
+		};
 		D397F100F8EA64D088F49A85 /* Copy MCP Apps Host Shell */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -307,6 +332,7 @@
 				AC09D4DBC360B49E70C48D52 /* UgotMCPClient.swift in Sources */,
 				012905427D7B2A27104B3D15 /* UgotMCPCompatibilityContextRenderer.swift in Sources */,
 				E4240D3A1AAEA9A77824E5C4 /* UgotMCPPrompts.swift in Sources */,
+				A47C7E0DAF19E716F1B80001 /* UgotMCPRuntimeClient.swift in Sources */,
 				D1403D567AFE1CB7792E341E /* UgotMCPToolSearchIndex.swift in Sources */,
 				6195BE88B83DAD80A54122DE /* UgotMCPWidgetWebView.swift in Sources */,
 			);
@@ -388,13 +414,21 @@
 				INFOPLIST_FILE = Sources/GalleryIOS/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				OTHER_LDFLAGS = "$(inherited) -lc++ -framework AVFAudio -framework AudioToolbox -framework GemmaModelConstraintProvider -all_load";
+				OTHER_LDFLAGS = "$(inherited) -lc++ -framework AVFAudio -framework AudioToolbox -framework GemmaModelConstraintProvider -lmail_mcp_rs_ios";
 				PRODUCT_BUNDLE_IDENTIFIER = com.ugot.galleryios;
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/GalleryIOS/GalleryIOS-Bridging-Header.h";
 				TARGETED_DEVICE_FAMILY = "1,2";
+					HEADER_SEARCH_PATHS = (
+						"$(inherited)",
+						"$(SRCROOT)/Vendor/MailMCPRS/include",
+					);
+					LIBRARY_SEARCH_PATHS = (
+						"$(inherited)",
+						"$(SRCROOT)/Vendor/MailMCPRS/lib/$(PLATFORM_NAME)",
+					);
 			};
 			name = Release;
 		};
@@ -478,13 +512,21 @@
 				INFOPLIST_FILE = Sources/GalleryIOS/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				OTHER_LDFLAGS = "$(inherited) -lc++ -framework AVFAudio -framework AudioToolbox -framework GemmaModelConstraintProvider -all_load";
+				OTHER_LDFLAGS = "$(inherited) -lc++ -framework AVFAudio -framework AudioToolbox -framework GemmaModelConstraintProvider -lmail_mcp_rs_ios";
 				PRODUCT_BUNDLE_IDENTIFIER = com.ugot.galleryios;
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/GalleryIOS/GalleryIOS-Bridging-Header.h";
 				TARGETED_DEVICE_FAMILY = "1,2";
+					HEADER_SEARCH_PATHS = (
+						"$(inherited)",
+						"$(SRCROOT)/Vendor/MailMCPRS/include",
+					);
+					LIBRARY_SEARCH_PATHS = (
+						"$(inherited)",
+						"$(SRCROOT)/Vendor/MailMCPRS/lib/$(PLATFORM_NAME)",
+					);
 			};
 			name = Debug;
 		};

@@ -18,14 +18,27 @@ enum UgotMCPActionRunner {
       guard let accessToken = try await UgotAuthStore.validAccessToken() else {
         return GalleryChatActionResult(message: "UGOT 세션이 만료됐어요. 다시 로그인해 주세요.")
       }
-      for connector in activeConnectors {
-        let client = UgotMCPConnectorAction(
+      let clients = activeConnectors.map { connector in
+        UgotMCPConnectorAction(
           connector: connector,
           accessToken: accessToken,
           sessionId: sessionId,
           toolPlanningProvider: toolPlanningProvider
         )
-        if let response = try await client.run(prompt: prompt) {
+      }
+
+      let orderedClients = try await orderedClients(
+        clients,
+        prompt: prompt,
+        sessionId: sessionId,
+        activeConnectorIds: activeConnectorIds
+      )
+      guard !orderedClients.isEmpty else { return nil }
+      for client in orderedClients {
+        if let response = try await client.run(
+          prompt: prompt,
+          emitNoToolFailure: orderedClients.count == 1
+        ) {
           return GalleryChatActionResult(
             message: response.message,
             widgetSnapshot: response.snapshot,
@@ -33,9 +46,89 @@ enum UgotMCPActionRunner {
           )
         }
       }
+      if activeConnectors.count > 1 {
+        return GalleryChatActionResult(
+          message: """
+          활성화된 MCP connector들에서 실행할 수 있는 도구를 찾지 못해서 아무 작업도 하지 않았어요.
+
+          필요한 connector가 켜져 있는지 확인하거나, 요청 대상을 더 구체적으로 말해 주세요.
+          """
+        )
+      }
       return nil
     } catch {
       return GalleryChatActionResult(message: "MCP 호출에 실패했어요.\n\n\(error.localizedDescription)")
+    }
+  }
+
+  private static func orderedClients(
+    _ clients: [UgotMCPConnectorAction],
+    prompt: String,
+    sessionId: String,
+    activeConnectorIds: Set<String>
+  ) async throws -> [UgotMCPConnectorAction] {
+    if let pendingConnectorId = UgotMCPToolApprovalStore.pendingConnectorId(
+      sessionId: sessionId,
+      connectorIds: activeConnectorIds
+    ), let pendingClient = clients.first(where: { $0.connectorId == pendingConnectorId }) {
+      return [pendingClient] + clients.filter { $0.connectorId != pendingConnectorId }
+    }
+
+    guard clients.count > 1 else { return clients }
+
+    var candidates: [UgotMCPConnectorToolSearchCandidate] = []
+    for client in clients {
+      if let candidate = try? await client.planningCandidate(prompt: prompt), candidate.searchScore > 0 {
+        candidates.append(candidate)
+      }
+    }
+    guard !candidates.isEmpty else { return [] }
+
+    let byConnectorId = Dictionary(uniqueKeysWithValues: clients.map { ($0.connectorId, $0) })
+    let metadataOrderedIds = candidates
+      .sorted { lhs, rhs in
+        if lhs.searchScore != rhs.searchScore { return lhs.searchScore > rhs.searchScore }
+        if lhs.connectorTitle != rhs.connectorTitle { return lhs.connectorTitle < rhs.connectorTitle }
+        return lhs.connectorId < rhs.connectorId
+      }
+      .map(\.connectorId)
+    return orderedClients(ids: metadataOrderedIds, lookup: byConnectorId, fallback: [])
+  }
+
+  private static func orderedClients(
+    ids: [String],
+    lookup: [String: UgotMCPConnectorAction],
+    fallback: [UgotMCPConnectorAction]
+  ) -> [UgotMCPConnectorAction] {
+    var seen = Set<String>()
+    var out: [UgotMCPConnectorAction] = []
+    for id in ids where seen.insert(id).inserted {
+      if let client = lookup[id] {
+        out.append(client)
+      }
+    }
+    for client in fallback where seen.insert(client.connectorId).inserted {
+      out.append(client)
+    }
+    return out
+  }
+
+
+  static func prewarmTools(activeConnectorIds: Set<String>) async {
+    let activeConnectors = GalleryConnector.samples.filter { activeConnectorIds.contains($0.id) }
+    guard !activeConnectors.isEmpty else { return }
+    do {
+      guard let accessToken = try await UgotAuthStore.validAccessToken() else { return }
+      for connector in activeConnectors {
+        let client = UgotMCPConnectorAction(
+          connector: connector,
+          accessToken: accessToken,
+          sessionId: "prewarm"
+        )
+        try? await client.warmToolCatalog()
+      }
+    } catch {
+      return
     }
   }
 
@@ -108,6 +201,14 @@ struct UgotMCPToolPlanningRequest {
   let connectorId: String
   let connectorTitle: String
   let tools: [[String: Any]]
+}
+
+struct UgotMCPConnectorToolSearchCandidate {
+  let connectorId: String
+  let connectorTitle: String
+  let connectorSummary: String
+  let searchScore: Int
+  let topTools: [[String: Any]]
 }
 
 struct UgotMCPToolPlanningDecision {
@@ -302,7 +403,7 @@ enum UgotMCPToolPlanningPromptBuilder {
     """
   }
 
-  private static func toolSummary(_ tool: [String: Any]) -> String {
+  static func toolSummary(_ tool: [String: Any]) -> String {
     let name = tool["name"] as? String ?? "unknown"
     let title =
       (tool["title"] as? String) ??
@@ -536,6 +637,8 @@ enum UgotMCPToolApprovalStore {
 
 private enum UgotMCPToolMetadataCache {
   private static let ttl: TimeInterval = 300
+  private static let persistentTTL: TimeInterval = 86_400
+  private static let persistentPrefix = "ugot.mcp.toolMetadataCache.v2"
   private static let lock = NSLock()
   private static var values: [String: (timestamp: Date, tools: [[String: Any]])] = [:]
 
@@ -553,11 +656,49 @@ private enum UgotMCPToolMetadataCache {
       return tools
     }
 
+    if let cached = persistedTools(connectorId: connectorId, now: now) {
+      lock.withLock {
+        values[connectorId] = (Date(), cached)
+      }
+      return cached
+    }
+
     let loaded = try await loader()
     lock.withLock {
       values[connectorId] = (Date(), loaded)
     }
+    persistTools(loaded, connectorId: connectorId)
     return loaded
+  }
+
+  private static func persistedTools(connectorId: String, now: Date) -> [[String: Any]]? {
+    guard let data = UserDefaults.standard.data(forKey: persistentKey(connectorId)),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let timestamp = object["timestamp"] as? TimeInterval,
+          now.timeIntervalSince(Date(timeIntervalSince1970: timestamp)) < persistentTTL,
+          let tools = object["tools"] as? [[String: Any]],
+          !tools.isEmpty else {
+      return nil
+    }
+    return tools
+  }
+
+  private static func persistTools(_ tools: [[String: Any]], connectorId: String) {
+    guard JSONSerialization.isValidJSONObject(tools) else { return }
+    let payload: [String: Any] = [
+      "timestamp": Date().timeIntervalSince1970,
+      "tools": tools,
+    ]
+    guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
+    UserDefaults.standard.set(data, forKey: persistentKey(connectorId))
+  }
+
+  private static func persistentKey(_ connectorId: String) -> String {
+    let safeId = Data(connectorId.utf8).base64EncodedString()
+      .replacingOccurrences(of: "/", with: "_")
+      .replacingOccurrences(of: "+", with: "-")
+      .replacingOccurrences(of: "=", with: "")
+    return "\(persistentPrefix).\(safeId)"
   }
 }
 
@@ -828,10 +969,14 @@ private enum UgotMCPToolPlanner {
 
 final class UgotMCPConnectorAction {
   private let connector: GalleryConnector
-  private let mcpClient: UgotMCPClient
+  private let mcpClient: UgotMCPRuntimeClient
   private let sessionId: String
   private let toolCacheKey: String
   private let toolPlanningProvider: UgotMCPActionRunner.ToolPlanningProvider?
+
+  var connectorId: String { connector.id }
+  var connectorTitle: String { connector.title }
+  var connectorSummary: String { connector.summary }
 
   init(
     connector: GalleryConnector,
@@ -843,18 +988,49 @@ final class UgotMCPConnectorAction {
     self.sessionId = sessionId
     self.toolCacheKey = "\(connector.id)::\(accessToken.suffix(32))"
     self.toolPlanningProvider = toolPlanningProvider
-    self.mcpClient = UgotMCPClient(
+    self.mcpClient = UgotMCPRuntimeClient.make(
       connectorId: connector.id,
       endpoint: URL(string: connector.endpoint)!,
       accessToken: accessToken
     )
   }
 
-  func run(prompt: String) async throws -> UgotMCPActionResponse? {
+  private func loadTools() async throws -> [[String: Any]] {
     try await mcpClient.initialize()
-    let tools = try await UgotMCPToolMetadataCache.tools(connectorId: toolCacheKey) {
+    return try await UgotMCPToolMetadataCache.tools(connectorId: toolCacheKey) {
       try await mcpClient.listTools()
     }
+  }
+
+  func warmToolCatalog() async throws {
+    _ = try await loadTools()
+  }
+
+  func planningCandidate(prompt: String) async throws -> UgotMCPConnectorToolSearchCandidate? {
+    let tools = try await loadTools()
+    let planningTools = UgotMCPToolVisibility.modelVisibleTools(from: tools)
+    guard !planningTools.isEmpty else { return nil }
+    let searchResults = UgotMCPToolSearchIndex(tools: planningTools).search(query: prompt, limit: 6)
+    let searchScore = searchResults.first?.score ?? 0
+    let topTools = UgotMCPToolPlanner.toolsForModelPlanning(
+      prompt: prompt,
+      tools: planningTools,
+      limit: 8
+    )
+    return UgotMCPConnectorToolSearchCandidate(
+      connectorId: connector.id,
+      connectorTitle: connector.title,
+      connectorSummary: connector.summary,
+      searchScore: searchScore,
+      topTools: topTools
+    )
+  }
+
+  func run(
+    prompt: String,
+    emitNoToolFailure: Bool = true
+  ) async throws -> UgotMCPActionResponse? {
+    let tools = try await loadTools()
     if let pending = UgotMCPToolApprovalStore.pendingApproval(
       sessionId: sessionId,
       connectorIds: [connector.id]
@@ -875,10 +1051,13 @@ final class UgotMCPConnectorAction {
 
     let planningTools = UgotMCPToolVisibility.modelVisibleTools(from: tools)
     guard !planningTools.isEmpty else {
-      return UgotMCPActionResponse(
-        message: "이 connector에는 대화에서 직접 실행할 수 있는 MCP 도구가 없어요.",
-        snapshot: nil
-      )
+      if emitNoToolFailure {
+        return UgotMCPActionResponse(
+          message: "이 connector에는 대화에서 직접 실행할 수 있는 MCP 도구가 없어요.",
+          snapshot: nil
+        )
+      }
+      return nil
     }
 
     if let planned = UgotMCPToolPlanner.plan(prompt: prompt, tools: planningTools, decision: nil) {
@@ -893,7 +1072,7 @@ final class UgotMCPConnectorAction {
       tools: modelPlanningTools
     ))
     guard let planned = UgotMCPToolPlanner.plan(prompt: prompt, tools: modelPlanningTools, decision: decision) else {
-      if decision?.requiresTool == true {
+      if decision?.requiresTool == true, emitNoToolFailure {
         return UgotMCPActionResponse(
           message: """
           실행할 수 있는 MCP 도구를 찾지 못해서 아무 작업도 하지 않았어요.
@@ -1291,10 +1470,7 @@ final class UgotMCPConnectorAction {
   }
 
   func runApprovedPending() async throws -> UgotMCPActionResponse? {
-    try await mcpClient.initialize()
-    let tools = try await UgotMCPToolMetadataCache.tools(connectorId: toolCacheKey) {
-      try await mcpClient.listTools()
-    }
+    let tools = try await loadTools()
     guard let pending = UgotMCPToolApprovalStore.pendingApproval(
       sessionId: sessionId,
       connectorIds: [connector.id]

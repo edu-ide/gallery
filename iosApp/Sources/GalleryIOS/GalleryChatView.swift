@@ -209,9 +209,11 @@ struct GalleryChatView: View {
     .onAppear {
       refreshAgentWorkspaceStatus()
       reloadMCPPrompts()
+      prewarmMCPTools()
     }
     .onChange(of: sessionState.connectorBarState.activeConnectorIds) { _, _ in
       reloadMCPPrompts()
+      prewarmMCPTools()
     }
     .onChange(of: selectedPhotoItem) { _, item in
       handleSelectedPhoto(item)
@@ -524,6 +526,10 @@ struct GalleryChatView: View {
           composerDraftSeed = "오늘의 운세 알려줘."
           composerFocusToken += 1
         }
+        SuggestionButton(title: "최근 메일 요약") {
+          composerDraftSeed = "최근 메일 요약해줘."
+          composerFocusToken += 1
+        }
       }
     }
     .frame(maxWidth: .infinity)
@@ -816,23 +822,6 @@ struct GalleryChatView: View {
       activeSkillIds: Set(activeAgentSkillIds),
       activeConnectorIds: connectorIds,
       sessionId: sessionId,
-      connectorPlanningProvider: { request in
-        let planningPrompt = UgotMCPConnectorPlanningPromptBuilder.build(request: request)
-        let planningRequest = GalleryInferenceRequest(
-          modelName: plannerModelName,
-          modelDisplayName: plannerModelDisplayName,
-          modelFileName: plannerModelFileName,
-          prompt: planningPrompt,
-          route: "mcp-connector-router",
-          activeAgentSkillIds: plannerActiveAgentSkillIds,
-          activeConnectorIds: plannerActiveConnectorIds,
-          supportsImage: false,
-          supportsAudio: false,
-          attachments: []
-        )
-        let plannerResult = await runtime.generate(request: planningRequest)
-        return UgotMCPConnectorPlanningDecision.parse(from: plannerResult.text)
-      },
       toolPlanningProvider: { request in
         let planningPrompt = UgotMCPToolPlanningPromptBuilder.build(request: request)
         let planningRequest = GalleryInferenceRequest(
@@ -1477,6 +1466,14 @@ struct GalleryChatView: View {
     connector.title
   }
 
+  private func prewarmMCPTools() {
+    let activeConnectorIds = sessionState.connectorBarState.activeConnectorIds
+    guard !activeConnectorIds.isEmpty else { return }
+    Task {
+      await UgotMCPActionRunner.prewarmTools(activeConnectorIds: activeConnectorIds)
+    }
+  }
+
   private func reloadMCPPrompts() {
     let activeConnectorIds = sessionState.connectorBarState.activeConnectorIds
     let activeConnectors = connectors.filter { activeConnectorIds.contains($0.id) }
@@ -1487,6 +1484,7 @@ struct GalleryChatView: View {
     }
 
     isLoadingMCPPrompts = true
+    let locale = UgotMCPLocale.preferredLanguageTag
     Task {
       var loaded: [UgotMCPPromptDescriptor] = []
       do {
@@ -1499,7 +1497,7 @@ struct GalleryChatView: View {
         }
         for connector in activeConnectors {
           guard let endpoint = URL(string: connector.endpoint) else { continue }
-          let client = UgotMCPClient(
+          let client = UgotMCPRuntimeClient.make(
             connectorId: connector.id,
             endpoint: endpoint,
             accessToken: accessToken
@@ -1507,7 +1505,7 @@ struct GalleryChatView: View {
           do {
             try await client.initialize()
             let prompts = try await client.listPrompts()
-            loaded.append(contentsOf: prompts.map { UgotMCPPromptDescriptor(connector: connector, prompt: $0) })
+            loaded.append(contentsOf: prompts.map { UgotMCPPromptDescriptor(connector: connector, prompt: $0, locale: locale) })
           } catch {
             continue
           }
@@ -1534,7 +1532,7 @@ struct GalleryChatView: View {
               let endpoint = URL(string: connector.endpoint) else {
           throw NSError(domain: "UgotMCPPrompt", code: 401)
         }
-        let client = UgotMCPClient(
+        let client = UgotMCPRuntimeClient.make(
           connectorId: connector.id,
           endpoint: endpoint,
           accessToken: accessToken
@@ -1579,7 +1577,7 @@ private final class UgotMCPToolApprovalViewModel: ObservableObject {
         tools = []
         return
       }
-      let client = UgotMCPClient(
+      let client = UgotMCPRuntimeClient.make(
         connectorId: connector.id,
         endpoint: URL(string: connector.endpoint)!,
         accessToken: accessToken

@@ -59,8 +59,10 @@ targets:
         CLANG_CXX_LANGUAGE_STANDARD: c++20
         CLANG_CXX_LIBRARY: libc++
         FRAMEWORK_SEARCH_PATHS: "$(inherited) $(SRCROOT)/Vendor/LiteRTLM"
+        HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/Vendor/MailMCPRS/include"
+        LIBRARY_SEARCH_PATHS: "$(inherited) $(SRCROOT)/Vendor/MailMCPRS/lib/$(PLATFORM_NAME)"
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
-        OTHER_LDFLAGS: "$(inherited) -lc++ -framework AVFAudio -framework AudioToolbox -framework GemmaModelConstraintProvider -all_load"
+        OTHER_LDFLAGS: "$(inherited) -lc++ -framework AVFAudio -framework AudioToolbox -framework GemmaModelConstraintProvider -lmail_mcp_rs_ios"
     dependencies:
       - framework: ../Android/src/shared/core/build/XCFrameworks/release/GallerySharedCore.xcframework
         embed: false
@@ -83,6 +85,11 @@ targets:
         script: |
           cd "$SRCROOT/.."
           ./Android/src/gradlew -p Android/src :shared:core:assembleGallerySharedCoreReleaseXCFramework
+      - name: Build Embedded MailMCP Rust FFI
+        basedOnDependencyAnalysis: false
+        script: |
+          cd "$SRCROOT"
+          ./scripts/build_mail_mcp_rs_ios.sh
     postCompileScripts:
       - name: Copy MCP Apps Host Shell
         basedOnDependencyAnalysis: false
