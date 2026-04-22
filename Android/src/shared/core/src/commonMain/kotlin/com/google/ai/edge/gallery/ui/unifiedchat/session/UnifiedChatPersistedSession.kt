@@ -31,7 +31,7 @@ data class UnifiedChatSessionKey(
 data class UnifiedChatPersistedSession(
   val id: String,
   val title: String,
-  val activeAgentSkillIds: List<String>,
+  val activeAgentSkillIds: List<String> = emptyList(),
   val activeConnectorIds: List<String>,
   val messagesJson: List<String>,
   val widgetSnapshots: List<McpWidgetSnapshot>,

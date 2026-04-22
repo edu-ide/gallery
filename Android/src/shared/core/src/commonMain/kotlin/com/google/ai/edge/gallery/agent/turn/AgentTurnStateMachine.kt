@@ -50,24 +50,56 @@ data class AgentTurnState(
     get() = phase.activity
 
   fun apply(event: AgentTurnEvent, nowEpochMs: Long): AgentTurnState {
+    return transition(event = event, nowEpochMs = nowEpochMs).state
+  }
+
+  fun transition(event: AgentTurnEvent, nowEpochMs: Long): AgentTurnTransition {
     if (isTerminal) {
-      return this
+      return AgentTurnTransition(
+        kind = AgentTurnTransitionKind.IGNORED_TERMINAL,
+        state = this,
+        reason = "Agent turn is already terminal: ${phase.kind}",
+      )
+    }
+
+    if (!phase.kind.accepts(event.kind)) {
+      return AgentTurnTransition(
+        kind = AgentTurnTransitionKind.REJECTED,
+        state = this,
+        reason = "Cannot apply ${event.kind} while turn is ${phase.kind}",
+      )
     }
 
     val nextPhase = event.nextPhase()
-    return copy(
-      phase = nextPhase,
-      steps =
-        steps +
-          AgentTurnStep(
-            kind = event.stepKind,
-            title = nextPhase.title,
-            detail = nextPhase.detail,
-            timestampEpochMs = nowEpochMs,
-          ),
+    return AgentTurnTransition(
+      kind = AgentTurnTransitionKind.ACCEPTED,
+      state =
+        copy(
+          phase = nextPhase,
+          steps =
+            steps +
+              AgentTurnStep(
+                kind = event.stepKind,
+                title = nextPhase.title,
+                detail = nextPhase.detail,
+                timestampEpochMs = nowEpochMs,
+              ),
+        ),
     )
   }
 }
+
+enum class AgentTurnTransitionKind {
+  ACCEPTED,
+  IGNORED_TERMINAL,
+  REJECTED,
+}
+
+data class AgentTurnTransition(
+  val kind: AgentTurnTransitionKind,
+  val state: AgentTurnState,
+  val reason: String? = null,
+)
 
 enum class AgentTurnPhaseKind {
   PLANNING,
@@ -369,6 +401,11 @@ data class AgentTurnActivity(
   val showsProgress: Boolean,
 )
 
+data class AgentTurnOpeningPlan(
+  val route: AgentTurnRoute,
+  val events: List<AgentTurnEvent>,
+)
+
 fun createAgentTurnState(
   userPrompt: String,
   attachmentCount: Int,
@@ -402,6 +439,26 @@ fun createAgentTurnState(
         )
       ),
   )
+}
+
+fun planAgentTurnOpeningEvents(
+  route: AgentTurnRoute,
+  attachmentCount: Int,
+  shouldReadVisibleContext: Boolean,
+  connectorSearchTitle: String?,
+): AgentTurnOpeningPlan {
+  val events = mutableListOf<AgentTurnEvent>()
+  events += agentTurnEventRoutePlanned(route)
+  if (attachmentCount > 0) {
+    events += agentTurnEventIngestAttachments(attachmentCount)
+  }
+  if (shouldReadVisibleContext) {
+    events += agentTurnEventReadVisibleContext()
+  }
+  if (!connectorSearchTitle.isNullOrBlank()) {
+    events += agentTurnEventSearchTools(connectorSearchTitle)
+  }
+  return AgentTurnOpeningPlan(route = route, events = events)
 }
 
 fun agentTurnRouteModel(): AgentTurnRoute = AgentTurnRoute(kind = AgentTurnRouteKind.MODEL)
@@ -505,3 +562,108 @@ fun agentTurnEventFail(reason: String): AgentTurnEvent = AgentTurnEvent(kind = A
 
 fun agentTurnEventCancel(reason: String): AgentTurnEvent =
   AgentTurnEvent(kind = AgentTurnEventKind.CANCEL, reason = reason)
+
+private fun AgentTurnPhaseKind.accepts(event: AgentTurnEventKind): Boolean {
+  if (event == AgentTurnEventKind.FAIL || event == AgentTurnEventKind.CANCEL) {
+    return true
+  }
+  return when (this) {
+    AgentTurnPhaseKind.PLANNING ->
+      event in
+        setOf(
+          AgentTurnEventKind.INGEST_ATTACHMENTS,
+          AgentTurnEventKind.ROUTE_PLANNED,
+          AgentTurnEventKind.READ_VISIBLE_CONTEXT,
+          AgentTurnEventKind.SEARCH_TOOLS,
+          AgentTurnEventKind.COMPACT_CONTEXT,
+          AgentTurnEventKind.GENERATE_FINAL_ANSWER,
+          AgentTurnEventKind.COMPLETE,
+        )
+    AgentTurnPhaseKind.INGESTING_ATTACHMENTS ->
+      event in
+        setOf(
+          AgentTurnEventKind.ROUTE_PLANNED,
+          AgentTurnEventKind.READ_VISIBLE_CONTEXT,
+          AgentTurnEventKind.SEARCH_TOOLS,
+          AgentTurnEventKind.COMPACT_CONTEXT,
+          AgentTurnEventKind.GENERATE_FINAL_ANSWER,
+          AgentTurnEventKind.COMPLETE,
+        )
+    AgentTurnPhaseKind.ROUTE_PLANNED ->
+      event in
+        setOf(
+          AgentTurnEventKind.INGEST_ATTACHMENTS,
+          AgentTurnEventKind.READ_VISIBLE_CONTEXT,
+          AgentTurnEventKind.SEARCH_TOOLS,
+          AgentTurnEventKind.APPROVE_TOOL,
+          AgentTurnEventKind.RUN_TOOL,
+          AgentTurnEventKind.OBSERVE_TOOL,
+          AgentTurnEventKind.COMPACT_CONTEXT,
+          AgentTurnEventKind.GENERATE_FINAL_ANSWER,
+          AgentTurnEventKind.COMPLETE,
+        )
+    AgentTurnPhaseKind.READING_VISIBLE_CONTEXT ->
+      event in
+        setOf(
+          AgentTurnEventKind.SEARCH_TOOLS,
+          AgentTurnEventKind.RUN_TOOL,
+          AgentTurnEventKind.OBSERVE_TOOL,
+          AgentTurnEventKind.COMPACT_CONTEXT,
+          AgentTurnEventKind.GENERATE_FINAL_ANSWER,
+          AgentTurnEventKind.COMPLETE,
+        )
+    AgentTurnPhaseKind.SEARCHING_TOOLS ->
+      event in
+        setOf(
+          AgentTurnEventKind.SKIP_TOOL_SEARCH,
+          AgentTurnEventKind.REQUEST_APPROVAL,
+          AgentTurnEventKind.APPROVE_TOOL,
+          AgentTurnEventKind.RUN_TOOL,
+          AgentTurnEventKind.OBSERVE_TOOL,
+          AgentTurnEventKind.COMPACT_CONTEXT,
+          AgentTurnEventKind.GENERATE_FINAL_ANSWER,
+          AgentTurnEventKind.COMPLETE,
+        )
+    AgentTurnPhaseKind.AWAITING_APPROVAL ->
+      event in
+        setOf(
+          AgentTurnEventKind.APPROVE_TOOL,
+          AgentTurnEventKind.RUN_TOOL,
+          AgentTurnEventKind.COMPLETE,
+        )
+    AgentTurnPhaseKind.RUNNING_TOOL ->
+      event in
+        setOf(
+          AgentTurnEventKind.RUN_TOOL,
+          AgentTurnEventKind.OBSERVE_TOOL,
+          AgentTurnEventKind.REQUEST_APPROVAL,
+          AgentTurnEventKind.GENERATE_FINAL_ANSWER,
+          AgentTurnEventKind.COMPLETE,
+        )
+    AgentTurnPhaseKind.OBSERVING_TOOL ->
+      event in
+        setOf(
+          AgentTurnEventKind.RUN_TOOL,
+          AgentTurnEventKind.OBSERVE_TOOL,
+          AgentTurnEventKind.GENERATE_FINAL_ANSWER,
+          AgentTurnEventKind.COMPLETE,
+        )
+    AgentTurnPhaseKind.COMPACTING_CONTEXT ->
+      event in
+        setOf(
+          AgentTurnEventKind.FINISH_COMPACTION,
+          AgentTurnEventKind.GENERATE_FINAL_ANSWER,
+          AgentTurnEventKind.COMPLETE,
+        )
+    AgentTurnPhaseKind.GENERATING_FINAL_ANSWER ->
+      event in
+        setOf(
+          AgentTurnEventKind.RUN_TOOL,
+          AgentTurnEventKind.OBSERVE_TOOL,
+          AgentTurnEventKind.COMPLETE,
+        )
+    AgentTurnPhaseKind.COMPLETED,
+    AgentTurnPhaseKind.FAILED,
+    AgentTurnPhaseKind.CANCELLED -> false
+  }
+}

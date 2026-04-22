@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
@@ -49,10 +50,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -85,6 +88,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.ai.edge.gallery.agent.turn.AgentTurnActivity
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.data.BuiltInTaskId
 import com.google.ai.edge.gallery.data.Model
@@ -131,6 +135,7 @@ fun ChatPanel(
   val uiState by viewModel.uiState.collectAsState()
   val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
   val messages = uiState.messagesByModel[selectedModel.name] ?: listOf()
+  val agentTurnActivity = uiState.agentTurnsByModel[selectedModel.name]?.activity
   val streamingMessage = uiState.streamingMessagesByModel[selectedModel.name]
   val snackbarHostState = remember { SnackbarHostState() }
   val scope = rememberCoroutineScope()
@@ -550,6 +555,19 @@ fun ChatPanel(
         )
       }
 
+      AnimatedVisibility(
+        visible = agentTurnActivity != null,
+        enter = fadeIn(),
+        exit = fadeOut(),
+      ) {
+        agentTurnActivity?.let { activity ->
+          AgentTurnActivityNotice(
+            activity = activity,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+          )
+        }
+      }
+
       MessageInputText(
         task = task,
         modelManagerViewModel = modelManagerViewModel,
@@ -620,6 +638,56 @@ fun ChatPanel(
         onBenchmarkClicked(selectedModel, message, warmUpIterations, benchmarkIterations)
       },
     )
+  }
+}
+
+@Composable
+private fun AgentTurnActivityNotice(
+  activity: AgentTurnActivity,
+  modifier: Modifier = Modifier,
+) {
+  Surface(
+    modifier = modifier.fillMaxWidth(),
+    shape = RoundedCornerShape(16.dp),
+    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 1.dp,
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      if (activity.showsProgress) {
+        CircularProgressIndicator(
+          modifier = Modifier.size(16.dp),
+          strokeWidth = 2.dp,
+          color = MaterialTheme.colorScheme.primary,
+        )
+      } else {
+        Text(
+          text = "!",
+          style = MaterialTheme.typography.labelLarge,
+          color = MaterialTheme.colorScheme.primary,
+        )
+      }
+
+      Column(
+        modifier = Modifier.weight(1f),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+      ) {
+        Text(
+          text = activity.title,
+          style = MaterialTheme.typography.labelLarge,
+          color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+          text = activity.detail,
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          maxLines = 2,
+        )
+      }
+    }
   }
 }
 

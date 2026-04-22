@@ -47,6 +47,17 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.google.ai.edge.gallery.agent.vfs.AgentVfsFactory
 import com.google.ai.edge.gallery.agent.vfs.AgentVfsPaths
 import com.google.ai.edge.gallery.agent.vfs.AgentVfsUserAttachmentIngestor
+import com.google.ai.edge.gallery.agent.turn.AgentTurnRoute
+import com.google.ai.edge.gallery.agent.turn.agentTurnEventGenerateFinalAnswer
+import com.google.ai.edge.gallery.agent.turn.agentTurnEventReadVisibleContext
+import com.google.ai.edge.gallery.agent.turn.agentTurnEventSearchTools
+import com.google.ai.edge.gallery.agent.turn.agentTurnEventSkipToolSearch
+import com.google.ai.edge.gallery.agent.turn.agentTurnFinalAnswerSourceModel
+import com.google.ai.edge.gallery.agent.turn.agentTurnOutcomeAnswered
+import com.google.ai.edge.gallery.agent.turn.agentTurnRouteMcpConnector
+import com.google.ai.edge.gallery.agent.turn.agentTurnRouteMcpConnectors
+import com.google.ai.edge.gallery.agent.turn.agentTurnRouteModel
+import com.google.ai.edge.gallery.agent.turn.planAgentTurnOpeningEvents
 import com.google.ai.edge.gallery.GalleryEvent
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.data.BuiltInTaskId
@@ -522,6 +533,25 @@ fun ChatViewWrapper(
         if (text.isNotEmpty()) {
           modelManagerViewModel.addTextInputHistory(text)
         }
+        val attachmentCount = images.size + audioMessages.size
+        val activeSkillIdsForTurn = unifiedSessionState.agentSkillState.activeSkillIds.toList()
+        val connectorIdsForTurn = activeConnectorIds.toList()
+        val hasPreexistingAgentContext = mcpUiSession.hasAgentReadableContext()
+        viewModel.beginAgentTurn(
+          model = model,
+          userPrompt = effectiveInputText,
+          attachmentCount = attachmentCount,
+          activeSkillIds = activeSkillIdsForTurn,
+          activeConnectorIds = connectorIdsForTurn,
+        )
+        planAgentTurnOpeningEvents(
+            route = androidAgentTurnRoute(connectorIds = connectorIdsForTurn),
+            attachmentCount = attachmentCount,
+            shouldReadVisibleContext = hasPreexistingAgentContext,
+            connectorSearchTitle = null,
+          )
+          .events
+          .forEach { event -> viewModel.applyAgentTurnEvent(model = model, event = event) }
         CoroutineScope(Dispatchers.IO).launch {
           val attachmentVfsContext =
             ingestUserAttachmentsToAgentVfs(
@@ -531,14 +561,42 @@ fun ChatViewWrapper(
               audioMessages = audioMessages,
             )
           withContext(Dispatchers.Main) {
+            if (!hasPreexistingAgentContext && attachmentVfsContext.isNotBlank()) {
+              viewModel.applyAgentTurnEvent(
+                model = model,
+                event = agentTurnEventReadVisibleContext(),
+              )
+            }
+            if (connectorIdsForTurn.isNotEmpty()) {
+              val connectorTitle = androidConnectorSearchTitle(connectorIdsForTurn)
+              viewModel.applyAgentTurnEvent(
+                model = model,
+                event = agentTurnEventSearchTools(connectorTitle),
+              )
+              viewModel.applyAgentTurnEvent(
+                model = model,
+                event = agentTurnEventSkipToolSearch(connectorTitle),
+              )
+            }
+            viewModel.applyAgentTurnEvent(
+              model = model,
+              event = agentTurnEventGenerateFinalAnswer(agentTurnFinalAnswerSourceModel()),
+            )
             viewModel.generateResponse(
               model = model,
               input = effectiveInputText.withAgentVfsContext(mcpUiSession, attachmentVfsContext),
               images = images,
               audioMessages = audioMessages,
               onFirstToken = onFirstToken,
-              onDone = { onGenerateResponseDone(model) },
+              onDone = {
+                onGenerateResponseDone(model)
+                viewModel.completeAgentTurn(model = model, outcome = agentTurnOutcomeAnswered())
+              },
               onError = { errorMessage ->
+                viewModel.failAgentTurn(
+                  model = model,
+                  reason = errorMessage.ifBlank { "Model inference failed" },
+                )
                 viewModel.handleError(
                   context = context,
                   task = task,
@@ -590,7 +648,10 @@ fun ChatViewWrapper(
       }
     },
     showStopButtonInInputWhenInProgress = true,
-    onStopButtonClicked = { model -> viewModel.stopResponse(model = model) },
+    onStopButtonClicked = { model ->
+      viewModel.cancelAgentTurn(model = model, reason = "User stopped generation")
+      viewModel.stopResponse(model = model)
+    },
     onSkillClicked = onSkillClicked,
     navigateUp = navigateUp,
     modifier = modifier,
@@ -614,6 +675,41 @@ fun ChatViewWrapper(
     mcpWidgetFullscreenOverlay = mcpWidgetFullscreenOverlay,
   )
 }
+
+private fun androidAgentTurnRoute(connectorIds: List<String>): AgentTurnRoute =
+  when (connectorIds.size) {
+    0 -> agentTurnRouteModel()
+    1 ->
+      agentTurnRouteMcpConnector(
+        id = connectorIds.single(),
+        title = androidConnectorTitle(connectorIds.single()),
+      )
+    else -> agentTurnRouteMcpConnectors(count = connectorIds.size)
+  }
+
+private fun androidConnectorSearchTitle(connectorIds: List<String>): String =
+  when (connectorIds.size) {
+    0 -> "MCP"
+    1 -> androidConnectorTitle(connectorIds.single())
+    else -> "Active MCP connectors"
+  }
+
+private fun androidConnectorTitle(connectorId: String): String =
+  when (connectorId) {
+    "fortune.ugot.uk/mcp" -> "UGOT Fortune"
+    else ->
+      connectorId
+        .split('_', '-')
+        .filter { it.isNotBlank() }
+        .joinToString(" ") { token ->
+          token.lowercase().replaceFirstChar { firstChar -> firstChar.titlecase() }
+        }
+  }
+
+private fun McpWidgetSessionHost?.hasAgentReadableContext(): Boolean =
+  ((this as? McpUiSession)?.getAgentVfsContextSummary())
+    ?.trim()
+    ?.takeIf { it.isNotBlank() && it != "Available agent files: none" } != null
 
 private fun String.withAgentVfsContext(
   mcpUiSession: McpWidgetSessionHost?,

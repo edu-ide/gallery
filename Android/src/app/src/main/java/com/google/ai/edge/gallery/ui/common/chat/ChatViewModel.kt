@@ -19,9 +19,18 @@ package com.google.ai.edge.gallery.ui.common.chat
 import android.util.Log
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.ViewModel
+import com.google.ai.edge.gallery.agent.turn.AgentTurnEvent
+import com.google.ai.edge.gallery.agent.turn.AgentTurnOutcome
+import com.google.ai.edge.gallery.agent.turn.AgentTurnState
+import com.google.ai.edge.gallery.agent.turn.AgentTurnTransitionKind
+import com.google.ai.edge.gallery.agent.turn.agentTurnEventCancel
+import com.google.ai.edge.gallery.agent.turn.agentTurnEventComplete
+import com.google.ai.edge.gallery.agent.turn.agentTurnEventFail
+import com.google.ai.edge.gallery.agent.turn.createAgentTurnState
 import com.google.ai.edge.gallery.common.processLlmResponse
 import com.google.ai.edge.gallery.data.ConfigKeys
 import com.google.ai.edge.gallery.data.Model
+import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -45,12 +54,90 @@ data class ChatUiState(
 
   /** A map of model names to the currently streaming chat message. */
   val streamingMessagesByModel: Map<String, ChatMessage> = mapOf(),
+
+  /** A map of model names to their currently projected agent turn. */
+  val agentTurnsByModel: Map<String, AgentTurnState> = mapOf(),
 )
 
 /** ViewModel responsible for managing the chat UI state and handling chat-related operations. */
 abstract class ChatViewModel() : ViewModel() {
   private val _uiState = MutableStateFlow(createUiState())
   val uiState = _uiState.asStateFlow()
+
+  fun beginAgentTurn(
+    model: Model,
+    userPrompt: String,
+    attachmentCount: Int,
+    activeSkillIds: List<String> = emptyList(),
+    activeConnectorIds: List<String> = emptyList(),
+    id: String = "turn_${UUID.randomUUID()}",
+    nowEpochMs: Long = System.currentTimeMillis(),
+  ): AgentTurnState {
+    val turn =
+      createAgentTurnState(
+        userPrompt = userPrompt,
+        attachmentCount = attachmentCount,
+        activeSkillIds = activeSkillIds,
+        activeConnectorIds = activeConnectorIds,
+        id = id,
+        nowEpochMs = nowEpochMs,
+      )
+    updateAgentTurn(model = model, turn = turn)
+    return turn
+  }
+
+  fun applyAgentTurnEvent(
+    model: Model,
+    event: AgentTurnEvent,
+    nowEpochMs: Long = System.currentTimeMillis(),
+  ): AgentTurnState? {
+    val current = _uiState.value.agentTurnsByModel[model.name] ?: return null
+    val transition = current.transition(event = event, nowEpochMs = nowEpochMs)
+    if (transition.kind == AgentTurnTransitionKind.REJECTED) {
+      Log.w(TAG, "Rejected agent turn event for ${model.name}: ${transition.reason}")
+    }
+    val next = transition.state
+    updateAgentTurn(model = model, turn = next)
+    return next
+  }
+
+  fun completeAgentTurn(
+    model: Model,
+    outcome: AgentTurnOutcome,
+    nowEpochMs: Long = System.currentTimeMillis(),
+  ) {
+    applyAgentTurnEvent(model = model, event = agentTurnEventComplete(outcome), nowEpochMs = nowEpochMs)
+    clearAgentTurn(model = model)
+  }
+
+  fun failAgentTurn(
+    model: Model,
+    reason: String,
+    nowEpochMs: Long = System.currentTimeMillis(),
+  ) {
+    applyAgentTurnEvent(model = model, event = agentTurnEventFail(reason), nowEpochMs = nowEpochMs)
+  }
+
+  fun cancelAgentTurn(
+    model: Model,
+    reason: String,
+    nowEpochMs: Long = System.currentTimeMillis(),
+  ) {
+    applyAgentTurnEvent(model = model, event = agentTurnEventCancel(reason), nowEpochMs = nowEpochMs)
+    clearAgentTurn(model = model)
+  }
+
+  fun clearAgentTurn(model: Model) {
+    val newAgentTurnsByModel = _uiState.value.agentTurnsByModel.toMutableMap()
+    newAgentTurnsByModel.remove(model.name)
+    _uiState.update { _uiState.value.copy(agentTurnsByModel = newAgentTurnsByModel) }
+  }
+
+  private fun updateAgentTurn(model: Model, turn: AgentTurnState) {
+    val newAgentTurnsByModel = _uiState.value.agentTurnsByModel.toMutableMap()
+    newAgentTurnsByModel[model.name] = turn
+    _uiState.update { _uiState.value.copy(agentTurnsByModel = newAgentTurnsByModel) }
+  }
 
   fun addMessage(model: Model, message: ChatMessage) {
     val newMessagesByModel = _uiState.value.messagesByModel.toMutableMap()

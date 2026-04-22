@@ -17,7 +17,10 @@
 package com.google.ai.edge.gallery.ui.unifiedchat
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 
 @Serializable
 data class UnifiedChatEntryHint(
@@ -34,7 +37,7 @@ private val json = Json {
 }
 
 fun encodeUnifiedChatEntryHint(entryHint: UnifiedChatEntryHint): String =
-  percentEncode(json.encodeToString(UnifiedChatEntryHint.serializer(), entryHint))
+  percentEncode(entryHint.toRouteJson())
 
 fun decodeUnifiedChatEntryHint(entryHintJson: String?): UnifiedChatEntryHint {
   if (entryHintJson.isNullOrBlank()) {
@@ -52,6 +55,24 @@ fun decodeUnifiedChatEntryHint(entryHintJson: String?): UnifiedChatEntryHint {
 
 fun buildUnifiedChatRoute(taskId: String, modelName: String, entryHint: UnifiedChatEntryHint): String =
   "model/$taskId/$modelName?entry_hint=${encodeUnifiedChatEntryHint(entryHint)}"
+
+private fun UnifiedChatEntryHint.toRouteJson(): String =
+  buildJsonObject {
+      put("activateImage", JsonPrimitive(activateImage))
+      put("activateAudio", JsonPrimitive(activateAudio))
+      put("activateSkills", JsonPrimitive(activateSkills))
+      if (activateAgentSkillIds.isNotEmpty()) {
+        put(
+          "activateAgentSkillIds",
+          JsonArray(activateAgentSkillIds.map(::JsonPrimitive)),
+        )
+      }
+      put(
+        "activateMcpConnectorIds",
+        JsonArray(activateMcpConnectorIds.map(::JsonPrimitive)),
+      )
+    }
+    .toString()
 
 private fun percentEncode(value: String): String {
   val bytes = value.encodeToByteArray()

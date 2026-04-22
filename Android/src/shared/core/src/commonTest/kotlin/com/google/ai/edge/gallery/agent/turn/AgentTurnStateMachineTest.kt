@@ -20,6 +20,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class AgentTurnStateMachineTest {
@@ -77,5 +78,70 @@ class AgentTurnStateMachineTest {
     assertEquals(AgentTurnRouteKind.MODEL, state.phase.route?.kind)
     assertNotNull(state.activity)
     assertFalse(state.isTerminal)
+  }
+
+  @Test
+  fun agentTurnStateMachine_rejectsOutOfOrderToolSearchCompletion() {
+    val start =
+      createAgentTurnState(
+        userPrompt = "기본 사용자를 Yw로 바꿔",
+        attachmentCount = 0,
+        activeSkillIds = emptyList(),
+        activeConnectorIds = listOf("fortune.ugot.uk/mcp"),
+        id = "turn-reject",
+        nowEpochMs = 1,
+      )
+
+    val rejected = start.transition(agentTurnEventSkipToolSearch("UGOT Fortune"), 2)
+
+    assertEquals(AgentTurnTransitionKind.REJECTED, rejected.kind)
+    assertEquals(AgentTurnPhaseKind.PLANNING, rejected.state.phase.kind)
+    assertEquals(1, rejected.state.steps.size)
+    assertNotNull(rejected.reason)
+  }
+
+  @Test
+  fun agentTurnStateMachine_ignoresEventsAfterTerminalState() {
+    val completed =
+      createAgentTurnState(
+        userPrompt = "안녕",
+        attachmentCount = 0,
+        activeSkillIds = emptyList(),
+        activeConnectorIds = emptyList(),
+        id = "turn-terminal",
+        nowEpochMs = 1,
+      )
+        .apply(agentTurnEventComplete(agentTurnOutcomeAnswered()), 2)
+
+    val ignored = completed.transition(agentTurnEventGenerateFinalAnswer(agentTurnFinalAnswerSourceModel()), 3)
+
+    assertEquals(AgentTurnTransitionKind.IGNORED_TERMINAL, ignored.kind)
+    assertEquals(AgentTurnPhaseKind.COMPLETED, ignored.state.phase.kind)
+    assertEquals(2, ignored.state.steps.size)
+  }
+
+  @Test
+  fun agentTurnOpeningPlan_buildsCanonicalStartupSequence() {
+    val plan =
+      planAgentTurnOpeningEvents(
+        route = agentTurnRouteMcpConnector("fortune.ugot.uk/mcp", "UGOT Fortune"),
+        attachmentCount = 2,
+        shouldReadVisibleContext = true,
+        connectorSearchTitle = "UGOT Fortune",
+      )
+
+    assertEquals(AgentTurnRouteKind.MCP_CONNECTOR, plan.route.kind)
+    assertEquals(
+      listOf(
+        AgentTurnEventKind.ROUTE_PLANNED,
+        AgentTurnEventKind.INGEST_ATTACHMENTS,
+        AgentTurnEventKind.READ_VISIBLE_CONTEXT,
+        AgentTurnEventKind.SEARCH_TOOLS,
+      ),
+      plan.events.map { it.kind },
+    )
+    assertEquals(2, plan.events[1].count)
+    assertEquals("UGOT Fortune", plan.events.last().connectorTitle)
+    assertNull(plan.events.last().toolTitle)
   }
 }
