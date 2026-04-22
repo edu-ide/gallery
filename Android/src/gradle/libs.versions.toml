@@ -44,6 +44,7 @@ ktor = "3.2.3"
 credentials = "1.6.0-rc02"
 googleid = "1.2.0"
 mlkit-genai-prompt = "1.0.0-beta2"  # Ref: https://developers.google.com/ml-kit/genai/prompt/android/get-started#configure-project
+okio = "3.17.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -102,6 +103,8 @@ androidx-credentials = { group = "androidx.credentials", name = "credentials", v
 androidx-credentials-play-services-auth = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentials" }
 googleid = { group = "com.google.android.libraries.identity.googleid", name = "googleid", version.ref = "googleid" }
 mlkit-genai-prompt = { group = "com.google.mlkit", name = "genai-prompt", version.ref = "mlkit-genai-prompt" }
+okio = { group = "com.squareup.okio", name = "okio", version.ref = "okio" }
+okio-fakefilesystem = { group = "com.squareup.okio", name = "okio-fakefilesystem", version.ref = "okio" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

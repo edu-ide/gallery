@@ -7,6 +7,7 @@ struct GalleryHomeView: View {
   @State private var recentSessions: [GallerySessionSummary] = []
   @State private var selectedModelId: String = GalleryModel.samples[0].id
   @State private var newChatSessionId: String?
+  @State private var recentSessionsRefreshTask: Task<Void, Never>?
 
   private let models = GalleryModel.samples
   private let agentSkills = GalleryAgentSkill.samples
@@ -37,7 +38,6 @@ struct GalleryHomeView: View {
         }
         .padding()
       }
-      .navigationTitle("UGOT AI")
       .background(Color(.systemGroupedBackground))
       .onAppear { refreshRecentSessions() }
     .toolbar {
@@ -159,8 +159,7 @@ struct GalleryHomeView: View {
             )
           } label: {
             RecentSessionRow(session: session) {
-              sessionStore.delete(id: session.id)
-              refreshRecentSessions()
+              deleteRecentSession(session.id)
             }
           }
           .buttonStyle(.plain)
@@ -283,7 +282,20 @@ struct GalleryHomeView: View {
   }
 
   private func refreshRecentSessions() {
-    recentSessions = sessionStore.listSessions()
+    recentSessionsRefreshTask?.cancel()
+    let store = sessionStore
+    recentSessionsRefreshTask = Task {
+      let sessions = await Task.detached(priority: .utility) {
+        store.listSessions()
+      }.value
+      guard !Task.isCancelled else { return }
+      recentSessions = sessions
+    }
+  }
+
+  private func deleteRecentSession(_ id: String) {
+    recentSessions.removeAll { $0.id == id }
+    sessionStore.deleteInBackground(id: id)
   }
 
   private func modelForSession(_ session: GallerySessionSummary) -> GalleryModel {
@@ -365,16 +377,9 @@ private struct RecentSessionRow: View {
   var body: some View {
     HStack(spacing: 12) {
       VStack(alignment: .leading, spacing: 5) {
-        Text(session.title).font(.headline).lineLimit(1)
-        Text("\(session.messageCount) messages")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        if !session.activeConnectorIds.isEmpty {
-          Text("Connectors: \(session.activeConnectorIds.joined(separator: ", "))")
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-        }
+        Text(session.title)
+          .font(.headline)
+          .lineLimit(1)
       }
       Spacer()
       Button(role: .destructive) { onDelete() } label: {

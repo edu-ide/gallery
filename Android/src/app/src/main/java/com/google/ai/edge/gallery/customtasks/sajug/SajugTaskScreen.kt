@@ -109,6 +109,7 @@ internal fun SajugTaskScreen(
           messages = viewModel.uiState.value.messagesByModel[chatModel.name].orEmpty(),
           toolName = event.toolName,
           widgetStateJson = event.widgetStateJson,
+          artifactContextSummary = event.artifactContextSummary,
         )
       mutation.replaceIndex?.let { index ->
         viewModel.replaceMessage(chatModel, index, mutation.card)
@@ -174,12 +175,13 @@ internal fun createFortuneToolCallMutation(
   messages: List<ChatMessage>,
   toolName: String?,
   widgetStateJson: String,
+  artifactContextSummary: String = "",
 ): FortuneToolCallMutation {
   val snapshot =
     McpWidgetSnapshot(
       connectorId = UGOT_FORTUNE_CONNECTOR_ID,
       title = "UGOT Fortune",
-      summary = summarizeFortuneToolCall(toolName),
+      summary = summarizeFortuneToolCall(toolName, artifactContextSummary),
       widgetStateJson = widgetStateJson,
     )
   val card =
@@ -193,12 +195,19 @@ internal fun createFortuneToolCallMutation(
   return FortuneToolCallMutation(card = card, replaceIndex = findFortuneWidgetCardIndex(messages))
 }
 
-private fun summarizeFortuneToolCall(toolName: String?): String {
+private fun summarizeFortuneToolCall(toolName: String?, artifactContextSummary: String = ""): String {
   val sanitizedToolName = toolName?.trim().orEmpty()
-  if (sanitizedToolName.isEmpty()) {
-    return UGOT_FORTUNE_DEFAULT_TOOL_SUMMARY
+  val base =
+    if (sanitizedToolName.isEmpty()) {
+      UGOT_FORTUNE_DEFAULT_TOOL_SUMMARY
+    } else {
+      "Updated after running $sanitizedToolName."
+    }
+  if (artifactContextSummary.isBlank()) {
+    return base
   }
-  return "Updated after running $sanitizedToolName."
+  val compactArtifacts = artifactContextSummary.lines().take(8).joinToString("\n")
+  return "$base\n\n$compactArtifacts"
 }
 
 private fun findFortuneWidgetCardIndex(messages: List<ChatMessage>): Int? =

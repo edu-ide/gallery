@@ -12,6 +12,7 @@ import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.data.UgotAuthStorage
 import com.google.ai.edge.gallery.ui.mcp.McpUiSession
+import java.io.File
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -65,6 +66,9 @@ internal class SajugTask(
             widgetBaseUrl = UGOT_FORTUNE_WIDGET_BASE_URL,
             authToken = UgotAuthStorage.getValidAccessTokenOrNull(dataStoreRepository),
             clientName = "gallery-ugot-fortune-client",
+            agentVfsRootPath = File(context.filesDir, "agent_vfs").absolutePath,
+            agentVfsSessionId = UGOT_FORTUNE_TASK_ID,
+            connectorId = UGOT_FORTUNE_CONNECTOR_ID,
           )
         model.instance = session
         onDone("")

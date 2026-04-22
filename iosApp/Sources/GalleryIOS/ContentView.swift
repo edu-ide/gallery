@@ -67,10 +67,11 @@ struct ContentView: View {
     let startedAt = ISO8601DateFormatter().string(from: Date())
     let skills = Set(GalleryAgentSkill.defaultSelectedIds)
     let connectors = Set(GalleryConnector.defaultSelectedIds)
-    var result = await GalleryFortuneActionRunner.runIfNeeded(
+    var result = await UgotMCPActionRunner.runIfNeeded(
       prompt: prompt,
       activeSkillIds: skills,
-      activeConnectorIds: connectors
+      activeConnectorIds: connectors,
+      sessionId: "ios-smoke-action"
     )
     if result == nil {
       result = await GalleryMobileActionRunner.runIfNeeded(

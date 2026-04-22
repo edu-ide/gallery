@@ -190,6 +190,7 @@ struct GalleryConnector: Identifiable, Hashable {
   let title: String
   let symbol: String
   let summary: String
+  let endpoint: String
 }
 
 extension GalleryConnector {
@@ -202,9 +203,18 @@ extension GalleryConnector {
       id: fortuneMcpId,
       title: "UGOT Fortune",
       symbol: "sparkles",
-      summary: "MCP endpoint: \(fortuneMcpEndpoint)"
+      summary: "MCP endpoint: \(fortuneMcpEndpoint)",
+      endpoint: fortuneMcpEndpoint
     ),
   ]
+
+  static func connector(for id: String) -> GalleryConnector? {
+    samples.first { $0.id == id }
+  }
+
+  static func endpoint(for id: String) -> String? {
+    connector(for: id)?.endpoint
+  }
 }
 
 struct GalleryAgentSkill: Identifiable, Hashable {
@@ -215,20 +225,13 @@ struct GalleryAgentSkill: Identifiable, Hashable {
 }
 
 extension GalleryAgentSkill {
-  static let fortuneId = "fortune"
   static let summarizeId = "summarize"
   static let translateId = "translate"
   static let mobileActionsId = "mobile_actions"
 
-  static let defaultSelectedIds = [fortuneId, summarizeId, translateId, mobileActionsId]
+  static let defaultSelectedIds = [summarizeId, translateId, mobileActionsId]
 
   static let samples: [GalleryAgentSkill] = [
-    GalleryAgentSkill(
-      id: fortuneId,
-      title: "Fortune",
-      symbol: "sparkles",
-      summary: "Use the Fortune connector when it is enabled."
-    ),
     GalleryAgentSkill(
       id: summarizeId,
       title: "Summarize",

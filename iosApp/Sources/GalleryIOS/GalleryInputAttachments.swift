@@ -4,8 +4,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 import UIKit
 
-struct ChatInputAttachment: Identifiable, Hashable {
-  enum Kind {
+struct ChatInputAttachment: Identifiable, Hashable, Sendable {
+  enum Kind: Sendable {
     case image
     case audio
   }
@@ -135,6 +135,10 @@ struct CameraCaptureView: UIViewControllerRepresentable {
 }
 
 struct AudioRecorderSheet: View {
+  let title: String
+  let idleTitle: String
+  let recordingTitle: String
+  let stopButtonTitle: String
   let onComplete: (URL) -> Void
   let onCancel: () -> Void
 
@@ -149,7 +153,7 @@ struct AudioRecorderSheet: View {
         Image(systemName: isRecording ? "waveform.circle.fill" : "mic.circle.fill")
           .font(.system(size: 68, weight: .semibold))
           .foregroundStyle(isRecording ? Color.red : Color.accentColor)
-        Text(isRecording ? "Recording…" : "Record audio")
+        Text(isRecording ? recordingTitle : idleTitle)
           .font(.headline)
         if let errorMessage {
           Text(errorMessage)
@@ -160,7 +164,7 @@ struct AudioRecorderSheet: View {
         Button {
           isRecording ? stopRecording() : startRecording()
         } label: {
-          Label(isRecording ? "Stop recording" : "Start recording", systemImage: isRecording ? "stop.fill" : "record.circle")
+          Label(isRecording ? stopButtonTitle : "Start recording", systemImage: isRecording ? "stop.fill" : "record.circle")
             .font(.headline)
             .frame(maxWidth: .infinity)
             .padding()
@@ -170,7 +174,7 @@ struct AudioRecorderSheet: View {
         Spacer()
       }
       .padding()
-      .navigationTitle("Record Audio")
+      .navigationTitle(title)
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .cancellationAction) {

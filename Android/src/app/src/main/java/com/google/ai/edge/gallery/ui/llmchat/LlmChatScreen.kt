@@ -17,6 +17,7 @@
 package com.google.ai.edge.gallery.ui.llmchat
 
 import android.graphics.Bitmap
+import android.util.Base64
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,8 +41,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import android.content.Context
 import androidx.core.os.bundleOf
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.google.ai.edge.gallery.agent.vfs.AgentVfsFactory
+import com.google.ai.edge.gallery.agent.vfs.AgentVfsPaths
+import com.google.ai.edge.gallery.agent.vfs.AgentVfsUserAttachmentIngestor
 import com.google.ai.edge.gallery.GalleryEvent
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.data.BuiltInTaskId
@@ -56,6 +61,7 @@ import com.google.ai.edge.gallery.ui.common.chat.ChatView
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessage
 import com.google.ai.edge.gallery.ui.common.chat.ChatSide
 import com.google.ai.edge.gallery.ui.common.chat.SendMessageTrigger
+import com.google.ai.edge.gallery.ui.mcp.McpUiSession
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.gallery.ui.unifiedchat.ConnectorBar
 import com.google.ai.edge.gallery.ui.unifiedchat.ConnectorBarDisplayMode
@@ -77,6 +83,7 @@ import com.google.ai.edge.gallery.ui.unifiedchat.session.deriveConversationTitle
 import com.google.ai.edge.gallery.ui.unifiedchat.session.toUnifiedChatMessages
 import com.google.ai.edge.gallery.ui.theme.emptyStateContent
 import com.google.ai.edge.gallery.ui.theme.emptyStateTitle
+import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -503,33 +510,52 @@ fun ChatViewWrapper(
           audioMessages.add(message)
         }
       }
-      if ((text.isNotEmpty() && chatMessageText != null) || audioMessages.isNotEmpty()) {
+      if ((text.isNotEmpty() && chatMessageText != null) || images.isNotEmpty() || audioMessages.isNotEmpty()) {
+        val effectiveInputText =
+          text.ifBlank {
+            if (images.isNotEmpty() || audioMessages.isNotEmpty()) {
+              "Please describe the attached input."
+            } else {
+              ""
+            }
+          }
         if (text.isNotEmpty()) {
           modelManagerViewModel.addTextInputHistory(text)
         }
-        viewModel.generateResponse(
-          model = model,
-          input = text,
-          images = images,
-          audioMessages = audioMessages,
-          onFirstToken = onFirstToken,
-          onDone = { onGenerateResponseDone(model) },
-          onError = { errorMessage ->
-            viewModel.handleError(
+        CoroutineScope(Dispatchers.IO).launch {
+          val attachmentVfsContext =
+            ingestUserAttachmentsToAgentVfs(
               context = context,
-              task = task,
-              model = model,
-              errorMessage = errorMessage,
-              modelManagerViewModel = modelManagerViewModel,
+              sessionId = sessionId,
+              images = images,
+              audioMessages = audioMessages,
             )
-          },
-          allowThinking = allowThinking,
-        )
+          withContext(Dispatchers.Main) {
+            viewModel.generateResponse(
+              model = model,
+              input = effectiveInputText.withAgentVfsContext(mcpUiSession, attachmentVfsContext),
+              images = images,
+              audioMessages = audioMessages,
+              onFirstToken = onFirstToken,
+              onDone = { onGenerateResponseDone(model) },
+              onError = { errorMessage ->
+                viewModel.handleError(
+                  context = context,
+                  task = task,
+                  model = model,
+                  errorMessage = errorMessage,
+                  modelManagerViewModel = modelManagerViewModel,
+                )
+              },
+              allowThinking = allowThinking,
+            )
 
-        firebaseAnalytics?.logEvent(
-          GalleryEvent.GENERATE_ACTION.id,
-          bundleOf("capability_name" to task.id, "model_id" to model.name),
-        )
+            firebaseAnalytics?.logEvent(
+              GalleryEvent.GENERATE_ACTION.id,
+              bundleOf("capability_name" to task.id, "model_id" to model.name),
+            )
+          }
+        }
       }
     },
     onRunAgainClicked = { model, message ->
@@ -589,6 +615,76 @@ fun ChatViewWrapper(
   )
 }
 
+private fun String.withAgentVfsContext(
+  mcpUiSession: McpWidgetSessionHost?,
+  userAttachmentSummary: String = "",
+): String {
+  val summaries =
+    listOf(
+        (mcpUiSession as? McpUiSession)?.getAgentVfsContextSummary().orEmpty(),
+        userAttachmentSummary,
+      )
+      .map { it.trim() }
+      .filter { it.isNotBlank() && it != "Available agent files: none" }
+  if (summaries.isEmpty()) {
+    return this
+  }
+  val summary = summaries.joinToString(separator = "\n\n")
+  return """
+Relevant agent workspace files from MCP tools and user attachments are available below. Use them when the user asks about the current widget, resources, files, attachments, or previous tool output.
+
+$summary
+
+User message:
+$this
+""".trimIndent()
+}
+
+private fun ingestUserAttachmentsToAgentVfs(
+  context: Context,
+  sessionId: String,
+  images: List<Bitmap>,
+  audioMessages: List<ChatMessageAudioClip>,
+): String {
+  if (images.isEmpty() && audioMessages.isEmpty()) {
+    return ""
+  }
+  return runCatching {
+      val vfs =
+        AgentVfsFactory.createSystem(File(context.filesDir, "agent_vfs").absolutePath) {
+          System.currentTimeMillis()
+        }
+      val ingestor = AgentVfsUserAttachmentIngestor(vfs)
+      images.forEachIndexed { index, bitmap ->
+        val output = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 88, output)
+        ingestor.ingestDefault(
+          sessionId = sessionId,
+          fileName = "image-${index + 1}.jpg",
+          mimeType = "image/jpeg",
+          text = null,
+          blobBase64 = Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP),
+          externalUri = null,
+          overwrite = false,
+        )
+      }
+      audioMessages.forEachIndexed { index, audio ->
+        ingestor.ingestDefault(
+          sessionId = sessionId,
+          fileName = "audio-${index + 1}.wav",
+          mimeType = "audio/wav",
+          text = null,
+          blobBase64 = Base64.encodeToString(audio.genByteArrayForWav(), Base64.NO_WRAP),
+          externalUri = null,
+          overwrite = false,
+        )
+      }
+      val sanitizedSessionId = AgentVfsPaths.sanitizeOpaqueSegment(sessionId, fallback = "session")
+      vfs.contextSummary("/session/$sanitizedSessionId")
+    }
+    .getOrDefault("")
+}
+
 internal fun shouldRestorePersistedUnifiedSession(
   hasHandledRestoreForSession: Boolean,
   currentMessages: List<ChatMessage>,
@@ -615,6 +711,7 @@ private fun persistUnifiedSessionSnapshot(
     UnifiedChatPersistedSession(
       id = sessionId,
       title = deriveConversationTitleFromUnifiedMessages(messages.toUnifiedChatMessages()),
+      activeAgentSkillIds = emptyList(),
       activeConnectorIds = activeConnectorIds,
       messagesJson = encodedMessages,
       widgetSnapshots = persistedWidgetSnapshots,

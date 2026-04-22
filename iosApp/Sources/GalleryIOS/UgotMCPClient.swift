@@ -1,6 +1,6 @@
 import Foundation
 
-struct GalleryMCPWidgetResource {
+struct UgotMCPWidgetResource {
   let uri: String
   let mimeType: String?
   let html: String
@@ -8,7 +8,7 @@ struct GalleryMCPWidgetResource {
   let permissions: [String: Any]?
 }
 
-final class GalleryMCPExtAppsClient {
+final class UgotMCPClient {
   static let uiExtensionId = "io.modelcontextprotocol/ui"
   static let resourceMimeType = "text/html;profile=mcp-app"
   static let latestUiProtocolVersion = "2026-01-26"
@@ -46,7 +46,7 @@ final class GalleryMCPExtAppsClient {
             ],
           ],
           "clientInfo": [
-            "name": "ugot-gallery-ios",
+            "name": "ugot-ios",
             "version": "0.1",
           ],
         ],
@@ -106,7 +106,7 @@ final class GalleryMCPExtAppsClient {
     try await request(method: "resources/read", params: ["uri": uri])
   }
 
-  func readWidgetResource(uri: String, listedResources: [[String: Any]] = []) async throws -> GalleryMCPWidgetResource? {
+  func readWidgetResource(uri: String, listedResources: [[String: Any]] = []) async throws -> UgotMCPWidgetResource? {
     guard let result = try await readResource(uri: uri),
           let contents = result["contents"] as? [[String: Any]] else {
       return nil
@@ -123,7 +123,7 @@ final class GalleryMCPExtAppsClient {
       guard !text.isEmpty else { continue }
       if Self.isSupportedWidgetMime(mimeType) || text.localizedCaseInsensitiveContains("<html") {
         let contentMeta = Self.uiMeta(from: item)
-        return GalleryMCPWidgetResource(
+        return UgotMCPWidgetResource(
           uri: itemURI,
           mimeType: mimeType,
           html: text,
@@ -139,7 +139,7 @@ final class GalleryMCPExtAppsClient {
     tools: [[String: Any]],
     toolName: String,
     result: [String: Any]
-  ) async throws -> GalleryMCPWidgetResource? {
+  ) async throws -> UgotMCPWidgetResource? {
     var candidateURIs: [String] = []
 
     if let tool = tools.first(where: { ($0["name"] as? String) == toolName }),
@@ -295,7 +295,7 @@ final class GalleryMCPExtAppsClient {
     return latest
   }
 
-  private static func widgetResource(fromToolResult result: [String: Any]) -> GalleryMCPWidgetResource? {
+  private static func widgetResource(fromToolResult result: [String: Any]) -> UgotMCPWidgetResource? {
     let content = result["content"] as? [[String: Any]] ?? []
     for item in content {
       if let resource = item["resource"] as? [String: Any] {
@@ -304,7 +304,7 @@ final class GalleryMCPExtAppsClient {
         let text = itemText(resource)
         if !text.isEmpty, isSupportedWidgetMime(mimeType) || text.localizedCaseInsensitiveContains("<html") {
           let meta = uiMeta(from: resource)
-          return GalleryMCPWidgetResource(uri: uri, mimeType: mimeType, html: text, csp: meta?["csp"] as? [String: Any], permissions: meta?["permissions"] as? [String: Any])
+          return UgotMCPWidgetResource(uri: uri, mimeType: mimeType, html: text, csp: meta?["csp"] as? [String: Any], permissions: meta?["permissions"] as? [String: Any])
         }
       }
 
@@ -313,7 +313,7 @@ final class GalleryMCPExtAppsClient {
       let text = itemText(item)
       if !text.isEmpty, isSupportedWidgetMime(mimeType) || text.localizedCaseInsensitiveContains("<html") {
         let meta = uiMeta(from: item)
-        return GalleryMCPWidgetResource(uri: uri, mimeType: mimeType, html: text, csp: meta?["csp"] as? [String: Any], permissions: meta?["permissions"] as? [String: Any])
+        return UgotMCPWidgetResource(uri: uri, mimeType: mimeType, html: text, csp: meta?["csp"] as? [String: Any], permissions: meta?["permissions"] as? [String: Any])
       }
     }
     return nil

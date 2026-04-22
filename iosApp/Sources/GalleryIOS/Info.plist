@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Gallery iOS</string>
+	<string>UGOT</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -36,7 +36,9 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Use the camera to attach images to AI Chat.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Use the microphone to record audio for AI Chat.</string>
+	<string>Use the microphone for live voice chat and audio attachments.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Use speech recognition to turn your live voice into chat messages.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Choose photos to attach to AI Chat.</string>
 	<key>UILaunchScreen</key>

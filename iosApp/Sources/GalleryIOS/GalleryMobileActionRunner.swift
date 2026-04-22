@@ -5,10 +5,126 @@ import UIKit
 struct GalleryChatActionResult {
   let message: String
   let widgetSnapshot: McpWidgetSnapshot?
+  let approvalRequest: UgotMCPToolApprovalRequest?
 
-  init(message: String, widgetSnapshot: McpWidgetSnapshot? = nil) {
+  init(
+    message: String,
+    widgetSnapshot: McpWidgetSnapshot? = nil,
+    approvalRequest: UgotMCPToolApprovalRequest? = nil
+  ) {
     self.message = message
     self.widgetSnapshot = widgetSnapshot
+    self.approvalRequest = approvalRequest
+  }
+}
+
+enum GalleryCapabilityRoute: Equatable {
+  case nativeSkill(String)
+  case mcpConnector(String)
+  case model
+}
+
+enum GalleryCapabilityRouter {
+  static func route(
+    prompt: String,
+    activeSkillIds: Set<String>,
+    activeConnectorIds: Set<String>
+  ) -> GalleryCapabilityRoute {
+    let request = GalleryCapabilityRouteRequest(
+      prompt: prompt,
+      activeSkillIds: activeSkillIds,
+      activeConnectorIds: activeConnectorIds
+    )
+    return GalleryCapabilityRegistry
+      .definitions
+      .filter { $0.matches(request) }
+      .sorted { lhs, rhs in
+        if lhs.priority == rhs.priority {
+          return lhs.id < rhs.id
+        }
+        return lhs.priority > rhs.priority
+      }
+      .first?
+      .route ?? .model
+  }
+}
+
+private struct GalleryCapabilityRouteRequest {
+  let prompt: String
+  let activeSkillIds: Set<String>
+  let activeConnectorIds: Set<String>
+  let intent: GalleryPromptIntent
+
+  init(
+    prompt: String,
+    activeSkillIds: Set<String>,
+    activeConnectorIds: Set<String>
+  ) {
+    self.prompt = prompt
+    self.activeSkillIds = activeSkillIds
+    self.activeConnectorIds = activeConnectorIds
+    self.intent = GalleryPromptIntent(prompt)
+  }
+}
+
+private struct GalleryCapabilityDefinition {
+  let id: String
+  let route: GalleryCapabilityRoute
+  let priority: Int
+  let matches: (GalleryCapabilityRouteRequest) -> Bool
+}
+
+private enum GalleryCapabilityRegistry {
+  static let definitions: [GalleryCapabilityDefinition] = [
+    GalleryCapabilityDefinition(
+      id: "native.mobile-actions.maps",
+      route: .nativeSkill(GalleryAgentSkill.mobileActionsId),
+      priority: 1_000,
+      matches: { request in
+        // Device/app intents are native capabilities. They must be matched
+        // before any MCP connector can inspect generic verbs such as
+        // "open/show", otherwise an active connector can hijack OS actions.
+        request.intent.isMapOpenRequest
+      }
+    ),
+    GalleryCapabilityDefinition(
+      id: "mcp.fortune",
+      route: .mcpConnector(GalleryConnector.fortuneMcpId),
+      priority: 500,
+      matches: { request in
+        // A connector being toggled on means it is available, not that it may
+        // answer every generic command. MCP routing must be domain-gated.
+        request.activeConnectorIds.contains(GalleryConnector.fortuneMcpId) &&
+          request.intent.isFortuneConnectorRequest
+      }
+    )
+  ]
+}
+
+private struct GalleryPromptIntent {
+  let normalized: String
+
+  init(_ prompt: String) {
+    normalized = prompt
+      .lowercased()
+      .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+  }
+
+  var isMapOpenRequest: Bool {
+    GalleryMobileActionRunner.isMapOpenRequest(normalizedPrompt: normalized)
+  }
+
+  var isFortuneConnectorRequest: Bool {
+    containsAny([
+      "운세", "사주", "궁합", "만세력", "대운", "세운", "월운", "일운", "일진", "일주",
+      "띠별", "띠운세", "생년월일", "출생시", "저장목록", "저장된사람", "저장된사용자",
+      "fortune", "saju", "zodiac", "compatibility", "birthchart", "registeredprofiles",
+      "savedprofiles", "savedusers", "showtodayfortune", "showsajudaily"
+    ])
+  }
+
+  private func containsAny(_ terms: [String]) -> Bool {
+    terms.contains { normalized.contains($0) }
   }
 }
 
@@ -27,11 +143,14 @@ enum GalleryMobileActionRunner {
     }
   }
 
-  private static func isMapOpenRequest(_ prompt: String) -> Bool {
+  static func isMapOpenRequest(_ prompt: String) -> Bool {
     let normalized = prompt
       .lowercased()
       .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+    return isMapOpenRequest(normalizedPrompt: normalized)
+  }
 
+  static func isMapOpenRequest(normalizedPrompt normalized: String) -> Bool {
     if normalized.contains("지도") {
       return normalized.contains("열") ||
         normalized.contains("켜") ||
@@ -48,6 +167,9 @@ enum GalleryMobileActionRunner {
 
   private static func mapURL(for prompt: String) -> URL {
     let query = extractedMapQuery(from: prompt)
+    if prefersNaverMaps(prompt) {
+      return naverMapURL(query: query)
+    }
     var components = URLComponents(string: "https://maps.apple.com/")!
     if let query, !query.isEmpty {
       components.queryItems = [URLQueryItem(name: "q", value: query)]
@@ -55,8 +177,25 @@ enum GalleryMobileActionRunner {
     return components.url ?? URL(string: "https://maps.apple.com/")!
   }
 
+  private static func prefersNaverMaps(_ prompt: String) -> Bool {
+    let normalized = prompt
+      .lowercased()
+      .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+    return normalized.contains("네이버") || normalized.contains("naver")
+  }
+
+  private static func naverMapURL(query: String?) -> URL {
+    guard let query, !query.isEmpty else {
+      return URL(string: "https://map.naver.com/")!
+    }
+    let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? query
+    return URL(string: "https://map.naver.com/p/search/\(encoded)") ?? URL(string: "https://map.naver.com/")!
+  }
+
   private static func extractedMapQuery(from prompt: String) -> String? {
     var value = prompt
+      .replacingOccurrences(of: "네이버", with: "")
+      .replacingOccurrences(of: "naver", with: "", options: .caseInsensitive)
       .replacingOccurrences(of: "지도", with: "")
       .replacingOccurrences(of: "열어봐", with: "")
       .replacingOccurrences(of: "열어줘", with: "")

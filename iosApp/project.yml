@@ -15,6 +15,7 @@ settings:
     SWIFT_VERSION: "5.0"
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
     CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: HBNVC7KCMH
 targets:
   GalleryIOS:
     type: application
@@ -27,7 +28,7 @@ targets:
     info:
       path: Sources/GalleryIOS/Info.plist
       properties:
-        CFBundleDisplayName: Gallery iOS
+        CFBundleDisplayName: UGOT
         UILaunchScreen: {}
         GIDClientID: "133048024494-k34fhrbpp4isrnsvmgkkhso8jk0kl132.apps.googleusercontent.com"
         GIDServerClientID: "133048024494-v9q4qimam6cl70set38o8tdbj3mcr0ss.apps.googleusercontent.com"
@@ -82,3 +83,13 @@ targets:
         script: |
           cd "$SRCROOT/.."
           ./Android/src/gradlew -p Android/src :shared:core:assembleGallerySharedCoreReleaseXCFramework
+    postCompileScripts:
+      - name: Copy MCP Apps Host Shell
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          dest="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/MCPAppsHost"
+          rm -rf "$dest"
+          mkdir -p "$dest"
+          cp "$SRCROOT/Resources/MCPAppsHost/host-shell.html" "$dest/"
+          cp "$SRCROOT/Resources/MCPAppsHost/host-shell.js" "$dest/"

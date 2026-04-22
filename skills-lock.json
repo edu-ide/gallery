@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "skills": {
+    "debugging-instruments": {
+      "source": "dpearson2699/swift-ios-skills",
+      "sourceType": "github",
+      "computedHash": "f8a86874e4a891a6326aee77c6a7f53d9fd279aebfd74923714a72ada010bb2d"
+    },
+    "instruments-profiling": {
+      "source": "steipete/agent-scripts",
+      "sourceType": "github",
+      "computedHash": "4dfb0f35524062d32d9ccc452c0547f3db2475832100e002c5551ab41b84d754"
+    },
+    "native-app-performance": {
+      "source": "steipete/agent-scripts",
+      "sourceType": "github",
+      "computedHash": "746900ae4cfdf4d8ce92c92d3eca2c4af95e622a6b1a8df55b83ce7ae0ea1d03"
+    },
+    "swift-concurrency": {
+      "source": "dpearson2699/swift-ios-skills",
+      "sourceType": "github",
+      "computedHash": "e293abc109db2f9d1f9594f20145da449cd6d531fe99d058e8dc2470a9db5fec"
+    },
+    "swiftui-navigation": {
+      "source": "dpearson2699/swift-ios-skills",
+      "sourceType": "github",
+      "computedHash": "2b3aef82e114f60a1efed18e8743249c3c3254121c3590f2ae7978a63dc1fbb2"
+    },
+    "swiftui-performance": {
+      "source": "dpearson2699/swift-ios-skills",
+      "sourceType": "github",
+      "computedHash": "194dd74c54766ea8c7cc12b38ee45cfdff74b00deb713f79c954d02e61be4b6b"
+    }
+  }
+}

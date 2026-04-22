@@ -6,3 +6,6 @@ iosApp/GalleryIOS.xcodeproj/xcuserdata/
 tmp/
 iosApp/Vendor/LiteRTLM/*.xcframework/
 !iosApp/Vendor/LiteRTLM/.gitkeep
+
+node_modules/
+shared/mcp-apps-host/node_modules/
