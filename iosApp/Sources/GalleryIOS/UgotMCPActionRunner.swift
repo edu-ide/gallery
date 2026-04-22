@@ -2,11 +2,14 @@ import Foundation
 import GallerySharedCore
 
 enum UgotMCPActionRunner {
+  typealias ToolPlanningProvider = (UgotMCPToolPlanningRequest) async -> UgotMCPToolPlanningDecision?
+
   static func runIfNeeded(
     prompt: String,
     activeSkillIds: Set<String>,
     activeConnectorIds: Set<String>,
-    sessionId: String
+    sessionId: String,
+    toolPlanningProvider: ToolPlanningProvider? = nil
   ) async -> GalleryChatActionResult? {
     let activeConnectors = GalleryConnector.samples.filter { activeConnectorIds.contains($0.id) }
     guard !activeConnectors.isEmpty else { return nil }
@@ -19,7 +22,8 @@ enum UgotMCPActionRunner {
         let client = UgotMCPConnectorAction(
           connector: connector,
           accessToken: accessToken,
-          sessionId: sessionId
+          sessionId: sessionId,
+          toolPlanningProvider: toolPlanningProvider
         )
         if let response = try await client.run(prompt: prompt) {
           return GalleryChatActionResult(
@@ -99,6 +103,240 @@ struct UgotMCPToolApprovalRequest: Identifiable, Equatable {
   var id: String { "\(sessionId)::\(connectorId)::\(toolName)" }
 }
 
+struct UgotMCPToolPlanningRequest {
+  let prompt: String
+  let connectorId: String
+  let connectorTitle: String
+  let tools: [[String: Any]]
+}
+
+struct UgotMCPToolPlanningDecision {
+  let toolName: String?
+  let arguments: [String: Any]
+  let entityReference: String?
+  let confidence: Double
+  let requiresTool: Bool
+
+  var shouldUseTool: Bool {
+    guard let toolName, !toolName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return false
+    }
+    return confidence >= 0.55
+  }
+
+  static func parse(from rawText: String) -> UgotMCPToolPlanningDecision? {
+    guard let object = jsonObject(from: rawText) else { return nil }
+    let rawTool = firstString(in: object, keys: ["tool_name", "toolName", "tool", "name"])
+    let normalizedTool = rawTool?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let nullToolNames = ["", "none", "null", "no_tool", "no tool", "model"]
+    let toolName = normalizedTool.flatMap { value in
+      nullToolNames.contains(value.lowercased()) ? nil : value
+    }
+    let arguments =
+      (object["arguments"] as? [String: Any]) ??
+      (object["args"] as? [String: Any]) ??
+      [:]
+    let entityReference = firstString(in: object, keys: [
+      "entity_reference",
+      "entityReference",
+      "target_reference",
+      "targetReference",
+      "profile_name",
+      "profileName",
+      "name_reference",
+      "nameReference",
+    ])?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let confidence = firstDouble(in: object, keys: ["confidence", "score"]) ?? (toolName == nil ? 0 : 0.7)
+    let requiresTool =
+      firstBool(in: object, keys: ["requires_tool", "requiresTool", "needs_tool", "needsTool"]) ??
+      (toolName != nil)
+    return UgotMCPToolPlanningDecision(
+      toolName: toolName,
+      arguments: arguments,
+      entityReference: entityReference?.isEmpty == false ? entityReference : nil,
+      confidence: confidence,
+      requiresTool: requiresTool
+    )
+  }
+
+  private static func jsonObject(from text: String) -> [String: Any]? {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    let candidates = [
+      trimmed,
+      fencedJSONBody(from: trimmed),
+      firstJSONObjectSubstring(in: trimmed),
+    ].compactMap { $0 }
+
+    for candidate in candidates {
+      guard let data = candidate.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        continue
+      }
+      return object
+    }
+    return nil
+  }
+
+  private static func fencedJSONBody(from text: String) -> String? {
+    guard let start = text.range(of: "```") else { return nil }
+    let afterStart = text[start.upperBound...]
+    guard let end = afterStart.range(of: "```") else { return nil }
+    var body = String(afterStart[..<end.lowerBound])
+    if body.lowercased().hasPrefix("json") {
+      body = String(body.dropFirst(4))
+    }
+    return body.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private static func firstJSONObjectSubstring(in text: String) -> String? {
+    guard let start = text.firstIndex(of: "{") else { return nil }
+    var depth = 0
+    var inString = false
+    var isEscaped = false
+    var index = start
+    while index < text.endIndex {
+      let character = text[index]
+      if inString {
+        if isEscaped {
+          isEscaped = false
+        } else if character == "\\" {
+          isEscaped = true
+        } else if character == "\"" {
+          inString = false
+        }
+      } else if character == "\"" {
+        inString = true
+      } else if character == "{" {
+        depth += 1
+      } else if character == "}" {
+        depth -= 1
+        if depth == 0 {
+          return String(text[start...index])
+        }
+      }
+      index = text.index(after: index)
+    }
+    return nil
+  }
+
+  private static func firstString(in object: [String: Any], keys: [String]) -> String? {
+    for key in keys {
+      if let value = object[key] as? String {
+        return value
+      }
+    }
+    return nil
+  }
+
+  private static func firstDouble(in object: [String: Any], keys: [String]) -> Double? {
+    for key in keys {
+      if let value = object[key] as? Double {
+        return value
+      }
+      if let value = object[key] as? NSNumber {
+        return value.doubleValue
+      }
+      if let value = object[key] as? String,
+         let parsed = Double(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
+        return parsed
+      }
+    }
+    return nil
+  }
+
+  private static func firstBool(in object: [String: Any], keys: [String]) -> Bool? {
+    for key in keys {
+      if let value = object[key] as? Bool {
+        return value
+      }
+      if let value = object[key] as? NSNumber {
+        return value.boolValue
+      }
+      if let value = object[key] as? String {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if ["true", "yes", "1"].contains(normalized) { return true }
+        if ["false", "no", "0"].contains(normalized) { return false }
+      }
+    }
+    return nil
+  }
+}
+
+enum UgotMCPToolPlanningPromptBuilder {
+  static func build(request: UgotMCPToolPlanningRequest) -> String {
+    let tools = request.tools
+      .map(toolSummary)
+      .joined(separator: "\n")
+      .trimmedForPrompt(limit: 10_000)
+    return """
+    You are a model-agnostic MCP tool router for the mobile chat host.
+
+    Decide whether the user's latest message should call exactly one MCP tool from connector "\(request.connectorTitle)".
+    Use semantic intent, not keyword matching. The user may write in any language.
+
+    Return ONLY one JSON object with this schema:
+    {
+      "tool_name": "exact listed tool name or null",
+      "arguments": { "schema_parameter": "value" },
+      "entity_reference": "visible user/profile/place/name to resolve later, or null",
+      "confidence": 0.0,
+      "requires_tool": false
+    }
+
+    Rules:
+    - Use only tools listed below.
+    - App-only/internal widget tools are intentionally omitted. Never invent or request hidden app-only tools.
+    - If no listed tool is clearly needed, return {"tool_name": null, "arguments": {}, "entity_reference": null, "confidence": 0, "requires_tool": false}.
+    - If the user requests an action that would require a tool but none of the listed tools can do it, return tool_name null and requires_tool true.
+    - For read-only display requests, prefer the most specific read-only display tool.
+    - For mutation/settings tools, choose them only when the user explicitly asks to set, change, save, delete, clear, or select something.
+    - Never choose a destructive or clearing tool for an informational question.
+    - Do not invent opaque IDs. If a required argument looks like an ID but the user gave a visible name, leave that ID out of arguments and put the visible name in entity_reference.
+    - Fill arguments only from the user's message or safe schema defaults. Do not fabricate birth data, gender, date, or time.
+
+    Available MCP tools:
+    \(tools)
+
+    User message:
+    \(request.prompt.trimmedForPrompt(limit: 2_000))
+    """
+  }
+
+  private static func toolSummary(_ tool: [String: Any]) -> String {
+    let name = tool["name"] as? String ?? "unknown"
+    let title =
+      (tool["title"] as? String) ??
+      ((tool["annotations"] as? [String: Any])?["title"] as? String) ??
+      name
+    let description = (tool["description"] as? String)?.oneLineForPrompt(limit: 520) ?? ""
+    let annotations = tool["annotations"] as? [String: Any] ?? [:]
+    let readOnly = (annotations["readOnlyHint"] as? Bool).map(String.init) ?? "unknown"
+    let destructive = (annotations["destructiveHint"] as? Bool).map(String.init) ?? "unknown"
+    let schema = tool["inputSchema"] as? [String: Any] ?? [:]
+    let required = (schema["required"] as? [String] ?? []).joined(separator: ", ")
+    let properties = (schema["properties"] as? [String: Any] ?? [:])
+      .sorted { $0.key < $1.key }
+      .map { key, raw -> String in
+        guard let property = raw as? [String: Any] else { return key }
+        let type = property["type"] as? String ?? "any"
+        let desc = (property["description"] as? String)?.oneLineForPrompt(limit: 140) ?? ""
+        let hasDefault = property["default"] == nil ? "" : " default"
+        return "\(key):\(type)\(hasDefault)\(desc.isEmpty ? "" : " - \(desc)")"
+      }
+      .joined(separator: "; ")
+      .trimmedForPrompt(limit: 1_000)
+    return """
+    - name: \(name)
+      title: \(title)
+      readOnly: \(readOnly)
+      destructive: \(destructive)
+      required: [\(required)]
+      parameters: \(properties)
+      description: \(description)
+    """
+  }
+}
+
 enum UgotMCPToolApprovalPolicy: String, CaseIterable, Codable, Identifiable {
   case allow
   case ask
@@ -136,6 +374,7 @@ struct UgotMCPToolDescriptor: Identifiable, Hashable {
   let name: String
   let title: String
   let summary: String
+  let isReadOnly: Bool
   let isDestructive: Bool
   let hasWidget: Bool
   let requiredParameters: [String]
@@ -143,7 +382,7 @@ struct UgotMCPToolDescriptor: Identifiable, Hashable {
   var id: String { "\(connectorId)::\(name)" }
 
   var defaultApprovalPolicy: UgotMCPToolApprovalPolicy {
-    isDestructive ? .ask : .allow
+    (isDestructive || !isReadOnly) ? .ask : .allow
   }
 
   init(connectorId: String, tool: [String: Any]) {
@@ -152,6 +391,7 @@ struct UgotMCPToolDescriptor: Identifiable, Hashable {
     name = rawName
     title = Self.displayTitle(for: tool, fallbackName: rawName)
     summary = (tool["description"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    isReadOnly = Self.isReadOnly(tool: tool)
     isDestructive = Self.isDestructive(tool: tool)
     hasWidget = UgotMCPClient.widgetResourceURI(from: tool) != nil
     if let schema = tool["inputSchema"] as? [String: Any],
@@ -184,6 +424,14 @@ struct UgotMCPToolDescriptor: Identifiable, Hashable {
     }
     let name = ((tool["name"] as? String) ?? "").lowercased()
     return ["delete", "remove", "clear", "reset"].contains { name.contains($0) }
+  }
+
+  private static func isReadOnly(tool: [String: Any]) -> Bool {
+    if let annotations = tool["annotations"] as? [String: Any],
+       let readOnly = annotations["readOnlyHint"] as? Bool {
+      return readOnly
+    }
+    return false
   }
 }
 
@@ -286,30 +534,171 @@ enum UgotMCPToolApprovalStore {
   }
 }
 
+private enum UgotMCPToolMetadataCache {
+  private static let ttl: TimeInterval = 300
+  private static let lock = NSLock()
+  private static var values: [String: (timestamp: Date, tools: [[String: Any]])] = [:]
+
+  static func tools(
+    connectorId: String,
+    loader: () async throws -> [[String: Any]]
+  ) async throws -> [[String: Any]] {
+    let now = Date()
+    lock.lock()
+    if let cached = values[connectorId], now.timeIntervalSince(cached.timestamp) < ttl {
+      let tools = cached.tools
+      lock.unlock()
+      return tools
+    }
+    lock.unlock()
+
+    let loaded = try await loader()
+    lock.lock()
+    values[connectorId] = (Date(), loaded)
+    lock.unlock()
+    return loaded
+  }
+}
+
+private enum UgotMCPToolVisibility {
+  static func modelVisibleTools(from tools: [[String: Any]]) -> [[String: Any]] {
+    tools.filter { !isAppOnly($0) }
+  }
+
+  static func isAppOnly(_ tool: [String: Any]) -> Bool {
+    guard let meta = tool["_meta"] as? [String: Any] else { return false }
+    if visibilityIsAppOnly(meta["ui/visibility"]) {
+      return true
+    }
+    if let ui = meta["ui"] as? [String: Any],
+       visibilityIsAppOnly(ui["visibility"]) {
+      return true
+    }
+    return false
+  }
+
+  private static func visibilityIsAppOnly(_ value: Any?) -> Bool {
+    let rawValues: [String]
+    if let string = value as? String {
+      rawValues = [string]
+    } else if let strings = value as? [String] {
+      rawValues = strings
+    } else if let values = value as? [Any] {
+      rawValues = values.compactMap { $0 as? String }
+    } else {
+      return false
+    }
+
+    let normalized = Set(rawValues.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+    return normalized.contains("app") && !normalized.contains("model")
+  }
+}
+
 private struct UgotMCPToolPlan {
   let tool: [String: Any]
   let name: String
   let title: String
   let arguments: [String: Any]
   let score: Int
+  let entityReference: String?
+
+  func with(arguments: [String: Any]) -> UgotMCPToolPlan {
+    UgotMCPToolPlan(
+      tool: tool,
+      name: name,
+      title: title,
+      arguments: arguments,
+      score: score,
+      entityReference: entityReference
+    )
+  }
 }
 
 private enum UgotMCPToolPlanner {
-  static func plan(prompt: String, tools: [[String: Any]]) -> UgotMCPToolPlan? {
-    let signals = PromptSignals(prompt: prompt)
-    guard signals.shouldConsiderTools else { return nil }
+  static func toolsForModelPlanning(
+    prompt: String,
+    tools: [[String: Any]],
+    limit: Int = 18
+  ) -> [[String: Any]] {
+    let searched = UgotMCPToolSearchIndex(tools: tools).search(query: prompt, limit: limit)
+    guard !searched.isEmpty else {
+      return Array(tools.prefix(limit))
+    }
 
-    let ranked = tools.compactMap { tool -> UgotMCPToolPlan? in
-      guard let name = tool["name"] as? String, !name.isEmpty else { return nil }
-      guard !isBlocked(tool: tool, signals: signals) else { return nil }
-      let score = score(tool: tool, signals: signals)
-      guard score >= 7 else { return nil }
+    var selected = searched.map(\.tool)
+    let selectedNames = Set(selected.compactMap { $0["name"] as? String })
+    let remaining = tools.filter { tool in
+      guard let name = tool["name"] as? String else { return false }
+      return !selectedNames.contains(name)
+    }
+    selected.append(contentsOf: remaining.prefix(max(0, limit - selected.count)))
+    return Array(selected.prefix(limit))
+  }
+
+  static func plan(
+    prompt: String,
+    tools: [[String: Any]],
+    decision: UgotMCPToolPlanningDecision?
+  ) -> UgotMCPToolPlan? {
+    if let decision,
+       decision.shouldUseTool,
+       let plan = planFromDecision(decision, tools: tools) {
+      return plan
+    }
+    return planFromMetadataSearch(prompt: prompt, tools: tools)
+  }
+
+  private static func planFromDecision(
+    _ decision: UgotMCPToolPlanningDecision,
+    tools: [[String: Any]]
+  ) -> UgotMCPToolPlan? {
+    guard let requestedName = decision.toolName?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !requestedName.isEmpty,
+          let tool = tools.first(where: { (($0["name"] as? String) ?? "").caseInsensitiveCompare(requestedName) == .orderedSame }),
+          let name = tool["name"] as? String else {
+      return nil
+    }
+
+    let sanitized = sanitizedArguments(decision.arguments, for: tool)
+    let normalized = normalizeOpaqueArguments(
+      sanitized,
+      for: tool,
+      existingEntityReference: decision.entityReference
+    )
+    let arguments = argumentsWithDefaults(normalized.arguments, for: tool)
+    let score = max(0, min(100, Int((decision.confidence * 100).rounded())))
+    return UgotMCPToolPlan(
+      tool: tool,
+      name: name,
+      title: displayTitle(for: tool, fallbackName: name),
+      arguments: arguments,
+      score: score,
+      entityReference: normalized.entityReference
+    )
+  }
+
+  private static func planFromMetadataSearch(prompt: String, tools: [[String: Any]]) -> UgotMCPToolPlan? {
+    let searched = UgotMCPToolSearchIndex(tools: tools).search(query: prompt, limit: 6)
+    let ranked = searched.compactMap { result -> UgotMCPToolPlan? in
+      guard result.score >= 8,
+            let name = result.tool["name"] as? String,
+            !name.isEmpty else {
+        return nil
+      }
+      // Metadata-only fallback is intentionally conservative. Mutating tools
+      // should be selected by the model planner, then gated by approval UI.
+      guard isReadOnly(tool: result.tool) else { return nil }
+
+      let arguments = argumentsWithDefaults([:], for: result.tool)
+      let missing = missingRequiredArguments(for: result.tool, arguments: arguments)
+      guard missing.isEmpty else { return nil }
       return UgotMCPToolPlan(
-        tool: tool,
+        tool: result.tool,
         name: name,
-        title: displayTitle(for: tool, fallbackName: name),
-        arguments: arguments(for: tool, signals: signals),
-        score: score
+        title: displayTitle(for: result.tool, fallbackName: name),
+        arguments: arguments,
+        score: result.score,
+        entityReference: nil
       )
     }
     return ranked.sorted { lhs, rhs in
@@ -318,107 +707,70 @@ private enum UgotMCPToolPlanner {
     }.first
   }
 
-  private static func score(tool: [String: Any], signals: PromptSignals) -> Int {
-    let haystack = searchableText(for: tool)
-    let compactHaystack = haystack
-      .replacingOccurrences(of: "[^\\p{L}\\p{N}]+", with: "", options: .regularExpression)
-    let name = ((tool["name"] as? String) ?? "").lowercased()
-    let compactName = name.replacingOccurrences(of: "[^\\p{L}\\p{N}]+", with: "", options: .regularExpression)
-    let guidance = ToolGuidance(tool: tool, searchableText: haystack)
-    var score = 0
-
-    if signals.normalized.contains(compactName) || compactHaystack.contains(signals.normalized) {
-      score += 20
-    }
-
-    for term in signals.weightedTerms {
-      if haystack.contains(term.value) {
-        score += term.weight
+  private static func sanitizedArguments(_ raw: [String: Any], for tool: [String: Any]) -> [String: Any] {
+    guard let properties = inputProperties(for: tool) else { return [:] }
+    var out: [String: Any] = [:]
+    for (key, value) in raw {
+      guard properties[key] != nil, !(value is NSNull) else { continue }
+      if let dict = value as? [String: Any], dict["$resolve"] != nil {
+        continue
       }
+      out[key] = value
     }
-
-    for token in signals.tokens where token.count >= 3 {
-      if haystack.contains(token) {
-        score += 2
-      }
-    }
-
-    if signals.isListIntent, containsAny(haystack, ["list", "view", "get", "registered", "saved", "profile", "profiles", "user", "users"]) {
-      score += 6
-    }
-    if signals.isCurrentDayIntent, containsAny(haystack, ["today", "daily", "day", "date", "current"]) {
-      score += 6
-    }
-    if signals.isGenericTodayFortuneIntent {
-      if compactName.contains("showtodayfortune") {
-        score += 42
-      } else if containsAny(haystack, ["today fortune", "fortune for today", "today's fortune", "show today"]) {
-        score += 24
-      } else if compactName.contains("showsajudaily") {
-        score += 5
-      }
-    }
-    if signals.isShowIntent, containsAny(haystack, ["show", "view", "display", "open", "get"]) {
-      score += 3
-    }
-    if hasWidget(tool: tool), signals.isShowIntent || signals.isListIntent || signals.isCurrentDayIntent {
-      score += 2
-    }
-    // Prefer generic resolver tools when the prompt asks for a current-day/list result
-    // without enough explicit target fields. This reads MCP tool metadata guidance
-    // instead of pinning behavior to one connector or one tool name.
-    if signals.needsGenericTargetResolution, guidance.isGenericTargetResolver {
-      score += 14
-    }
-    if signals.isListIntent,
-       guidance.isGenericTargetResolver,
-       !containsAny(haystack, ["list", "registered", "profiles", "users", "saved users"]) {
-      score -= 10
-    }
-    if !signals.hasExplicitTargetData, guidance.requiresKnownTarget {
-      score -= 14
-    }
-    if signals.needsGenericTargetResolution, guidance.saysUseAnotherToolFirst {
-      score -= 12
-    }
-    if !signals.hasExplicitTargetData,
-       guidance.targetLikeParameterCount >= 3,
-       guidance.requiresKnownTarget,
-       !guidance.isGenericTargetResolver {
-      score -= 8
-    }
-    if !missingRequiredParameters(tool: tool, signals: signals).isEmpty {
-      score -= 40
-    }
-    if isDestructive(tool: tool), !signals.isMutationIntent {
-      score -= 20
-    }
-    return score
+    return out
   }
 
-  private static func arguments(for tool: [String: Any], signals: PromptSignals) -> [String: Any] {
-    guard let schema = tool["inputSchema"] as? [String: Any],
-          let properties = schema["properties"] as? [String: Any] else {
-      return [:]
-    }
-
-    var arguments: [String: Any] = [:]
-    for (rawName, rawProperty) in properties {
-      guard let property = rawProperty as? [String: Any] else { continue }
-      let name = rawName.lowercased()
-      if let value = property["default"], !(value is NSNull) {
-        arguments[rawName] = value
-      } else if name == "lang" || name == "locale" {
-        arguments[rawName] = "ko"
-      } else if name == "sort", let enumValues = property["enum"] as? [String], enumValues.contains("default") {
-        arguments[rawName] = "default"
-      } else if name == "sort" {
-        arguments[rawName] = "default"
-      } else if (name.contains("date") || name == "day") && signals.isCurrentDayIntent {
-        arguments[rawName] = todayString()
+  private static func normalizeOpaqueArguments(
+    _ arguments: [String: Any],
+    for tool: [String: Any],
+    existingEntityReference: String?
+  ) -> (arguments: [String: Any], entityReference: String?) {
+    var out = arguments
+    var entityReference = existingEntityReference?.trimmingCharacters(in: .whitespacesAndNewlines)
+    for key in out.keys where isOpaqueReferenceParameter(key) {
+      guard let value = out[key] else { continue }
+      if let string = value as? String {
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty, !isLikelyOpaqueIdentifier(trimmed) {
+          if entityReference?.isEmpty != false {
+            entityReference = trimmed
+          }
+          out.removeValue(forKey: key)
+        }
       }
     }
-    return arguments
+    return (out, entityReference?.isEmpty == false ? entityReference : nil)
+  }
+
+  private static func argumentsWithDefaults(_ arguments: [String: Any], for tool: [String: Any]) -> [String: Any] {
+    guard let properties = inputProperties(for: tool) else { return arguments }
+    var out = arguments
+    for (key, rawProperty) in properties where out[key] == nil {
+      guard let property = rawProperty as? [String: Any] else { continue }
+      if let value = property["default"], !(value is NSNull) {
+        out[key] = value
+      }
+    }
+    return out
+  }
+
+  private static func missingRequiredArguments(for tool: [String: Any], arguments: [String: Any]) -> [String] {
+    guard let schema = tool["inputSchema"] as? [String: Any],
+          let required = schema["required"] as? [String],
+          !required.isEmpty else {
+      return []
+    }
+    return required.filter { name in
+      guard let value = arguments[name], !(value is NSNull) else { return true }
+      if let string = value as? String {
+        return string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      }
+      return false
+    }
+  }
+
+  private static func inputProperties(for tool: [String: Any]) -> [String: Any]? {
+    (tool["inputSchema"] as? [String: Any])?["properties"] as? [String: Any]
   }
 
   private static func displayTitle(for tool: [String: Any], fallbackName: String) -> String {
@@ -436,218 +788,40 @@ private enum UgotMCPToolPlanner {
       .joined(separator: " ")
   }
 
-  private static func searchableText(for tool: [String: Any]) -> String {
-    [
-      tool["name"] as? String,
-      tool["title"] as? String,
-      tool["description"] as? String,
-      (tool["annotations"] as? [String: Any])?["title"] as? String,
-    ]
-      .compactMap { $0 }
-      .joined(separator: " ")
-      .lowercased()
-      .replacingOccurrences(of: "_", with: " ")
-      .replacingOccurrences(of: "-", with: " ")
-  }
-
   private static func hasWidget(tool: [String: Any]) -> Bool {
     UgotMCPClient.widgetResourceURI(from: tool) != nil
   }
 
-  private static func isDestructive(tool: [String: Any]) -> Bool {
+  private static func isReadOnly(tool: [String: Any]) -> Bool {
     if let annotations = tool["annotations"] as? [String: Any],
-       let destructive = annotations["destructiveHint"] as? Bool {
-      return destructive
+       let readOnly = annotations["readOnlyHint"] as? Bool {
+      return readOnly
     }
-    let name = ((tool["name"] as? String) ?? "").lowercased()
-    return containsAny(name, ["delete", "remove", "clear", "reset"])
+    return false
   }
 
-  private static func isBlocked(tool: [String: Any], signals: PromptSignals) -> Bool {
-    // Destructive MCP tools must not be selected by metadata similarity alone.
-    // Example: `clear_default_user` contains "default/current/saved user" words,
-    // so a generic "오늘의 운세 뭐야" prompt used to outscore the intended
-    // `show_today_fortune` path. Keep destructive tools opt-in only.
-    if isDestructive(tool: tool), !signals.isDestructiveMutationIntent {
+  private static func isOpaqueReferenceParameter(_ rawName: String) -> Bool {
+    let name = rawName.lowercased()
+    return name == "id" ||
+      name.hasSuffix("_id") ||
+      name.hasSuffix("id") ||
+      name.contains("uuid") ||
+      name.contains("identifier")
+  }
+
+  private static func isLikelyOpaqueIdentifier(_ value: String) -> Bool {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.range(of: #"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"#, options: .regularExpression) != nil {
       return true
     }
-    return false
-  }
-
-  private static func containsAny(_ text: String, _ terms: [String]) -> Bool {
-    terms.contains { text.contains($0) }
-  }
-
-  private static func todayString() -> String {
-    let formatter = DateFormatter()
-    formatter.calendar = Calendar(identifier: .gregorian)
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.timeZone = TimeZone(identifier: "Asia/Seoul") ?? .current
-    formatter.dateFormat = "yyyy-MM-dd"
-    return formatter.string(from: Date())
-  }
-
-  private static func missingRequiredParameters(tool: [String: Any], signals: PromptSignals) -> [String] {
-    guard let schema = tool["inputSchema"] as? [String: Any],
-          let required = schema["required"] as? [String],
-          !required.isEmpty else {
-      return []
+    if trimmed.range(of: #"^[0-9a-fA-F]{24}$"#, options: .regularExpression) != nil {
+      return true
     }
-    return required.filter { !canFill(parameterName: $0, tool: tool, signals: signals) }
-  }
-
-  private static func canFill(parameterName rawName: String, tool: [String: Any], signals: PromptSignals) -> Bool {
-    let name = rawName.lowercased()
-    if parameterDefaultValue(parameterName: rawName, tool: tool) != nil { return true }
-    if name == "lang" || name == "locale" || name == "sort" { return true }
-    if (name.contains("date") || name == "day") && (signals.isCurrentDayIntent || signals.hasDateLikeValue) { return true }
-    if name.contains("time") && signals.hasTimeLikeValue { return true }
-    if name.contains("gender") || name.contains("sex") { return signals.hasGenderLikeValue }
-    return false
-  }
-
-  private static func parameterDefaultValue(parameterName rawName: String, tool: [String: Any]) -> Any? {
-    guard let schema = tool["inputSchema"] as? [String: Any],
-          let properties = schema["properties"] as? [String: Any],
-          let property = properties[rawName] as? [String: Any],
-          let value = property["default"],
-          !(value is NSNull) else {
-      return nil
+    if trimmed.range(of: #"^[A-Za-z]+_[A-Za-z0-9_-]{8,}$"#, options: .regularExpression) != nil {
+      return true
     }
-    return value
-  }
-
-  private struct ToolGuidance {
-    let isGenericTargetResolver: Bool
-    let requiresKnownTarget: Bool
-    let saysUseAnotherToolFirst: Bool
-    let targetLikeParameterCount: Int
-
-    init(tool: [String: Any], searchableText: String) {
-      let text = searchableText
-      isGenericTargetResolver =
-        text.contains("use this for generic") ||
-        text.contains("prefer the user") ||
-        text.contains("default saved") ||
-        text.contains("default profile") ||
-        text.contains("profile selection") ||
-        text.contains("birth input") ||
-        text.contains("missing target") ||
-        text.contains("target or default")
-
-      requiresKnownTarget =
-        text.contains("only when") ||
-        text.contains("already known") ||
-        text.contains("concrete saved") ||
-        text.contains("specific person") ||
-        text.contains("explicit target")
-
-      saysUseAnotherToolFirst =
-        text.contains("use ") && text.contains(" first") &&
-        (text.contains("generic request") || text.contains("ambiguous"))
-
-      if let schema = tool["inputSchema"] as? [String: Any],
-         let properties = schema["properties"] as? [String: Any] {
-        targetLikeParameterCount = properties.keys.filter(Self.isTargetLikeParameter).count
-      } else {
-        targetLikeParameterCount = 0
-      }
-    }
-
-    private static func isTargetLikeParameter(_ rawName: String) -> Bool {
-      let name = rawName.lowercased()
-      return name.contains("birth") ||
-        name.contains("gender") ||
-        name.contains("sex") ||
-        name == "name" ||
-        name.hasSuffix("_name") ||
-        name.contains("target")
-    }
-  }
-
-  private struct WeightedTerm {
-    let value: String
-    let weight: Int
-  }
-
-  private struct PromptSignals {
-    let original: String
-    let lowercased: String
-    let normalized: String
-    let tokens: [String]
-    let weightedTerms: [WeightedTerm]
-    let isListIntent: Bool
-    let isCurrentDayIntent: Bool
-    let isFortuneIntent: Bool
-    let isShowIntent: Bool
-    let isMutationIntent: Bool
-    let isDestructiveMutationIntent: Bool
-    let hasDateLikeValue: Bool
-    let hasTimeLikeValue: Bool
-    let hasGenderLikeValue: Bool
-
-    init(prompt: String) {
-      original = prompt
-      lowercased = prompt.lowercased()
-      normalized = lowercased.replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
-      tokens = lowercased
-        .replacingOccurrences(of: "[^\\p{L}\\p{N}_-]+", with: " ", options: .regularExpression)
-        .split(separator: " ")
-        .map(String.init)
-
-      isListIntent = Self.hasAny(normalized, ["목록", "리스트", "list", "profiles", "registered", "saved"])
-      isCurrentDayIntent = Self.hasAny(normalized, ["오늘", "금일", "today", "daily", "current"])
-      isFortuneIntent = Self.hasAny(normalized, ["운세", "사주", "fortune", "saju", "iljin", "ilji"])
-      isShowIntent = Self.hasAny(normalized, ["보여", "열어", "조회", "불러", "알려", "뭐야", "뭔가", "뭔지", "어때", "show", "view", "open", "display", "get"])
-      isDestructiveMutationIntent = Self.hasAny(normalized, ["삭제", "지워", "초기화", "해제", "취소", "clear", "delete", "remove", "reset", "unset"])
-      isMutationIntent = isDestructiveMutationIntent || Self.hasAny(normalized, ["저장해", "설정", "변경", "save", "set", "update"])
-      hasDateLikeValue = Self.matches(lowercased, pattern: "\\b\\d{4}[-./년 ]\\d{1,2}[-./월 ]\\d{1,2}\\b") ||
-        Self.matches(lowercased, pattern: "\\b\\d{6,8}\\b")
-      hasTimeLikeValue = Self.matches(lowercased, pattern: "\\b\\d{1,2}:\\d{2}\\b") ||
-        Self.hasAny(normalized, ["오전", "오후", "am", "pm", "시생", "출생시"])
-      hasGenderLikeValue = Self.hasAny(normalized, ["남자", "남성", "여자", "여성", "male", "female"])
-
-      var terms: [WeightedTerm] = []
-      if isListIntent {
-        terms += ["list", "view", "get", "saved", "registered", "profile", "profiles", "user", "users"]
-          .map { WeightedTerm(value: $0, weight: 4) }
-      }
-      if isCurrentDayIntent {
-        terms += ["today", "daily", "current", "date", "day"].map { WeightedTerm(value: $0, weight: 4) }
-      }
-      if isShowIntent {
-        terms += ["show", "view", "open", "display", "get"].map { WeightedTerm(value: $0, weight: 3) }
-      }
-      if isMutationIntent {
-        terms += ["save", "delete", "remove", "set", "update", "clear"].map { WeightedTerm(value: $0, weight: 3) }
-      }
-      weightedTerms = terms
-    }
-
-    var hasExplicitTargetData: Bool {
-      hasDateLikeValue && hasTimeLikeValue && hasGenderLikeValue
-    }
-
-    var needsGenericTargetResolution: Bool {
-      isCurrentDayIntent && !isListIntent && !hasExplicitTargetData
-    }
-
-    var isGenericTodayFortuneIntent: Bool {
-      isCurrentDayIntent && isFortuneIntent && !isListIntent && !hasExplicitTargetData
-    }
-
-    var shouldConsiderTools: Bool {
-      isFortuneIntent || isListIntent || isGenericTodayFortuneIntent || isMutationIntent ||
-        tokens.contains { $0.contains("_") || $0.contains("-") }
-    }
-
-    private static func hasAny(_ text: String, _ terms: [String]) -> Bool {
-      terms.contains { text.contains($0) }
-    }
-
-    private static func matches(_ text: String, pattern: String) -> Bool {
-      text.range(of: pattern, options: .regularExpression) != nil
-    }
+    let compact = trimmed.replacingOccurrences(of: "[^A-Za-z0-9_-]+", with: "", options: .regularExpression)
+    return compact.count >= 16 && compact == trimmed
   }
 }
 
@@ -655,10 +829,17 @@ final class UgotMCPConnectorAction {
   private let connector: GalleryConnector
   private let mcpClient: UgotMCPClient
   private let sessionId: String
+  private let toolPlanningProvider: UgotMCPActionRunner.ToolPlanningProvider?
 
-  init(connector: GalleryConnector, accessToken: String, sessionId: String) {
+  init(
+    connector: GalleryConnector,
+    accessToken: String,
+    sessionId: String,
+    toolPlanningProvider: UgotMCPActionRunner.ToolPlanningProvider? = nil
+  ) {
     self.connector = connector
     self.sessionId = sessionId
+    self.toolPlanningProvider = toolPlanningProvider
     self.mcpClient = UgotMCPClient(
       connectorId: connector.id,
       endpoint: URL(string: connector.endpoint)!,
@@ -668,7 +849,9 @@ final class UgotMCPConnectorAction {
 
   func run(prompt: String) async throws -> UgotMCPActionResponse? {
     try await mcpClient.initialize()
-    let tools = try await mcpClient.listTools()
+    let tools = try await UgotMCPToolMetadataCache.tools(connectorId: connector.id) {
+      try await mcpClient.listTools()
+    }
     if let pending = UgotMCPToolApprovalStore.pendingApproval(
       sessionId: sessionId,
       connectorIds: [connector.id]
@@ -687,8 +870,57 @@ final class UgotMCPConnectorAction {
       )
     }
 
-    guard let plan = UgotMCPToolPlanner.plan(prompt: prompt, tools: tools) else {
+    let planningTools = UgotMCPToolVisibility.modelVisibleTools(from: tools)
+    guard !planningTools.isEmpty else {
+      return UgotMCPActionResponse(
+        message: "이 connector에는 대화에서 직접 실행할 수 있는 MCP 도구가 없어요.",
+        snapshot: nil
+      )
+    }
+
+    if let planned = UgotMCPToolPlanner.plan(prompt: prompt, tools: planningTools, decision: nil) {
+      return try await executePlannedTool(planned, prompt: prompt, allTools: tools)
+    }
+
+    let modelPlanningTools = UgotMCPToolPlanner.toolsForModelPlanning(prompt: prompt, tools: planningTools)
+    let decision = await toolPlanningProvider?(UgotMCPToolPlanningRequest(
+      prompt: prompt,
+      connectorId: connector.id,
+      connectorTitle: connector.title,
+      tools: modelPlanningTools
+    ))
+    guard let planned = UgotMCPToolPlanner.plan(prompt: prompt, tools: modelPlanningTools, decision: decision) else {
+      if decision?.requiresTool == true {
+        return UgotMCPActionResponse(
+          message: """
+          실행할 수 있는 MCP 도구를 찾지 못해서 아무 작업도 하지 않았어요.
+
+          도구 승인 목록에서 connector와 도구가 켜져 있는지 확인하거나, 대상을 더 구체적으로 말해 주세요.
+          """,
+          snapshot: nil
+        )
+      }
       return nil
+    }
+    return try await executePlannedTool(planned, prompt: prompt, allTools: tools)
+  }
+
+  private func executePlannedTool(
+    _ planned: UgotMCPToolPlan,
+    prompt: String,
+    allTools tools: [[String: Any]]
+  ) async throws -> UgotMCPActionResponse {
+    let plan = try await preparePlanForExecution(planned, prompt: prompt, tools: tools)
+    let missingArguments = missingRequiredArguments(for: plan.tool, arguments: plan.arguments)
+    if !missingArguments.isEmpty {
+      return UgotMCPActionResponse(
+        message: """
+        \(plan.title) 도구를 실행하려면 \(missingArguments.joined(separator: ", ")) 값이 더 필요해요.
+
+        예: “기본사용자를 Yw로 바꿔”처럼 대상 이름을 함께 말하거나, 먼저 저장목록에서 대상을 선택해 주세요.
+        """,
+        snapshot: nil
+      )
     }
     let descriptor = UgotMCPToolDescriptor(connectorId: connector.id, tool: plan.tool)
     let policy = UgotMCPToolApprovalStore.policy(connectorId: connector.id, descriptor: descriptor)
@@ -733,9 +965,333 @@ final class UgotMCPConnectorAction {
     }
   }
 
+  private func preparePlanForExecution(
+    _ plan: UgotMCPToolPlan,
+    prompt: String,
+    tools: [[String: Any]]
+  ) async throws -> UgotMCPToolPlan {
+    let missing = missingRequiredArguments(for: plan.tool, arguments: plan.arguments)
+    guard !missing.isEmpty else { return plan }
+
+    var arguments = plan.arguments
+    var didResolve = false
+    for parameterName in missing where isOpaqueReferenceParameter(parameterName) {
+      guard arguments[parameterName] == nil else { continue }
+      if let resolved = try await resolveOpaqueReference(
+        parameterName: parameterName,
+        prompt: prompt,
+        entityReference: plan.entityReference,
+        targetToolName: plan.name,
+        tools: tools
+      ) {
+        arguments[parameterName] = resolved
+        didResolve = true
+      }
+    }
+
+    return didResolve ? plan.with(arguments: arguments) : plan
+  }
+
+  private func resolveOpaqueReference(
+    parameterName: String,
+    prompt: String,
+    entityReference: String?,
+    targetToolName: String,
+    tools: [[String: Any]]
+  ) async throws -> Any? {
+    let trimmedEntityReference = entityReference?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let searchText = trimmedEntityReference?.isEmpty == false
+      ? trimmedEntityReference
+      : entitySearchText(from: prompt)
+    guard let searchText else { return nil }
+    guard let resolver = resolverTool(
+      parameterName: parameterName,
+      targetToolName: targetToolName,
+      searchText: searchText,
+      tools: tools
+    ) else {
+      return nil
+    }
+    let result = try await mcpClient.callTool(name: resolver.name, arguments: resolver.arguments)
+    return extractResolvedValue(
+      from: result,
+      preferredKeys: preferredResolverKeys(for: parameterName)
+    )
+  }
+
+  private func resolverTool(
+    parameterName: String,
+    targetToolName: String,
+    searchText: String,
+    tools: [[String: Any]]
+  ) -> (name: String, arguments: [String: Any])? {
+    let parameterTerms = parameterName
+      .replacingOccurrences(of: "_", with: " ")
+      .replacingOccurrences(of: "-", with: " ")
+    let query = "\(searchText) \(parameterTerms) find search lookup list saved registered profile user"
+    let candidates = UgotMCPToolSearchIndex(tools: tools).search(query: query, limit: 8)
+
+    let ranked = candidates.compactMap { result -> (tool: [String: Any], name: String, arguments: [String: Any], score: Int)? in
+      guard let name = result.tool["name"] as? String,
+            name != targetToolName,
+            !isDestructiveTool(result.tool) else {
+        return nil
+      }
+      guard let searchParameter = fillableSearchParameter(in: result.tool) else {
+        return nil
+      }
+      let document = UgotMCPToolSearchIndex.document(for: result.tool)
+      let resolverWords = ["find", "search", "lookup", "resolve", "list", "get", "saved", "registered", "profile", "user"]
+      guard resolverWords.contains(where: { document.contains($0) }) else {
+        return nil
+      }
+
+      var arguments: [String: Any] = [searchParameter: searchText]
+      if let exactParameter = optionalBooleanParameter(namedLike: ["exact"], in: result.tool) {
+        arguments[exactParameter] = true
+      }
+      if let limitParameter = optionalNumericParameter(namedLike: ["limit", "max"], in: result.tool) {
+        arguments[limitParameter] = 5
+      }
+      if let langParameter = optionalStringParameter(namedLike: ["lang", "locale"], in: result.tool) {
+        arguments[langParameter] = "ko"
+      }
+
+      var score = result.score
+      let compactName = compactIdentifier(name)
+      if compactName.contains("find") || compactName.contains("search") || compactName.contains("lookup") {
+        score += 20
+      }
+      if compactName.contains("saved") || compactName.contains("profile") || compactName.contains("user") {
+        score += 10
+      }
+      return (result.tool, name, arguments, score)
+    }
+
+    return ranked.sorted { $0.score > $1.score }.first.map { ($0.name, $0.arguments) }
+  }
+
+  private func entitySearchText(from prompt: String) -> String? {
+    let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+
+    if let quoted = firstQuotedSpan(in: trimmed) {
+      return quoted
+    }
+
+    // Language-neutral fallback for non-model callers. The normal path asks the
+    // model planner for `entity_reference`, so the host does not need connector
+    // or language keyword tables here.
+    let stopwords: Set<String> = [
+      "a", "an", "the", "to", "for", "of", "with", "as", "by",
+      "default", "user", "profile", "person", "member",
+      "set", "change", "update", "select", "save", "delete", "clear", "remove",
+    ]
+    let tokens = trimmed
+      .lowercased()
+      .replacingOccurrences(of: "[^\\p{L}\\p{N}._-]+", with: " ", options: .regularExpression)
+      .split(separator: " ")
+      .map(String.init)
+      .filter { token in
+        !token.isEmpty && !stopwords.contains(token)
+      }
+    return tokens.last
+  }
+
+  private func firstQuotedSpan(in text: String) -> String? {
+    let quotePairs: [(Character, Character)] = [("\"", "\""), ("'", "'"), ("“", "”"), ("‘", "’")]
+    for (open, close) in quotePairs {
+      guard let start = text.firstIndex(of: open) else { continue }
+      let rest = text[text.index(after: start)...]
+      guard let end = rest.firstIndex(of: close) else { continue }
+      let value = String(rest[..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
+      if !value.isEmpty {
+        return value
+      }
+    }
+    return nil
+  }
+
+  private func extractResolvedValue(from value: Any, preferredKeys: [String]) -> Any? {
+    if let dict = value as? [String: Any] {
+      for key in preferredKeys {
+        if let exact = dict[key], !(exact is NSNull) {
+          return scalarResolvedValue(exact)
+        }
+      }
+
+      let normalizedPreferred = preferredKeys.map(compactIdentifier)
+      for (key, raw) in dict {
+        if normalizedPreferred.contains(compactIdentifier(key)),
+           let scalar = scalarResolvedValue(raw) {
+          return scalar
+        }
+      }
+
+      for priorityKey in [
+        "structuredContent",
+        "structured_content",
+        "best_match",
+        "bestMatch",
+        "match",
+        "profile",
+        "user",
+        "saved_user",
+        "savedUser",
+        "users",
+        "matches",
+        "items",
+        "nearby_matches",
+        "nearbyMatches",
+        "result",
+        "data"
+      ] {
+        if let nested = dict[priorityKey],
+           let resolved = extractResolvedValue(from: nested, preferredKeys: preferredKeys) {
+          return resolved
+        }
+      }
+
+      for (key, raw) in dict where key != "content" {
+        guard raw is [String: Any] || raw is [Any] else { continue }
+        if let resolved = extractResolvedValue(from: raw, preferredKeys: preferredKeys) {
+          return resolved
+        }
+      }
+      return nil
+    }
+
+    if let array = value as? [Any] {
+      for item in array {
+        if let resolved = extractResolvedValue(from: item, preferredKeys: preferredKeys) {
+          return resolved
+        }
+      }
+      return nil
+    }
+
+    return scalarResolvedValue(value)
+  }
+
+  private func scalarResolvedValue(_ value: Any) -> Any? {
+    if let string = value as? String, !string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      return string
+    }
+    if let number = value as? NSNumber {
+      return number
+    }
+    return nil
+  }
+
+  private func preferredResolverKeys(for parameterName: String) -> [String] {
+    let camel = snakeToCamel(parameterName)
+    var keys = [parameterName, camel]
+    if parameterName.lowercased().contains("saved") && parameterName.lowercased().contains("user") {
+      keys += ["saved_user_id", "savedUserId", "user_id", "userId", "id"]
+    } else {
+      keys += ["id"]
+    }
+    var seen = Set<String>()
+    return keys.filter { seen.insert($0).inserted }
+  }
+
+  private func snakeToCamel(_ value: String) -> String {
+    let parts = value.split(separator: "_")
+    guard let first = parts.first else { return value }
+    return ([String(first)] + parts.dropFirst().map { $0.prefix(1).uppercased() + $0.dropFirst() }).joined()
+  }
+
+  private func missingRequiredArguments(for tool: [String: Any], arguments: [String: Any]) -> [String] {
+    guard let schema = tool["inputSchema"] as? [String: Any],
+          let required = schema["required"] as? [String],
+          !required.isEmpty else {
+      return []
+    }
+    return required.filter { name in
+      guard let value = arguments[name], !(value is NSNull) else { return true }
+      if let string = value as? String {
+        return string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      }
+      return false
+    }
+  }
+
+  private func isOpaqueReferenceParameter(_ rawName: String) -> Bool {
+    let name = rawName.lowercased()
+    return name == "id" ||
+      name.hasSuffix("_id") ||
+      name.hasSuffix("id") ||
+      name.contains("uuid") ||
+      name.contains("identifier")
+  }
+
+  private func fillableSearchParameter(in tool: [String: Any]) -> String? {
+    guard let properties = inputProperties(for: tool) else { return nil }
+    let preferred = ["search", "query", "name", "q", "term", "keyword"]
+    for wanted in preferred {
+      if let key = properties.keys.first(where: { $0.lowercased() == wanted }) {
+        return key
+      }
+    }
+    return properties.keys.first { key in
+      let lower = key.lowercased()
+      return lower.contains("search") || lower.contains("query") || lower.contains("name")
+    }
+  }
+
+  private func optionalBooleanParameter(namedLike names: [String], in tool: [String: Any]) -> String? {
+    optionalParameter(namedLike: names, type: "boolean", in: tool)
+  }
+
+  private func optionalNumericParameter(namedLike names: [String], in tool: [String: Any]) -> String? {
+    optionalParameter(namedLike: names, types: ["integer", "number"], in: tool)
+  }
+
+  private func optionalStringParameter(namedLike names: [String], in tool: [String: Any]) -> String? {
+    optionalParameter(namedLike: names, type: "string", in: tool)
+  }
+
+  private func optionalParameter(namedLike names: [String], type: String, in tool: [String: Any]) -> String? {
+    optionalParameter(namedLike: names, types: [type], in: tool)
+  }
+
+  private func optionalParameter(namedLike names: [String], types: Set<String>, in tool: [String: Any]) -> String? {
+    guard let properties = inputProperties(for: tool) else { return nil }
+    return properties.keys.first { key in
+      let lower = key.lowercased()
+      guard names.contains(where: { lower.contains($0) }) else { return false }
+      guard let property = properties[key] as? [String: Any],
+            let rawType = property["type"] as? String else {
+        return true
+      }
+      return types.contains(rawType.lowercased())
+    }
+  }
+
+  private func inputProperties(for tool: [String: Any]) -> [String: Any]? {
+    (tool["inputSchema"] as? [String: Any])?["properties"] as? [String: Any]
+  }
+
+  private func isDestructiveTool(_ tool: [String: Any]) -> Bool {
+    if let annotations = tool["annotations"] as? [String: Any],
+       let destructive = annotations["destructiveHint"] as? Bool {
+      return destructive
+    }
+    let document = UgotMCPToolSearchIndex.document(for: tool)
+    return ["delete", "remove", "clear", "reset", "unset"].contains { document.contains($0) }
+  }
+
+  private func compactIdentifier(_ value: String) -> String {
+    value
+      .lowercased()
+      .replacingOccurrences(of: "[^\\p{L}\\p{N}]+", with: "", options: .regularExpression)
+  }
+
   func runApprovedPending() async throws -> UgotMCPActionResponse? {
     try await mcpClient.initialize()
-    let tools = try await mcpClient.listTools()
+    let tools = try await UgotMCPToolMetadataCache.tools(connectorId: connector.id) {
+      try await mcpClient.listTools()
+    }
     guard let pending = UgotMCPToolApprovalStore.pendingApproval(
       sessionId: sessionId,
       connectorIds: [connector.id]
@@ -768,6 +1324,12 @@ final class UgotMCPConnectorAction {
       (try? await mcpClient.resolveWidgetResource(tools: tools, toolName: toolName, result: result)) ??
       widgetResource(fromToolResult: result)
     let message = renderToolResult(result, toolName: toolName)
+    guard let widgetResource else {
+      // Data-only tools, e.g. preference/default-user mutations, should not go
+      // through the widget WebView path. Returning a plain assistant result keeps
+      // the app stable and avoids rendering an empty MCP view.
+      return UgotMCPActionResponse(message: message, snapshot: nil)
+    }
     return UgotMCPActionResponse(
       message: message,
       snapshot: makeSnapshot(
@@ -922,7 +1484,12 @@ final class UgotMCPConnectorAction {
     }
 
     if let structured = result["structuredContent"] ?? result["structured_content"] {
-      if let summary = markdownSummary(from: structured),
+      let compatibility = UgotMCPCompatibilityContextRenderer.markdown(from: structured)
+      if let compatibility {
+        sections.append(compatibility)
+      }
+      if compatibility == nil,
+         let summary = markdownSummary(from: structured),
          !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
          !message.contains(summary) {
         sections.append("Structured summary:\n\(trimForWidget(summary, maxLength: 1_500))")
@@ -994,7 +1561,11 @@ final class UgotMCPConnectorAction {
 
   private func toolResultForWidget(_ result: [String: Any]) -> [String: Any] {
     var out: [String: Any] = [:]
-    if let content = result["content"] as? [[String: Any]] {
+    let structured = result["structuredContent"] ?? result["structured_content"]
+    let isCompatibilityResult = structured.flatMap(UgotMCPCompatibilityContextRenderer.groupResult(from:)) != nil
+
+    if !isCompatibilityResult,
+       let content = result["content"] as? [[String: Any]] {
       let compactContent = content.compactMap(compactContentItemForWidget)
       if !compactContent.isEmpty {
         out["content"] = compactContent
@@ -1158,6 +1729,9 @@ final class UgotMCPConnectorAction {
   }
 
   private func markdownSummary(from value: Any) -> String? {
+    if let compatibility = UgotMCPCompatibilityContextRenderer.markdown(from: value) {
+      return compatibility
+    }
     if let string = value as? String {
       return cleanToolText(string)
     }
@@ -1210,4 +1784,19 @@ final class UgotMCPConnectorAction {
   }
 
 
+}
+
+private extension String {
+  func oneLineForPrompt(limit: Int) -> String {
+    replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .trimmedForPrompt(limit: limit)
+  }
+
+  func trimmedForPrompt(limit: Int) -> String {
+    guard count > limit else { return self }
+    let headCount = max(0, limit / 2)
+    let tailCount = max(0, limit - headCount - 20)
+    return "\(prefix(headCount))\n…[trimmed]…\n\(suffix(tailCount))"
+  }
 }

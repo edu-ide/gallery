@@ -36,9 +36,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Use the camera to attach images to AI Chat.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Use the microphone for live voice chat and audio attachments.</string>
-	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Use speech recognition to turn your live voice into chat messages.</string>
+	<string>Use the microphone to record audio for AI Chat.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Choose photos to attach to AI Chat.</string>
 	<key>UILaunchScreen</key>
@@ -57,5 +55,10 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

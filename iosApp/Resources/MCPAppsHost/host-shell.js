@@ -2855,7 +2855,7 @@ var UgotMCPAppsHostBundle = (() => {
             })));
           }
         }
-
+        
         if (${id}.value === undefined) {
           if (${k2} in input) {
             newResult[${k2}] = undefined;
@@ -2863,7 +2863,7 @@ var UgotMCPAppsHostBundle = (() => {
         } else {
           newResult[${k2}] = ${id}.value;
         }
-
+        
       `);
             } else {
               doc.write(`
@@ -2873,7 +2873,7 @@ var UgotMCPAppsHostBundle = (() => {
             path: iss.path ? [${k2}, ...iss.path] : [${k2}]
           })));
         }
-
+        
         if (${id}.value === undefined) {
           if (${k2} in input) {
             newResult[${k2}] = undefined;
@@ -2881,7 +2881,7 @@ var UgotMCPAppsHostBundle = (() => {
         } else {
           newResult[${k2}] = ${id}.value;
         }
-
+        
       `);
             }
           }
@@ -21399,12 +21399,6 @@ ${html}`;
     let lastNativeHeight = 0;
     let lastNativeWidth = 0;
     let initialReplaySettled = false;
-    let appRequestedBeforeInitialReplay = false;
-    const markPotentialUserIntentBeforeReplay = (kind) => {
-      if (initialReplaySettled) return;
-      appRequestedBeforeInitialReplay = true;
-      debug("app-request-before-initial-replay", kind);
-    };
     const enableFrameInteraction = (reason) => {
       frame.style.pointerEvents = "auto";
       frame.removeAttribute("aria-busy");
@@ -21472,34 +21466,28 @@ ${html}`;
     const bridge = new DX(null, IMPLEMENTATION, hostCapabilities(), { hostContext: context });
     activeBridge = bridge;
     bridge.oncalltool = async (params) => {
-      markPotentialUserIntentBeforeReplay(`tools/call:${params?.name || ""}`);
       debug("tools-call", params?.name || "");
       return await requestNative("tools/call", params);
     };
     bridge.onlistresources = async (params) => {
-      markPotentialUserIntentBeforeReplay("resources/list");
       debug("resources-list");
       return await requestNative("resources/list", params || {});
     };
     bridge.onreadresource = async (params) => {
-      markPotentialUserIntentBeforeReplay(`resources/read:${params?.uri || ""}`);
       debug("resources-read", params?.uri || "");
       return await requestNative("resources/read", params);
     };
     if ("onlistresourcetemplates" in bridge) {
       bridge.onlistresourcetemplates = async (params) => {
-        markPotentialUserIntentBeforeReplay("resources/templates/list");
         return await requestNative("resources/templates/list", params || {});
       };
     }
     bridge.onmessage = async (params) => {
-      markPotentialUserIntentBeforeReplay("message");
       debug("ui-message");
       postNative({ type: "appMessage", message: params });
       return {};
     };
     bridge.onopenlink = async (params) => {
-      markPotentialUserIntentBeforeReplay("open-link");
       debug("open-link", params.url);
       postNative({ type: "openExternal", url: params.url });
       return {};
@@ -21508,13 +21496,11 @@ ${html}`;
       debug("app-log", params.level || "", params.logger || "", params.data || "");
     };
     bridge.onupdatemodelcontext = async (params) => {
-      markPotentialUserIntentBeforeReplay("model-context-update");
       debug("model-context-update", Object.keys(params || {}).join(","));
       postNative({ type: "modelContext", modelContext: params });
       return {};
     };
     bridge.onrequestdisplaymode = async (params) => {
-      markPotentialUserIntentBeforeReplay(`display-mode:${params.mode || ""}`);
       const mode = params.mode === "fullscreen" ? "fullscreen" : "inline";
       bridge.sendHostContextChange({ displayMode: mode });
       postNative({ type: "displayMode", mode });
@@ -21541,9 +21527,7 @@ ${html}`;
       const input = config2.toolInput || {};
       debug("send-tool-input", Object.keys(input).join(","));
       bridge.sendToolInput({ arguments: input });
-      if (appRequestedBeforeInitialReplay) {
-        debug("skip-stale-initial-tool-result");
-      } else if (config2.toolResult && Object.keys(config2.toolResult).length > 0) {
+      if (config2.toolResult && Object.keys(config2.toolResult).length > 0) {
         debug("send-tool-result", Object.keys(config2.toolResult).join(","));
         bridge.sendToolResult(config2.toolResult);
       } else {

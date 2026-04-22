@@ -196,6 +196,9 @@ struct GalleryConnector: Identifiable, Hashable {
 extension GalleryConnector {
   static let fortuneMcpId = "fortune.ugot.uk/mcp"
   static let fortuneMcpEndpoint = "https://fortune.ugot.uk/mcp"
+  static let mailMcpId = "mail.local/mcp"
+  static let mailMcpEndpoint = ProcessInfo.processInfo.environment["UGOT_MAIL_MCP_ENDPOINT"]
+    ?? "http://127.0.0.1:3000/mcp/sse"
   static let defaultSelectedIds = [fortuneMcpId]
 
   static let samples: [GalleryConnector] = [
@@ -205,6 +208,13 @@ extension GalleryConnector {
       symbol: "sparkles",
       summary: "MCP endpoint: \(fortuneMcpEndpoint)",
       endpoint: fortuneMcpEndpoint
+    ),
+    GalleryConnector(
+      id: mailMcpId,
+      title: "UGOT Mail",
+      symbol: "envelope",
+      summary: "Local mail MCP endpoint: \(mailMcpEndpoint)",
+      endpoint: mailMcpEndpoint
     ),
   ]
 

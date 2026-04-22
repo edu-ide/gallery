@@ -45,7 +45,7 @@ enum GalleryCapabilityRouter {
         return lhs.priority > rhs.priority
       }
       .first?
-      .route ?? .model
+      .route ?? request.activeConnectorIds.sorted().first.map(GalleryCapabilityRoute.mcpConnector) ?? .model
   }
 }
 
@@ -87,17 +87,10 @@ private enum GalleryCapabilityRegistry {
         request.intent.isMapOpenRequest
       }
     ),
-    GalleryCapabilityDefinition(
-      id: "mcp.fortune",
-      route: .mcpConnector(GalleryConnector.fortuneMcpId),
-      priority: 500,
-      matches: { request in
-        // A connector being toggled on means it is available, not that it may
-        // answer every generic command. MCP routing must be domain-gated.
-        request.activeConnectorIds.contains(GalleryConnector.fortuneMcpId) &&
-          request.intent.isFortuneConnectorRequest
-      }
-    )
+    // MCP connector routing is intentionally generic. If a connector is active,
+    // the MCP tool planner will search/plan against that connector's own tool
+    // metadata and return nil when no tool is needed. This keeps connector
+    // domain knowledge out of the mobile host.
   ]
 }
 
@@ -112,15 +105,6 @@ private struct GalleryPromptIntent {
 
   var isMapOpenRequest: Bool {
     GalleryMobileActionRunner.isMapOpenRequest(normalizedPrompt: normalized)
-  }
-
-  var isFortuneConnectorRequest: Bool {
-    containsAny([
-      "운세", "사주", "궁합", "만세력", "대운", "세운", "월운", "일운", "일진", "일주",
-      "띠별", "띠운세", "생년월일", "출생시", "저장목록", "저장된사람", "저장된사용자",
-      "fortune", "saju", "zodiac", "compatibility", "birthchart", "registeredprofiles",
-      "savedprofiles", "savedusers", "showtodayfortune", "showsajudaily"
-    ])
   }
 
   private func containsAny(_ terms: [String]) -> Bool {

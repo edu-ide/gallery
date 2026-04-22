@@ -258,9 +258,19 @@ struct UgotMCPWidgetWebView: UIViewRepresentable {
         }
       }
       if let structured = dict["structuredContent"] ?? dict["structured_content"] {
-        let json = compactJSON(structured)
-        if !json.isEmpty && json != "{}" {
-          sections.append("Structured widget context:\n\(json)")
+        let compatibility = UgotMCPCompatibilityContextRenderer.markdown(from: structured)
+        if let compatibility {
+          sections.append(compatibility)
+        }
+        // Compatibility results can contain full natal member data. The
+        // dedicated renderer above preserves the answerable facts; adding the
+        // raw JSON again bloats local-model context and can prevent effective
+        // compaction on small mobile models.
+        if compatibility == nil {
+          let json = compactJSON(structured)
+          if !json.isEmpty && json != "{}" {
+            sections.append("Structured widget context:\n\(json)")
+          }
         }
       }
       if sections.isEmpty {
@@ -367,12 +377,25 @@ struct UgotMCPWidgetWebView: UIViewRepresentable {
           default:
             throw WidgetBridgeError.invalidRequest("Unsupported MCP method: \(method)")
           }
-          let compact = UgotMCPClient.compactForWidget(result, maxStringLength: 180_000, maxArrayCount: 160)
+          let compact = Self.compactMCPResultForWidgetBridge(result)
           resolveMCPRequest(id: requestId, result: compact)
         } catch {
           rejectMCPRequest(id: requestId, message: error.localizedDescription)
         }
       }
+    }
+
+    private static func compactMCPResultForWidgetBridge(_ result: [String: Any]) -> Any {
+      var sanitized = result
+      let structured = result["structuredContent"] ?? result["structured_content"]
+      if let structured,
+         UgotMCPCompatibilityContextRenderer.groupResult(from: structured) != nil {
+        // The compatibility widget renders from structuredContent. Dropping the
+        // duplicate "[Raw Compatibility Data]" text prevents huge postMessage
+        // payloads and makes WKWebView accordion interaction less janky.
+        sanitized.removeValue(forKey: "content")
+      }
+      return UgotMCPClient.compactForWidget(sanitized, maxStringLength: 120_000, maxArrayCount: 160)
     }
 
     private func makeClient() async throws -> UgotMCPClient {

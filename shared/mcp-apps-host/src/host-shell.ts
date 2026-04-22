@@ -201,13 +201,6 @@ async function mount(config: UgotHostConfig) {
   let lastNativeHeight = 0;
   let lastNativeWidth = 0;
   let initialReplaySettled = false;
-  let appRequestedBeforeInitialReplay = false;
-
-  const markPotentialUserIntentBeforeReplay = (kind: string) => {
-    if (initialReplaySettled) return;
-    appRequestedBeforeInitialReplay = true;
-    debug('app-request-before-initial-replay', kind);
-  };
 
   const enableFrameInteraction = (reason: string) => {
     frame.style.pointerEvents = 'auto';
@@ -285,35 +278,29 @@ async function mount(config: UgotHostConfig) {
   activeBridge = bridge;
 
   bridge.oncalltool = async (params) => {
-    markPotentialUserIntentBeforeReplay(`tools/call:${(params as any)?.name || ''}`);
     debug('tools-call', (params as any)?.name || '');
     return await requestNative('tools/call', params as any) as any;
   };
   bridge.onlistresources = async (params) => {
-    markPotentialUserIntentBeforeReplay('resources/list');
     debug('resources-list');
     return await requestNative('resources/list', (params || {}) as any) as any;
   };
   bridge.onreadresource = async (params) => {
-    markPotentialUserIntentBeforeReplay(`resources/read:${(params as any)?.uri || ''}`);
     debug('resources-read', (params as any)?.uri || '');
     return await requestNative('resources/read', params as any) as any;
   };
   if ('onlistresourcetemplates' in bridge) {
     (bridge as any).onlistresourcetemplates = async (params: any) => {
-      markPotentialUserIntentBeforeReplay('resources/templates/list');
       return await requestNative('resources/templates/list', params || {}) as any;
     };
   }
 
   bridge.onmessage = async (params) => {
-    markPotentialUserIntentBeforeReplay('message');
     debug('ui-message');
     postNative({ type: 'appMessage', message: params });
     return {};
   };
   bridge.onopenlink = async (params) => {
-    markPotentialUserIntentBeforeReplay('open-link');
     debug('open-link', params.url);
     postNative({ type: 'openExternal', url: params.url });
     return {};
@@ -322,13 +309,11 @@ async function mount(config: UgotHostConfig) {
     debug('app-log', params.level || '', params.logger || '', params.data || '');
   };
   bridge.onupdatemodelcontext = async (params) => {
-    markPotentialUserIntentBeforeReplay('model-context-update');
     debug('model-context-update', Object.keys(params || {}).join(','));
     postNative({ type: 'modelContext', modelContext: params });
     return {};
   };
   bridge.onrequestdisplaymode = async (params) => {
-    markPotentialUserIntentBeforeReplay(`display-mode:${params.mode || ''}`);
     const mode = params.mode === 'fullscreen' ? 'fullscreen' : 'inline';
     bridge.sendHostContextChange({ displayMode: mode });
     postNative({ type: 'displayMode', mode });
@@ -358,9 +343,7 @@ async function mount(config: UgotHostConfig) {
     const input = config.toolInput || {};
     debug('send-tool-input', Object.keys(input).join(','));
     bridge.sendToolInput({ arguments: input });
-    if (appRequestedBeforeInitialReplay) {
-      debug('skip-stale-initial-tool-result');
-    } else if (config.toolResult && Object.keys(config.toolResult).length > 0) {
+    if (config.toolResult && Object.keys(config.toolResult).length > 0) {
       debug('send-tool-result', Object.keys(config.toolResult).join(','));
       bridge.sendToolResult(config.toolResult as any);
     } else {

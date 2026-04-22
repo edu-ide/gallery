@@ -808,6 +808,11 @@ struct GalleryChatView: View {
       )
     }()
     let route = sessionState.route()
+    let plannerModelName = sessionState.modelName
+    let plannerModelDisplayName = sessionState.modelDisplayName
+    let plannerModelFileName = model.modelFileName
+    let plannerActiveAgentSkillIds = activeAgentSkillIds
+    let plannerActiveConnectorIds = activeConnectorIds
     let supportsImageInput = attachmentsToSend.contains { $0.kind == .image } && supports(.image)
     let supportsAudioInput = attachmentsToSend.contains { $0.kind == .audio } && supports(.audio)
 
@@ -876,11 +881,37 @@ struct GalleryChatView: View {
             break
           }
         case .mcpConnector(let connectorId):
+          await MainActor.run {
+            let connectorTitle = GalleryConnector.connector(for: connectorId)?.title ?? "MCP"
+            appendInlineEvent(.toolSearch(connectorTitle: connectorTitle))
+            agentActivityNotice = AgentActivityNotice(
+              symbol: "sparkle.magnifyingglass",
+              title: "도구 검색 중",
+              detail: "\(connectorTitle) 도구 목록에서 실행할 도구를 고르고 있어요."
+            )
+          }
           if let mcpResult = await UgotMCPActionRunner.runIfNeeded(
             prompt: effectivePrompt,
             activeSkillIds: Set(activeAgentSkillIds),
             activeConnectorIds: [connectorId],
-            sessionId: sessionId
+            sessionId: sessionId,
+            toolPlanningProvider: { request in
+              let planningPrompt = UgotMCPToolPlanningPromptBuilder.build(request: request)
+              let planningRequest = GalleryInferenceRequest(
+                modelName: plannerModelName,
+                modelDisplayName: plannerModelDisplayName,
+                modelFileName: plannerModelFileName,
+                prompt: planningPrompt,
+                route: "mcp-tool-router",
+                activeAgentSkillIds: plannerActiveAgentSkillIds,
+                activeConnectorIds: plannerActiveConnectorIds,
+                supportsImage: false,
+                supportsAudio: false,
+                attachments: []
+              )
+              let plannerResult = await runtime.generate(request: planningRequest)
+              return UgotMCPToolPlanningDecision.parse(from: plannerResult.text)
+            }
           ) {
             await MainActor.run {
               completeActionResult(mcpResult, speakResponse: speakResponse)
@@ -1094,11 +1125,27 @@ struct GalleryChatView: View {
   }
 
   private var currentWidgetModelContext: String? {
-    if let activeWidgetModelContext,
-       !activeWidgetModelContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      return activeWidgetModelContext
+    let active = activeWidgetModelContext?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let fallback = sessionState.widgetHostState.activeSnapshot?.modelContextFallbackMarkdown?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    switch (active?.isEmpty == false ? active : nil, fallback?.isEmpty == false ? fallback : nil) {
+    case let (.some(active), .some(fallback)):
+      if active.contains(fallback.prefix(160)) || fallback.contains(active.prefix(160)) {
+        return active.count >= fallback.count ? active : fallback
+      }
+      return """
+      \(active)
+
+      [Initial MCP tool result context]
+      \(fallback)
+      """
+    case let (.some(active), .none):
+      return active
+    case let (.none, .some(fallback)):
+      return fallback
+    default:
+      return nil
     }
-    return sessionState.widgetHostState.activeSnapshot?.modelContextFallbackMarkdown
   }
 
   private static func mergedAgentContext(
@@ -1275,7 +1322,16 @@ struct GalleryChatView: View {
       normalized.contains("위젯내용") ||
       (normalized.contains("사주") && evaluative) ||
       (normalized.count <= 12 && (normalized.contains("어때") || normalized.contains("보여")))
-    return evaluative && referential
+    let continuation = normalized.contains("더") ||
+      normalized.contains("자세히") ||
+      normalized.contains("추가설명") ||
+      normalized.contains("설명해") ||
+      normalized.contains("구체") ||
+      normalized.contains("풀어서") ||
+      normalized.contains("detail") ||
+      normalized.contains("elaborate") ||
+      normalized.contains("more")
+    return evaluative && (referential || continuation)
   }
 
   private func handleSelectedPhoto(_ item: PhotosPickerItem?) {
@@ -1706,6 +1762,14 @@ private struct InlineChatEvent: Equatable {
     )
   }
 
+  static func toolSearch(connectorTitle: String) -> InlineChatEvent {
+    InlineChatEvent(
+      symbol: "sparkle.magnifyingglass",
+      title: "도구를 검색하고 있어요",
+      detail: "\(connectorTitle)에서 실행 가능한 도구를 확인 중이에요."
+    )
+  }
+
   static func toolResult(title: String) -> InlineChatEvent {
     let displayTitle = userFacingTitle(title)
     return InlineChatEvent(
@@ -1967,7 +2031,7 @@ private struct AutoCompactedChatPromptBuilder {
     if let compactWidgetContext {
       sections.append("""
       [Current MCP widget context]
-      This widget is visible to the user and is the source of truth for follow-up questions such as "이거 어때", "어때 보여", "이 사람", "이 사주", or "이 차트".
+      This widget is visible to the user and is the source of truth for follow-up questions such as "이거 어때", "어때 보여", "이 사람", "이 사주", or "이 차트". If the current widget is a compatibility/relationship result and the user asks how the relationship looks, answer with concrete details from the score, pair details, relation detail, strengths, cautions, and element balance. Do not answer with only a title or "the result is loaded".
       \(compactWidgetContext)
       """)
     }
@@ -2103,17 +2167,21 @@ private enum ChatAutoCompactor {
 
     let projection = project(messages: historyBeforeCurrent)
     let sourceMessages = projection.recentMessages.filter(shouldIncludeInModelHistory)
-    guard sourceMessages.count > 4 else {
+    let widgetTokenEstimate = widgetContext.map(estimatedTokenCount) ?? 0
+    let hasLargeWidgetContext = widgetTokenEstimate >= 1_800
+    guard sourceMessages.count > 4 || hasLargeWidgetContext else {
       return nil
     }
 
     let fallbackSummary = deterministicSummary(
       existingSummary: projection.summary,
-      messages: sourceMessages
+      messages: sourceMessages,
+      widgetContext: widgetContext
     )
     let compactPrompt = buildCompactPrompt(
       existingSummary: projection.summary,
-      messages: sourceMessages
+      messages: sourceMessages,
+      widgetContext: widgetContext
     )
     return ChatAutoCompactionPlan(
       compactPrompt: compactPrompt,
@@ -2157,7 +2225,11 @@ private enum ChatAutoCompactor {
     return fallbackSummary.trimmedMiddleForPrompt(limit: 5_000)
   }
 
-  private static func buildCompactPrompt(existingSummary: String?, messages: [UnifiedChatMessage]) -> String {
+  private static func buildCompactPrompt(
+    existingSummary: String?,
+    messages: [UnifiedChatMessage],
+    widgetContext: String?
+  ) -> String {
     var sections = [summarizationPrompt]
     if let existingSummary, !existingSummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       sections.append("""
@@ -2165,10 +2237,20 @@ private enum ChatAutoCompactor {
       \(existingSummary.trimmedMiddleForPrompt(limit: 4_000))
       """)
     }
-    sections.append("""
-    Conversation to compact:
-    \(renderForCompaction(messages: messages))
-    """)
+    let renderedMessages = renderForCompaction(messages: messages)
+    if !renderedMessages.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      sections.append("""
+      Conversation to compact:
+      \(renderedMessages)
+      """)
+    }
+    if let widgetContext,
+       !widgetContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      sections.append("""
+      Current visible MCP widget context to preserve for follow-up questions:
+      \(widgetContext.trimmedMiddleForPrompt(limit: 6_000))
+      """)
+    }
     return sections
       .joined(separator: "\n\n")
       .trimmedMiddleForPrompt(limit: compactPromptCharacterLimit)
@@ -2213,7 +2295,11 @@ private enum ChatAutoCompactor {
     return rendered.reversed().joined(separator: "\n\n")
   }
 
-  private static func deterministicSummary(existingSummary: String?, messages: [UnifiedChatMessage]) -> String {
+  private static func deterministicSummary(
+    existingSummary: String?,
+    messages: [UnifiedChatMessage],
+    widgetContext: String?
+  ) -> String {
     var parts: [String] = []
     if let existingSummary, !existingSummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       parts.append("""
@@ -2222,20 +2308,30 @@ private enum ChatAutoCompactor {
       """)
     }
 
-    let importantLines = messages
-      .suffix(24)
-      .map { "- \($0.role.promptLabel): \($0.text.oneLineForPrompt(limit: 260))" }
-      .joined(separator: "\n")
-    parts.append("""
-    Recent conversation facts and decisions:
-    \(importantLines)
-    """)
+    if !messages.isEmpty {
+      let importantLines = messages
+        .suffix(24)
+        .map { "- \($0.role.promptLabel): \($0.text.oneLineForPrompt(limit: 260))" }
+        .joined(separator: "\n")
+      parts.append("""
+      Recent conversation facts and decisions:
+      \(importantLines)
+      """)
+    }
 
     let recentUserMessages = collectRecentUserMessages(messages: messages)
     if !recentUserMessages.isEmpty {
       parts.append("""
       Recent user messages to preserve:
       \(recentUserMessages.map { "- \($0.oneLineForPrompt(limit: 300))" }.joined(separator: "\n"))
+      """)
+    }
+
+    if let widgetContext,
+       !widgetContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      parts.append("""
+      Current visible widget facts to preserve:
+      \(widgetContext.trimmedMiddleForPrompt(limit: 2_400))
       """)
     }
 
