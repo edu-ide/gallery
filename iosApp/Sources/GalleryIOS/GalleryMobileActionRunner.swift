@@ -21,6 +21,7 @@ struct GalleryChatActionResult {
 enum GalleryCapabilityRoute: Equatable {
   case nativeSkill(String)
   case mcpConnector(String)
+  case mcpConnectors
   case model
 }
 
@@ -45,7 +46,7 @@ enum GalleryCapabilityRouter {
         return lhs.priority > rhs.priority
       }
       .first?
-      .route ?? request.activeConnectorIds.sorted().first.map(GalleryCapabilityRoute.mcpConnector) ?? .model
+      .route ?? (request.activeConnectorIds.isEmpty ? .model : .mcpConnectors)
   }
 }
 
