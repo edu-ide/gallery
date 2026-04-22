@@ -87,6 +87,21 @@ final class UgotMCPClient {
     return result["tools"] as? [[String: Any]] ?? []
   }
 
+  func listPrompts() async throws -> [[String: Any]] {
+    let result = try await request(method: "prompts/list")
+    return result["prompts"] as? [[String: Any]] ?? []
+  }
+
+  func getPrompt(name: String, arguments: [String: Any] = [:]) async throws -> [String: Any] {
+    try await request(
+      method: "prompts/get",
+      params: [
+        "name": name,
+        "arguments": arguments,
+      ]
+    )
+  }
+
   func listResources() async throws -> [[String: Any]] {
     let result = try await request(method: "resources/list")
     return result["resources"] as? [[String: Any]] ?? []
@@ -235,6 +250,7 @@ final class UgotMCPClient {
   private func send(payload: [String: Any], expectsResponse: Bool) async throws -> [String: Any]? {
     var request = URLRequest(url: endpoint)
     request.httpMethod = "POST"
+    request.timeoutInterval = Self.isLocalEndpoint(endpoint) ? 8 : 30
     request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
@@ -243,7 +259,7 @@ final class UgotMCPClient {
     }
     request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
-    let (data, response) = try await URLSession.shared.data(for: request)
+    let (data, response) = try await Self.dataWithLocalNetworkRetry(for: request, endpoint: endpoint)
     guard let http = response as? HTTPURLResponse else {
       throw MCPError.invalidResponse("Missing HTTP response")
     }
@@ -273,6 +289,48 @@ final class UgotMCPClient {
   private func nextRequestId() -> Int {
     defer { nextId += 1 }
     return nextId
+  }
+
+  private static func dataWithLocalNetworkRetry(
+    for request: URLRequest,
+    endpoint: URL
+  ) async throws -> (Data, URLResponse) {
+    let maxAttempts = isLocalEndpoint(endpoint) ? 4 : 1
+    var lastError: Error?
+    for attempt in 1...maxAttempts {
+      do {
+        return try await URLSession.shared.data(for: request)
+      } catch {
+        lastError = error
+        guard attempt < maxAttempts, shouldRetryLocalNetworkError(error) else {
+          throw error
+        }
+        let delayNanos = UInt64(650_000_000 * UInt64(attempt))
+        try? await Task.sleep(nanoseconds: delayNanos)
+      }
+    }
+    throw lastError ?? MCPError.invalidResponse("Request failed")
+  }
+
+  private static func shouldRetryLocalNetworkError(_ error: Error) -> Bool {
+    guard let urlError = error as? URLError else { return false }
+    switch urlError.code {
+    case .cancelled,
+         .userCancelledAuthentication:
+      return false
+    default:
+      return true
+    }
+  }
+
+  private static func isLocalEndpoint(_ url: URL) -> Bool {
+    guard let host = url.host?.lowercased() else { return false }
+    return host == "localhost" ||
+      host == "127.0.0.1" ||
+      host.hasSuffix(".local") ||
+      host.hasPrefix("10.") ||
+      host.hasPrefix("192.168.") ||
+      host.range(of: #"^172\.(1[6-9]|2[0-9]|3[0-1])\."#, options: .regularExpression) != nil
   }
 
   private static func decodeResponse(_ data: Data) -> [String: Any]? {

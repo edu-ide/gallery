@@ -198,8 +198,8 @@ extension GalleryConnector {
   static let fortuneMcpEndpoint = "https://fortune.ugot.uk/mcp"
   static let mailMcpId = "mail.local/mcp"
   static let mailMcpEndpoint = ProcessInfo.processInfo.environment["UGOT_MAIL_MCP_ENDPOINT"]
-    ?? "http://127.0.0.1:3000/mcp/sse"
-  static let defaultSelectedIds = [fortuneMcpId]
+    ?? "http://192.168.219.108:3000/mcp/sse"
+  static let defaultSelectedIds = [fortuneMcpId, mailMcpId]
 
   static let samples: [GalleryConnector] = [
     GalleryConnector(

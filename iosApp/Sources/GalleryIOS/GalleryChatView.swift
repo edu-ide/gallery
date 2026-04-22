@@ -37,6 +37,8 @@ struct GalleryChatView: View {
   @State private var showAudioFilePicker = false
   @State private var toolApprovalConnector: GalleryConnector?
   @State private var pendingToolApproval: UgotMCPToolApprovalRequest?
+  @State private var mcpPromptItems: [UgotMCPPromptDescriptor] = []
+  @State private var isLoadingMCPPrompts = false
   @State private var showAttachmentError = false
   @State private var attachmentErrorMessage = ""
   @State private var activeWidgetAnchorMessageId: String?
@@ -206,6 +208,10 @@ struct GalleryChatView: View {
     }
     .onAppear {
       refreshAgentWorkspaceStatus()
+      reloadMCPPrompts()
+    }
+    .onChange(of: sessionState.connectorBarState.activeConnectorIds) { _, _ in
+      reloadMCPPrompts()
     }
     .onChange(of: selectedPhotoItem) { _, item in
       handleSelectedPhoto(item)
@@ -668,8 +674,11 @@ struct GalleryChatView: View {
       isVoiceSessionActive: liveVoiceSessionActive,
       isVoiceSpeaking: voiceOutput.isSpeaking,
       voiceLevel: liveVoiceInput.audioLevel,
+      mcpPromptItems: mcpPromptItems,
+      isLoadingMCPPrompts: isLoadingMCPPrompts,
       onRecordAudio: openAttachmentAudioRecorder,
       onVoiceInput: openLiveVoiceRecorder,
+      onSelectMCPPrompt: applyMCPPrompt,
       onSend: { draft in
         sendDraftThroughRuntime(prompt: draft)
       }
@@ -781,6 +790,75 @@ struct GalleryChatView: View {
     }
   }
 
+  private func runMCPConnectorTurn(
+    prompt: String,
+    connectorIds: Set<String>,
+    connectorSearchTitle: String,
+    activeAgentSkillIds: [String],
+    plannerModelName: String,
+    plannerModelDisplayName: String,
+    plannerModelFileName: String,
+    plannerActiveAgentSkillIds: [String],
+    plannerActiveConnectorIds: [String],
+    speakResponse: Bool
+  ) async -> Bool {
+    await MainActor.run {
+      appendInlineEvent(.toolSearch(connectorTitle: connectorSearchTitle))
+      agentActivityNotice = AgentActivityNotice(
+        symbol: "sparkle.magnifyingglass",
+        title: "도구 검색 중",
+        detail: "\(connectorSearchTitle)에서 실행할 connector와 도구를 고르고 있어요."
+      )
+    }
+
+    let mcpResult = await UgotMCPActionRunner.runIfNeeded(
+      prompt: prompt,
+      activeSkillIds: Set(activeAgentSkillIds),
+      activeConnectorIds: connectorIds,
+      sessionId: sessionId,
+      connectorPlanningProvider: { request in
+        let planningPrompt = UgotMCPConnectorPlanningPromptBuilder.build(request: request)
+        let planningRequest = GalleryInferenceRequest(
+          modelName: plannerModelName,
+          modelDisplayName: plannerModelDisplayName,
+          modelFileName: plannerModelFileName,
+          prompt: planningPrompt,
+          route: "mcp-connector-router",
+          activeAgentSkillIds: plannerActiveAgentSkillIds,
+          activeConnectorIds: plannerActiveConnectorIds,
+          supportsImage: false,
+          supportsAudio: false,
+          attachments: []
+        )
+        let plannerResult = await runtime.generate(request: planningRequest)
+        return UgotMCPConnectorPlanningDecision.parse(from: plannerResult.text)
+      },
+      toolPlanningProvider: { request in
+        let planningPrompt = UgotMCPToolPlanningPromptBuilder.build(request: request)
+        let planningRequest = GalleryInferenceRequest(
+          modelName: plannerModelName,
+          modelDisplayName: plannerModelDisplayName,
+          modelFileName: plannerModelFileName,
+          prompt: planningPrompt,
+          route: "mcp-tool-router",
+          activeAgentSkillIds: plannerActiveAgentSkillIds,
+          activeConnectorIds: plannerActiveConnectorIds,
+          supportsImage: false,
+          supportsAudio: false,
+          attachments: []
+        )
+        let plannerResult = await runtime.generate(request: planningRequest)
+        return UgotMCPToolPlanningDecision.parse(from: plannerResult.text)
+      }
+    )
+
+    guard let mcpResult else { return false }
+    await MainActor.run {
+      completeActionResult(mcpResult, speakResponse: speakResponse)
+    }
+    return true
+  }
+
   private func sendDraftThroughRuntime(
     prompt rawPrompt: String,
     attachmentsOverride: [ChatInputAttachment]? = nil,
@@ -881,41 +959,33 @@ struct GalleryChatView: View {
             break
           }
         case .mcpConnector(let connectorId):
-          await MainActor.run {
-            let connectorTitle = GalleryConnector.connector(for: connectorId)?.title ?? "MCP"
-            appendInlineEvent(.toolSearch(connectorTitle: connectorTitle))
-            agentActivityNotice = AgentActivityNotice(
-              symbol: "sparkle.magnifyingglass",
-              title: "도구 검색 중",
-              detail: "\(connectorTitle) 도구 목록에서 실행할 도구를 고르고 있어요."
-            )
-          }
-          if let mcpResult = await UgotMCPActionRunner.runIfNeeded(
+          if await runMCPConnectorTurn(
             prompt: effectivePrompt,
-            activeSkillIds: Set(activeAgentSkillIds),
-            activeConnectorIds: [connectorId],
-            sessionId: sessionId,
-            toolPlanningProvider: { request in
-              let planningPrompt = UgotMCPToolPlanningPromptBuilder.build(request: request)
-              let planningRequest = GalleryInferenceRequest(
-                modelName: plannerModelName,
-                modelDisplayName: plannerModelDisplayName,
-                modelFileName: plannerModelFileName,
-                prompt: planningPrompt,
-                route: "mcp-tool-router",
-                activeAgentSkillIds: plannerActiveAgentSkillIds,
-                activeConnectorIds: plannerActiveConnectorIds,
-                supportsImage: false,
-                supportsAudio: false,
-                attachments: []
-              )
-              let plannerResult = await runtime.generate(request: planningRequest)
-              return UgotMCPToolPlanningDecision.parse(from: plannerResult.text)
-            }
+            connectorIds: [connectorId],
+            connectorSearchTitle: GalleryConnector.connector(for: connectorId)?.title ?? "MCP",
+            activeAgentSkillIds: activeAgentSkillIds,
+            plannerModelName: plannerModelName,
+            plannerModelDisplayName: plannerModelDisplayName,
+            plannerModelFileName: plannerModelFileName,
+            plannerActiveAgentSkillIds: plannerActiveAgentSkillIds,
+            plannerActiveConnectorIds: plannerActiveConnectorIds,
+            speakResponse: speakResponse
           ) {
-            await MainActor.run {
-              completeActionResult(mcpResult, speakResponse: speakResponse)
-            }
+            return
+          }
+        case .mcpConnectors:
+          if await runMCPConnectorTurn(
+            prompt: effectivePrompt,
+            connectorIds: activeConnectorSet,
+            connectorSearchTitle: "활성 MCP 커넥터",
+            activeAgentSkillIds: activeAgentSkillIds,
+            plannerModelName: plannerModelName,
+            plannerModelDisplayName: plannerModelDisplayName,
+            plannerModelFileName: plannerModelFileName,
+            plannerActiveAgentSkillIds: plannerActiveAgentSkillIds,
+            plannerActiveConnectorIds: plannerActiveConnectorIds,
+            speakResponse: speakResponse
+          ) {
             return
           }
         case .model:
@@ -1407,6 +1477,81 @@ struct GalleryChatView: View {
     connector.title
   }
 
+  private func reloadMCPPrompts() {
+    let activeConnectorIds = sessionState.connectorBarState.activeConnectorIds
+    let activeConnectors = connectors.filter { activeConnectorIds.contains($0.id) }
+    guard !activeConnectors.isEmpty else {
+      mcpPromptItems = []
+      isLoadingMCPPrompts = false
+      return
+    }
+
+    isLoadingMCPPrompts = true
+    Task {
+      var loaded: [UgotMCPPromptDescriptor] = []
+      do {
+        guard let accessToken = try await UgotAuthStore.validAccessToken() else {
+          await MainActor.run {
+            mcpPromptItems = []
+            isLoadingMCPPrompts = false
+          }
+          return
+        }
+        for connector in activeConnectors {
+          guard let endpoint = URL(string: connector.endpoint) else { continue }
+          let client = UgotMCPClient(
+            connectorId: connector.id,
+            endpoint: endpoint,
+            accessToken: accessToken
+          )
+          do {
+            try await client.initialize()
+            let prompts = try await client.listPrompts()
+            loaded.append(contentsOf: prompts.map { UgotMCPPromptDescriptor(connector: connector, prompt: $0) })
+          } catch {
+            continue
+          }
+        }
+      } catch {
+        loaded = []
+      }
+      await MainActor.run {
+        mcpPromptItems = loaded.sorted {
+          if $0.connectorTitle != $1.connectorTitle { return $0.connectorTitle < $1.connectorTitle }
+          return $0.title < $1.title
+        }
+        isLoadingMCPPrompts = false
+      }
+    }
+  }
+
+  private func applyMCPPrompt(_ prompt: UgotMCPPromptDescriptor) {
+    Task {
+      var text = prompt.title
+      do {
+        guard let accessToken = try await UgotAuthStore.validAccessToken(),
+              let connector = GalleryConnector.connector(for: prompt.connectorId),
+              let endpoint = URL(string: connector.endpoint) else {
+          throw NSError(domain: "UgotMCPPrompt", code: 401)
+        }
+        let client = UgotMCPClient(
+          connectorId: connector.id,
+          endpoint: endpoint,
+          accessToken: accessToken
+        )
+        try await client.initialize()
+        let result = try await client.getPrompt(name: prompt.name)
+        text = UgotMCPPromptRenderer.renderPromptText(result, fallbackTitle: prompt.title)
+      } catch {
+        text = prompt.title
+      }
+      await MainActor.run {
+        composerDraftSeed = text
+        composerFocusToken += 1
+      }
+    }
+  }
+
   private func activateDemoWidget(fullscreen: Bool) {
     let snapshot = McpWidgetSnapshot(
       connectorId: sessionState.connectorBarState.activeConnectorIds.first ?? GalleryConnector.defaultSelectedIds.first ?? "mcp",
@@ -1467,6 +1612,7 @@ private final class UgotMCPToolApprovalViewModel: ObservableObject {
 private struct UgotMCPToolApprovalView: View {
   let connector: GalleryConnector
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.scenePhase) private var scenePhase
   @StateObject private var viewModel = UgotMCPToolApprovalViewModel()
 
   var body: some View {
@@ -1475,11 +1621,37 @@ private struct UgotMCPToolApprovalView: View {
         if viewModel.isLoading && viewModel.tools.isEmpty {
           ProgressView("도구 목록을 불러오는 중…")
         } else if let errorMessage = viewModel.errorMessage {
-          ContentUnavailableView(
-            "도구 목록을 불러오지 못했어요",
-            systemImage: "exclamationmark.triangle",
-            description: Text(errorMessage)
-          )
+          VStack(spacing: 16) {
+            ContentUnavailableView(
+              "도구 목록을 불러오지 못했어요",
+              systemImage: "exclamationmark.triangle",
+              description: Text(errorMessage)
+            )
+            if connector.endpoint.hasPrefix("http://") {
+              Text("로컬 네트워크 권한을 처음 승인한 직후에는 iOS가 첫 요청을 취소할 수 있어요. 앱을 나갔다 오지 않아도 아래 버튼으로 바로 다시 시도할 수 있게 했어요.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+            }
+            HStack {
+              Button {
+                Task { await viewModel.load(connector: connector) }
+              } label: {
+                Label("다시 시도", systemImage: "arrow.clockwise")
+              }
+              .buttonStyle(.borderedProminent)
+
+              Button {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                  UIApplication.shared.open(url)
+                }
+              } label: {
+                Label("설정 열기", systemImage: "gearshape")
+              }
+              .buttonStyle(.bordered)
+            }
+          }
         } else {
           List {
             Section {
@@ -1487,7 +1659,7 @@ private struct UgotMCPToolApprovalView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             }
-            Section("Fortune MCP 도구") {
+            Section("\(connector.title) 도구") {
               ForEach(viewModel.tools) { tool in
                 UgotMCPToolApprovalRow(
                   tool: tool,
@@ -1523,6 +1695,10 @@ private struct UgotMCPToolApprovalView: View {
         if viewModel.tools.isEmpty {
           await viewModel.load(connector: connector)
         }
+      }
+      .onChange(of: scenePhase) { _, phase in
+        guard phase == .active, viewModel.errorMessage != nil else { return }
+        Task { await viewModel.load(connector: connector) }
       }
     }
   }
@@ -2970,8 +3146,11 @@ private struct ChatComposerBar: View {
   let isVoiceSessionActive: Bool
   let isVoiceSpeaking: Bool
   let voiceLevel: CGFloat
+  let mcpPromptItems: [UgotMCPPromptDescriptor]
+  let isLoadingMCPPrompts: Bool
   let onRecordAudio: () -> Void
   let onVoiceInput: () -> Void
+  let onSelectMCPPrompt: (UgotMCPPromptDescriptor) -> Void
   let onSend: (String) -> Void
 
   @State private var draft: String
@@ -2992,8 +3171,11 @@ private struct ChatComposerBar: View {
     isVoiceSessionActive: Bool,
     isVoiceSpeaking: Bool,
     voiceLevel: CGFloat,
+    mcpPromptItems: [UgotMCPPromptDescriptor],
+    isLoadingMCPPrompts: Bool,
     onRecordAudio: @escaping () -> Void,
     onVoiceInput: @escaping () -> Void,
+    onSelectMCPPrompt: @escaping (UgotMCPPromptDescriptor) -> Void,
     onSend: @escaping (String) -> Void
   ) {
     self.draftSeed = draftSeed
@@ -3010,8 +3192,11 @@ private struct ChatComposerBar: View {
     self.isVoiceSessionActive = isVoiceSessionActive
     self.isVoiceSpeaking = isVoiceSpeaking
     self.voiceLevel = voiceLevel
+    self.mcpPromptItems = mcpPromptItems
+    self.isLoadingMCPPrompts = isLoadingMCPPrompts
     self.onRecordAudio = onRecordAudio
     self.onVoiceInput = onVoiceInput
+    self.onSelectMCPPrompt = onSelectMCPPrompt
     self.onSend = onSend
     _draft = State(initialValue: draftSeed)
   }
@@ -3021,6 +3206,7 @@ private struct ChatComposerBar: View {
       attachmentStrip
       HStack(alignment: .bottom, spacing: 8) {
         addInputMenu
+        mcpPromptMenu
         TextField("메시지", text: $draft, axis: .vertical)
           .lineLimit(1...4)
           .focused($isFocused)
@@ -3165,6 +3351,54 @@ private struct ChatComposerBar: View {
     }
     .accessibilityLabel("Add input")
   }
+
+  private var mcpPromptMenu: some View {
+    Menu {
+      if isLoadingMCPPrompts && mcpPromptItems.isEmpty {
+        Label("프롬프트 불러오는 중", systemImage: "hourglass")
+      } else if mcpPromptItems.isEmpty {
+        Label("사용 가능한 MCP 프롬프트 없음", systemImage: "text.badge.xmark")
+      } else {
+        ForEach(groupedPromptConnectors, id: \.connectorId) { group in
+          Section(group.connectorTitle) {
+            ForEach(group.items) { item in
+              Button {
+                onSelectMCPPrompt(item)
+              } label: {
+                Label(item.title, systemImage: item.connectorSymbol)
+              }
+            }
+          }
+        }
+      }
+    } label: {
+      Image(systemName: isLoadingMCPPrompts ? "text.badge.clock" : "text.badge.star")
+        .font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(mcpPromptItems.isEmpty && !isLoadingMCPPrompts ? Color.secondary : Color.accentColor)
+        .frame(width: 32, height: 32)
+        .background(Color(.tertiarySystemFill), in: Circle())
+    }
+    .accessibilityLabel("MCP prompts")
+  }
+
+  private var groupedPromptConnectors: [PromptConnectorGroup] {
+    Dictionary(grouping: mcpPromptItems, by: \.connectorId)
+      .compactMap { connectorId, items -> PromptConnectorGroup? in
+        guard let first = items.first else { return nil }
+        return PromptConnectorGroup(
+          connectorId: connectorId,
+          connectorTitle: first.connectorTitle,
+          items: items.sorted { $0.title < $1.title }
+        )
+      }
+      .sorted { $0.connectorTitle < $1.connectorTitle }
+  }
+}
+
+private struct PromptConnectorGroup: Hashable {
+  let connectorId: String
+  let connectorTitle: String
+  let items: [UgotMCPPromptDescriptor]
 }
 
 private struct WidgetPreview: View, Equatable {

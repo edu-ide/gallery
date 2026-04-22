@@ -544,18 +544,19 @@ private enum UgotMCPToolMetadataCache {
     loader: () async throws -> [[String: Any]]
   ) async throws -> [[String: Any]] {
     let now = Date()
-    lock.lock()
-    if let cached = values[connectorId], now.timeIntervalSince(cached.timestamp) < ttl {
-      let tools = cached.tools
-      lock.unlock()
+    if let tools = lock.withLock({ () -> [[String: Any]]? in
+      guard let cached = values[connectorId], now.timeIntervalSince(cached.timestamp) < ttl else {
+        return nil
+      }
+      return cached.tools
+    }) {
       return tools
     }
-    lock.unlock()
 
     let loaded = try await loader()
-    lock.lock()
-    values[connectorId] = (Date(), loaded)
-    lock.unlock()
+    lock.withLock {
+      values[connectorId] = (Date(), loaded)
+    }
     return loaded
   }
 }
@@ -829,6 +830,7 @@ final class UgotMCPConnectorAction {
   private let connector: GalleryConnector
   private let mcpClient: UgotMCPClient
   private let sessionId: String
+  private let toolCacheKey: String
   private let toolPlanningProvider: UgotMCPActionRunner.ToolPlanningProvider?
 
   init(
@@ -839,6 +841,7 @@ final class UgotMCPConnectorAction {
   ) {
     self.connector = connector
     self.sessionId = sessionId
+    self.toolCacheKey = "\(connector.id)::\(accessToken.suffix(32))"
     self.toolPlanningProvider = toolPlanningProvider
     self.mcpClient = UgotMCPClient(
       connectorId: connector.id,
@@ -849,7 +852,7 @@ final class UgotMCPConnectorAction {
 
   func run(prompt: String) async throws -> UgotMCPActionResponse? {
     try await mcpClient.initialize()
-    let tools = try await UgotMCPToolMetadataCache.tools(connectorId: connector.id) {
+    let tools = try await UgotMCPToolMetadataCache.tools(connectorId: toolCacheKey) {
       try await mcpClient.listTools()
     }
     if let pending = UgotMCPToolApprovalStore.pendingApproval(
@@ -1289,7 +1292,7 @@ final class UgotMCPConnectorAction {
 
   func runApprovedPending() async throws -> UgotMCPActionResponse? {
     try await mcpClient.initialize()
-    let tools = try await UgotMCPToolMetadataCache.tools(connectorId: connector.id) {
+    let tools = try await UgotMCPToolMetadataCache.tools(connectorId: toolCacheKey) {
       try await mcpClient.listTools()
     }
     guard let pending = UgotMCPToolApprovalStore.pendingApproval(

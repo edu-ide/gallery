@@ -37,6 +37,8 @@
 	<string>Use the camera to attach images to AI Chat.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Use the microphone to record audio for AI Chat.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Connect to local UGOT MCP services on this network.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Choose photos to attach to AI Chat.</string>
 	<key>UILaunchScreen</key>
