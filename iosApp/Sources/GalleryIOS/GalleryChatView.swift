@@ -50,6 +50,7 @@ struct GalleryChatView: View {
   @State private var composerFocusToken = 0
   @State private var agentWorkspaceStatus: AgentWorkspaceStatus
   @State private var agentActivityNotice: AgentActivityNotice?
+  @State private var currentAgentTurn: UgotAgentTurnState?
   @State private var transcriptViewportHeight: CGFloat = 0
   @State private var streamingBottomY: CGFloat = 0
   @State private var streamingBottomFollowEnabled = false
@@ -796,6 +797,57 @@ struct GalleryChatView: View {
     }
   }
 
+  private func beginAgentTurn(
+    prompt: String,
+    attachmentCount: Int,
+    activeAgentSkillIds: [String],
+    activeConnectorIds: [String]
+  ) {
+    let turn = UgotAgentTurnState.start(
+      userPrompt: prompt,
+      attachmentCount: attachmentCount,
+      activeSkillIds: activeAgentSkillIds,
+      activeConnectorIds: activeConnectorIds
+    )
+    currentAgentTurn = turn
+    agentActivityNotice = turn.activity.map(AgentActivityNotice.init(activity:))
+  }
+
+  private func applyAgentTurnEvent(_ event: UgotAgentTurnEvent) {
+    guard var turn = currentAgentTurn else { return }
+    turn.apply(event)
+    currentAgentTurn = turn
+    agentActivityNotice = turn.activity.map(AgentActivityNotice.init(activity:))
+  }
+
+  private func completeAgentTurn(_ outcome: UgotAgentTurnOutcome) {
+    applyAgentTurnEvent(.complete(outcome))
+    currentAgentTurn = nil
+    agentActivityNotice = nil
+  }
+
+  private func failAgentTurn(_ reason: String) {
+    applyAgentTurnEvent(.fail(reason))
+  }
+
+  private func agentTurnRoute(
+    for route: GalleryCapabilityRoute,
+    connectorCount: Int
+  ) -> UgotAgentTurnRoute {
+    switch route {
+    case .nativeSkill(let skillId):
+      let title = agentSkills.first(where: { $0.id == skillId })?.title
+      return .nativeSkill(id: skillId, title: title)
+    case .mcpConnector(let connectorId):
+      let title = GalleryConnector.connector(for: connectorId)?.title
+      return .mcpConnector(id: connectorId, title: title)
+    case .mcpConnectors:
+      return .mcpConnectors(count: connectorCount)
+    case .model:
+      return .model
+    }
+  }
+
   private func runMCPConnectorTurn(
     prompt: String,
     turnContext: String?,
@@ -811,12 +863,8 @@ struct GalleryChatView: View {
     speakResponse: Bool
   ) async -> Bool {
     await MainActor.run {
+      applyAgentTurnEvent(.searchTools(connectorTitle: connectorSearchTitle))
       appendInlineEvent(.toolSearch(connectorTitle: connectorSearchTitle))
-      agentActivityNotice = AgentActivityNotice(
-        symbol: "sparkle.magnifyingglass",
-        title: "도구 검색 중",
-        detail: "\(connectorSearchTitle)에서 실행할 connector와 도구를 고르고 있어요."
-      )
     }
 
     let mcpResult = await UgotMCPActionRunner.runIfNeeded(
@@ -845,6 +893,7 @@ struct GalleryChatView: View {
 
     guard let mcpResult else {
       await MainActor.run {
+        applyAgentTurnEvent(.skipToolSearch(connectorTitle: connectorSearchTitle))
         appendInlineEvent(.toolSearchSkipped(connectorTitle: connectorSearchTitle))
       }
       return false
@@ -907,11 +956,13 @@ struct GalleryChatView: View {
     streamingBottomY = 0
     streamingBottomFollowEnabled = false
     lastStreamingAutoScrollTime = 0
-    agentActivityNotice = AgentActivityNotice(
-      symbol: "sparkles",
-      title: "턴 준비 중",
-      detail: attachmentsToSend.isEmpty ? "도구, 워크스페이스, 컨텍스트 상태를 확인하고 있어요." : "첨부 파일을 agent workspace에 저장하고 있어요."
+    beginAgentTurn(
+      prompt: effectivePrompt,
+      attachmentCount: attachmentsToSend.count,
+      activeAgentSkillIds: activeAgentSkillIds,
+      activeConnectorIds: activeConnectorIds
     )
+    applyAgentTurnEvent(.routePlanned(agentTurnRoute(for: capabilityRoute, connectorCount: activeConnectorSet.count)))
     isGenerating = true
     streamingAssistantText = ""
     if attachmentsOverride == nil {
@@ -921,6 +972,9 @@ struct GalleryChatView: View {
     schedulePersistSession(delayNanoseconds: 0)
 
     Task {
+      await MainActor.run {
+        applyAgentTurnEvent(.ingestAttachments(count: attachmentsToSend.count))
+      }
       let ingestPayload = await ingestAttachmentsForTurn(
         sessionId: sessionId,
         attachments: attachmentsToSend
@@ -945,6 +999,7 @@ struct GalleryChatView: View {
       let shouldUseVisibleContext = shouldAnswerFromWidgetContext(prompt: effectivePrompt, widgetContext: turnContext)
       if shouldUseVisibleContext {
         await MainActor.run {
+          applyAgentTurnEvent(.readVisibleContext)
           appendInlineEvent(.visibleCardRead)
         }
       } else {
@@ -1016,11 +1071,13 @@ struct GalleryChatView: View {
 
       if unresolvedMCPActionCommand {
         await MainActor.run {
+          applyAgentTurnEvent(.generateFinalAnswer(.guardrail))
           completeActionResult(
             GalleryChatActionResult(
               message: "실제 MCP 도구 실행이 필요한 요청인데 실행 가능한 도구를 확정하지 못했어요. 변경·저장·삭제 작업은 도구 실행 결과 없이 완료됐다고 말하지 않도록 중단했어요. 도구 승인 설정과 대상 이름을 확인한 뒤 다시 시도해 주세요."
             ),
-            speakResponse: speakResponse
+            speakResponse: speakResponse,
+            terminalOutcome: .guardrailStopped
           )
         }
         return
@@ -1028,11 +1085,13 @@ struct GalleryChatView: View {
 
       if Self.isLikelyStateChangingToolCommand(effectivePrompt) {
         await MainActor.run {
+          applyAgentTurnEvent(.generateFinalAnswer(.guardrail))
           completeActionResult(
             GalleryChatActionResult(
               message: "변경·저장·삭제 같은 작업은 실제 도구 실행 결과가 있어야 완료됐다고 말할 수 있어요. 이번 턴에서는 실행된 도구가 없어서 중단했어요. 해당 MCP connector가 켜져 있는지와 도구 승인 설정을 확인해 주세요."
             ),
-            speakResponse: speakResponse
+            speakResponse: speakResponse,
+            terminalOutcome: .guardrailStopped
           )
         }
         return
@@ -1050,7 +1109,7 @@ struct GalleryChatView: View {
       }
 
       let modelPrompt = await MainActor.run {
-        agentActivityNotice = nil
+        applyAgentTurnEvent(.generateFinalAnswer(.model))
         return promptForModel(
           userPrompt: effectivePrompt,
           widgetContext: turnContext,
@@ -1092,6 +1151,7 @@ struct GalleryChatView: View {
           scheduleLiveVoiceRestart()
         }
         schedulePersistSession(delayNanoseconds: 0)
+        completeAgentTurn(.answered)
       }
     }
   }
@@ -1132,17 +1192,35 @@ struct GalleryChatView: View {
     }
   }
 
-  private func completeActionResult(_ result: GalleryChatActionResult, speakResponse: Bool = false) {
+  private func completeActionResult(
+    _ result: GalleryChatActionResult,
+    speakResponse: Bool = false,
+    terminalOutcome: UgotAgentTurnOutcome = .answered
+  ) {
     if let approvalRequest = result.approvalRequest {
+      applyAgentTurnEvent(.requestApproval(
+        connectorTitle: approvalRequest.connectorTitle,
+        toolTitle: approvalRequest.toolTitle
+      ))
       pendingToolApproval = approvalRequest
       streamingAssistantText = ""
       isGenerating = false
       agentActivityNotice = nil
+      completeAgentTurn(.requestedApproval(toolTitle: approvalRequest.toolTitle))
       schedulePersistSession(delayNanoseconds: 0)
       return
     }
     if let observation = result.toolObservation {
       appendAgentToolObservation(observation, userPrompt: nil)
+      applyAgentTurnEvent(.runTool(
+        connectorTitle: observation.connectorTitle,
+        toolTitle: observation.toolTitle
+      ))
+      applyAgentTurnEvent(.observeTool(
+        connectorTitle: observation.connectorTitle,
+        toolTitle: observation.toolTitle,
+        status: observation.status
+      ))
     }
     if let snapshot = result.widgetSnapshot {
       sessionState = sessionState.activateWidget(snapshot: snapshot, fullscreen: false)
@@ -1153,6 +1231,7 @@ struct GalleryChatView: View {
       }
       activeWidgetModelContext = snapshot.modelContextFallbackMarkdown ?? result.message
       activeWidgetRenderKey = UUID().uuidString
+      applyAgentTurnEvent(.generateFinalAnswer(.widget(toolTitle: snapshot.title)))
     } else {
       appendInlineEvent(.actionCompleted)
       sessionState = sessionState.appendAssistantMessage(text: result.message)
@@ -1169,6 +1248,7 @@ struct GalleryChatView: View {
     } else if speakResponse, liveVoiceSessionActive {
       scheduleLiveVoiceRestart()
     }
+    completeAgentTurn(result.widgetSnapshot.map { .showedWidget(toolTitle: $0.title) } ?? terminalOutcome)
     schedulePersistSession(delayNanoseconds: 0)
   }
 
@@ -1195,11 +1275,16 @@ struct GalleryChatView: View {
 
     await MainActor.run {
       appendAgentToolObservation(observation, userPrompt: userPrompt)
-      agentActivityNotice = AgentActivityNotice(
-        symbol: "sparkles.rectangle.stack",
-        title: "도구 결과 정리 중",
-        detail: "\(observation.toolTitle) 실행 결과를 보고 최종 답변을 만들고 있어요."
-      )
+      applyAgentTurnEvent(.runTool(
+        connectorTitle: observation.connectorTitle,
+        toolTitle: observation.toolTitle
+      ))
+      applyAgentTurnEvent(.observeTool(
+        connectorTitle: observation.connectorTitle,
+        toolTitle: observation.toolTitle,
+        status: observation.status
+      ))
+      applyAgentTurnEvent(.generateFinalAnswer(.toolObservation(toolTitle: observation.toolTitle)))
       streamingAssistantText = ""
     }
 
@@ -1246,6 +1331,7 @@ struct GalleryChatView: View {
       } else if speakResponse, liveVoiceSessionActive {
         scheduleLiveVoiceRestart()
       }
+      completeAgentTurn(.answered)
       schedulePersistSession(delayNanoseconds: 0)
     }
   }
@@ -1290,13 +1376,16 @@ struct GalleryChatView: View {
     let plannerModelFileName = model.modelFileName
     let widgetContext = currentWidgetModelContext
     let userPrompt = approval.userPrompt ?? "\(approval.toolTitle)을 실행해줘."
+    beginAgentTurn(
+      prompt: userPrompt,
+      attachmentCount: 0,
+      activeAgentSkillIds: activeAgentSkillIds,
+      activeConnectorIds: activeConnectorIds
+    )
+    applyAgentTurnEvent(.routePlanned(.mcpConnector(id: approval.connectorId, title: approval.connectorTitle)))
+    applyAgentTurnEvent(.approveTool(connectorTitle: approval.connectorTitle, toolTitle: approval.toolTitle))
     isGenerating = true
     streamingAssistantText = ""
-    agentActivityNotice = AgentActivityNotice(
-      symbol: "checkmark.shield",
-      title: "도구 실행 중",
-      detail: "\(approval.toolTitle)을 승인 후 실행하고 있어요."
-    )
     Task {
       let result = await UgotMCPActionRunner.runApprovedPending(
         sessionId: sessionId,
@@ -1482,12 +1571,8 @@ struct GalleryChatView: View {
     }
 
     await MainActor.run {
+      applyAgentTurnEvent(.compactContext)
       appendInlineEvent(.contextOrganizing)
-      agentActivityNotice = AgentActivityNotice(
-        symbol: "arrow.triangle.2.circlepath",
-        title: "컨텍스트 압축 중",
-        detail: "이전 대화를 요약 메모리로 교체해서 다음 답변 성능을 유지하고 있어요."
-      )
     }
 
     let compactRequest = GalleryInferenceRequest(
@@ -1511,11 +1596,7 @@ struct GalleryChatView: View {
         currentUserMessageId: currentUserMessageId
       )
       appendInlineEvent(.contextOrganized)
-      agentActivityNotice = AgentActivityNotice(
-        symbol: "checkmark.seal",
-        title: "컨텍스트 압축 완료",
-        detail: "요약 메모리가 저장됐고 이후 프롬프트에 자동 포함돼요."
-      )
+      applyAgentTurnEvent(.finishCompaction)
     }
   }
 
@@ -2072,6 +2153,18 @@ private struct AgentActivityNotice: Equatable, Sendable {
   let symbol: String
   let title: String
   let detail: String
+
+  init(symbol: String, title: String, detail: String) {
+    self.symbol = symbol
+    self.title = title
+    self.detail = detail
+  }
+
+  init(activity: UgotAgentTurnActivity) {
+    self.symbol = activity.symbol
+    self.title = activity.title
+    self.detail = activity.detail
+  }
 }
 
 private struct AttachmentWorkspaceIngestPayload: Sendable {
