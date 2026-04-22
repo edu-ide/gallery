@@ -6,15 +6,43 @@ struct GalleryChatActionResult {
   let message: String
   let widgetSnapshot: McpWidgetSnapshot?
   let approvalRequest: UgotMCPToolApprovalRequest?
+  let toolObservation: UgotAgentToolObservation?
 
   init(
     message: String,
     widgetSnapshot: McpWidgetSnapshot? = nil,
-    approvalRequest: UgotMCPToolApprovalRequest? = nil
+    approvalRequest: UgotMCPToolApprovalRequest? = nil,
+    toolObservation: UgotAgentToolObservation? = nil
   ) {
     self.message = message
     self.widgetSnapshot = widgetSnapshot
     self.approvalRequest = approvalRequest
+    self.toolObservation = toolObservation
+  }
+}
+
+struct UgotAgentToolObservation {
+  let connectorId: String?
+  let connectorTitle: String
+  let toolName: String
+  let toolTitle: String
+  let argumentsPreview: String
+  let outputText: String
+  let hasWidget: Bool
+  let didMutate: Bool
+  let status: String
+
+  var promptContext: String {
+    """
+    Tool status: \(status)
+    Connector: \(connectorTitle)
+    Tool: \(toolTitle) (`\(toolName)`)
+    Mutation: \(didMutate ? "yes" : "no")
+    Widget rendered: \(hasWidget ? "yes" : "no")
+    Arguments: \(argumentsPreview)
+    Observation:
+    \(outputText.trimmingCharacters(in: .whitespacesAndNewlines))
+    """
   }
 }
 
@@ -124,7 +152,20 @@ enum GalleryMobileActionRunner {
     return await MainActor.run {
       let url = mapURL(for: prompt)
       UIApplication.shared.open(url, options: [:])
-      return GalleryChatActionResult(message: "지도 앱을 열었어요.")
+      return GalleryChatActionResult(
+        message: "지도 앱을 열었어요.",
+        toolObservation: UgotAgentToolObservation(
+          connectorId: nil,
+          connectorTitle: "Mobile Actions",
+          toolName: "mobile.open_map",
+          toolTitle: "지도 열기",
+          argumentsPreview: "`{\"prompt\":\"\(prompt.replacingOccurrences(of: "\"", with: "\\\""))\"}`",
+          outputText: "지도 앱 열기 요청을 iOS에 전달했어요.",
+          hasWidget: false,
+          didMutate: false,
+          status: "success"
+        )
+      )
     }
   }
 

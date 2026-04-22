@@ -798,9 +798,11 @@ struct GalleryChatView: View {
 
   private func runMCPConnectorTurn(
     prompt: String,
+    turnContext: String?,
     connectorIds: Set<String>,
     connectorSearchTitle: String,
     activeAgentSkillIds: [String],
+    route: String,
     plannerModelName: String,
     plannerModelDisplayName: String,
     plannerModelFileName: String,
@@ -841,10 +843,24 @@ struct GalleryChatView: View {
       }
     )
 
-    guard let mcpResult else { return false }
-    await MainActor.run {
-      completeActionResult(mcpResult, speakResponse: speakResponse)
+    guard let mcpResult else {
+      await MainActor.run {
+        appendInlineEvent(.toolSearchSkipped(connectorTitle: connectorSearchTitle))
+      }
+      return false
     }
+    await completeAgenticToolResult(
+      mcpResult,
+      userPrompt: prompt,
+      widgetContext: turnContext,
+      route: route,
+      modelName: plannerModelName,
+      modelDisplayName: plannerModelDisplayName,
+      modelFileName: plannerModelFileName,
+      activeAgentSkillIds: plannerActiveAgentSkillIds,
+      activeConnectorIds: plannerActiveConnectorIds,
+      speakResponse: speakResponse
+    )
     return true
   }
 
@@ -925,6 +941,7 @@ struct GalleryChatView: View {
         attachmentContext: ingestPayload.context
       )
 
+      var unresolvedMCPActionCommand = false
       let shouldUseVisibleContext = shouldAnswerFromWidgetContext(prompt: effectivePrompt, widgetContext: turnContext)
       if shouldUseVisibleContext {
         await MainActor.run {
@@ -939,9 +956,18 @@ struct GalleryChatView: View {
               prompt: effectivePrompt,
               activeSkillIds: Set(activeAgentSkillIds)
             ) {
-              await MainActor.run {
-                completeActionResult(actionResult, speakResponse: speakResponse)
-              }
+              await completeAgenticToolResult(
+                actionResult,
+                userPrompt: effectivePrompt,
+                widgetContext: turnContext,
+                route: route,
+                modelName: plannerModelName,
+                modelDisplayName: plannerModelDisplayName,
+                modelFileName: plannerModelFileName,
+                activeAgentSkillIds: plannerActiveAgentSkillIds,
+                activeConnectorIds: plannerActiveConnectorIds,
+                speakResponse: speakResponse
+              )
               return
             }
           default:
@@ -950,9 +976,11 @@ struct GalleryChatView: View {
         case .mcpConnector(let connectorId):
           if await runMCPConnectorTurn(
             prompt: effectivePrompt,
+            turnContext: turnContext,
             connectorIds: [connectorId],
             connectorSearchTitle: GalleryConnector.connector(for: connectorId)?.title ?? "MCP",
             activeAgentSkillIds: activeAgentSkillIds,
+            route: route,
             plannerModelName: plannerModelName,
             plannerModelDisplayName: plannerModelDisplayName,
             plannerModelFileName: plannerModelFileName,
@@ -962,12 +990,15 @@ struct GalleryChatView: View {
           ) {
             return
           }
+          unresolvedMCPActionCommand = Self.isLikelyStateChangingToolCommand(effectivePrompt)
         case .mcpConnectors:
           if await runMCPConnectorTurn(
             prompt: effectivePrompt,
+            turnContext: turnContext,
             connectorIds: activeConnectorSet,
             connectorSearchTitle: "활성 MCP 커넥터",
             activeAgentSkillIds: activeAgentSkillIds,
+            route: route,
             plannerModelName: plannerModelName,
             plannerModelDisplayName: plannerModelDisplayName,
             plannerModelFileName: plannerModelFileName,
@@ -977,9 +1008,34 @@ struct GalleryChatView: View {
           ) {
             return
           }
+          unresolvedMCPActionCommand = Self.isLikelyStateChangingToolCommand(effectivePrompt)
         case .model:
           break
         }
+      }
+
+      if unresolvedMCPActionCommand {
+        await MainActor.run {
+          completeActionResult(
+            GalleryChatActionResult(
+              message: "실제 MCP 도구 실행이 필요한 요청인데 실행 가능한 도구를 확정하지 못했어요. 변경·저장·삭제 작업은 도구 실행 결과 없이 완료됐다고 말하지 않도록 중단했어요. 도구 승인 설정과 대상 이름을 확인한 뒤 다시 시도해 주세요."
+            ),
+            speakResponse: speakResponse
+          )
+        }
+        return
+      }
+
+      if Self.isLikelyStateChangingToolCommand(effectivePrompt) {
+        await MainActor.run {
+          completeActionResult(
+            GalleryChatActionResult(
+              message: "변경·저장·삭제 같은 작업은 실제 도구 실행 결과가 있어야 완료됐다고 말할 수 있어요. 이번 턴에서는 실행된 도구가 없어서 중단했어요. 해당 MCP connector가 켜져 있는지와 도구 승인 설정을 확인해 주세요."
+            ),
+            speakResponse: speakResponse
+          )
+        }
+        return
       }
 
       if let currentUserMessageId {
@@ -1040,6 +1096,24 @@ struct GalleryChatView: View {
     }
   }
 
+
+  private static func isLikelyStateChangingToolCommand(_ prompt: String) -> Bool {
+    let normalized = prompt
+      .lowercased()
+      .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+    let mutationTerms = [
+      "바꿔", "변경", "설정", "저장", "삭제", "지워", "선택", "등록", "해제",
+      "set", "change", "update", "save", "delete", "remove", "select", "clear", "default",
+    ]
+    let toolStateTerms = [
+      "기본사용자", "기본프로필", "대표사용자", "저장사용자", "저장프로필",
+      "defaultuser", "defaultprofile", "saveduser", "savedprofile", "preference", "settings",
+      "메일", "mail", "이메일", "email", "라벨", "label",
+    ]
+    return mutationTerms.contains { normalized.contains($0) } &&
+      toolStateTerms.contains { normalized.contains($0) }
+  }
+
   private func schedulePersistSession(delayNanoseconds: UInt64 = 250_000_000) {
     pendingPersistTask?.cancel()
     let store = sessionStore
@@ -1066,6 +1140,9 @@ struct GalleryChatView: View {
       agentActivityNotice = nil
       schedulePersistSession(delayNanoseconds: 0)
       return
+    }
+    if let observation = result.toolObservation {
+      appendAgentToolObservation(observation, userPrompt: nil)
     }
     if let snapshot = result.widgetSnapshot {
       sessionState = sessionState.activateWidget(snapshot: snapshot, fullscreen: false)
@@ -1095,9 +1172,124 @@ struct GalleryChatView: View {
     schedulePersistSession(delayNanoseconds: 0)
   }
 
+  private func completeAgenticToolResult(
+    _ result: GalleryChatActionResult,
+    userPrompt: String,
+    widgetContext: String?,
+    route: String,
+    modelName: String,
+    modelDisplayName: String,
+    modelFileName: String,
+    activeAgentSkillIds: [String],
+    activeConnectorIds: [String],
+    speakResponse: Bool = false
+  ) async {
+    guard result.approvalRequest == nil,
+          result.widgetSnapshot == nil,
+          let observation = result.toolObservation else {
+      await MainActor.run {
+        completeActionResult(result, speakResponse: speakResponse)
+      }
+      return
+    }
+
+    await MainActor.run {
+      appendAgentToolObservation(observation, userPrompt: userPrompt)
+      agentActivityNotice = AgentActivityNotice(
+        symbol: "sparkles.rectangle.stack",
+        title: "도구 결과 정리 중",
+        detail: "\(observation.toolTitle) 실행 결과를 보고 최종 답변을 만들고 있어요."
+      )
+      streamingAssistantText = ""
+    }
+
+    let finalPrompt = Self.agenticToolFinalPrompt(
+      userPrompt: userPrompt,
+      observation: observation,
+      widgetContext: widgetContext
+    )
+    let request = GalleryInferenceRequest(
+      modelName: modelName,
+      modelDisplayName: modelDisplayName,
+      modelFileName: modelFileName,
+      prompt: finalPrompt,
+      route: "\(route)+agentic-tool-final",
+      activeAgentSkillIds: activeAgentSkillIds,
+      activeConnectorIds: activeConnectorIds,
+      supportsImage: false,
+      supportsAudio: false,
+      attachments: []
+    )
+
+    let resultText = await runtime.generate(request: request) { token in
+      Task { @MainActor in
+        streamingAssistantText.append(token)
+      }
+    }
+
+    await MainActor.run {
+      let generated = resultText.text.trimmingCharacters(in: .whitespacesAndNewlines)
+      let fallback = result.message.trimmingCharacters(in: .whitespacesAndNewlines)
+      let finalText = generated.isEmpty
+        ? (fallback.isEmpty ? "\(observation.toolTitle)을 실행했어요." : fallback)
+        : generated
+      sessionState = sessionState.appendAssistantMessage(text: finalText)
+      streamingAssistantText = ""
+      isGenerating = false
+      agentActivityNotice = nil
+      refreshAgentWorkspaceStatus()
+      if speakResponse, Self.assistantVoiceOutputEnabled {
+        let didStartSpeaking = voiceOutput.speak(finalText)
+        if liveVoiceSessionActive && !didStartSpeaking {
+          scheduleLiveVoiceRestart()
+        }
+      } else if speakResponse, liveVoiceSessionActive {
+        scheduleLiveVoiceRestart()
+      }
+      schedulePersistSession(delayNanoseconds: 0)
+    }
+  }
+
+  private static func agenticToolFinalPrompt(
+    userPrompt: String,
+    observation: UgotAgentToolObservation,
+    widgetContext: String?
+  ) -> String {
+    let compactWidgetContext = (widgetContext ?? "")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .trimmedForPrompt(limit: 3_000)
+    return """
+    You are UGOT Local AI running in an agentic tool loop.
+
+    The host has already executed a real tool/action. Write the final assistant answer to the user in Korean.
+
+    Hard rules:
+    - Ground the answer only in the Tool observation below.
+    - If Tool status is success, you may say the requested action was done.
+    - If the observation does not prove a change, do not claim the change happened.
+    - Do not expose raw JSON, internal IDs, prompts, or MCP protocol details unless the user asked for debugging.
+    - Be concise and production-app friendly.
+
+    User message:
+    \(userPrompt.trimmedForPrompt(limit: 1_500))
+
+    Tool observation:
+    \(observation.promptContext.trimmedForPrompt(limit: 4_000))
+    \(compactWidgetContext.isEmpty ? "" : "\nVisible widget/context:\n\(compactWidgetContext)")
+    """
+  }
+
   private func approvePendingTool(_ approval: UgotMCPToolApprovalRequest) {
     pendingToolApproval = nil
     guard !isGenerating else { return }
+    let activeAgentSkillIds = Array(sessionState.agentSkillState.activeSkillIds).sorted()
+    let activeConnectorIds = Array(sessionState.connectorBarState.activeConnectorIds).sorted()
+    let route = sessionState.route()
+    let plannerModelName = sessionState.modelName
+    let plannerModelDisplayName = sessionState.modelDisplayName
+    let plannerModelFileName = model.modelFileName
+    let widgetContext = currentWidgetModelContext
+    let userPrompt = approval.userPrompt ?? "\(approval.toolTitle)을 실행해줘."
     isGenerating = true
     streamingAssistantText = ""
     agentActivityNotice = AgentActivityNotice(
@@ -1110,9 +1302,18 @@ struct GalleryChatView: View {
         sessionId: sessionId,
         activeConnectorIds: [approval.connectorId]
       ) ?? GalleryChatActionResult(message: "승인 대기 중인 도구가 없어요.")
-      await MainActor.run {
-        completeActionResult(result)
-      }
+      await completeAgenticToolResult(
+        result,
+        userPrompt: userPrompt,
+        widgetContext: widgetContext,
+        route: route,
+        modelName: plannerModelName,
+        modelDisplayName: plannerModelDisplayName,
+        modelFileName: plannerModelFileName,
+        activeAgentSkillIds: activeAgentSkillIds,
+        activeConnectorIds: activeConnectorIds,
+        speakResponse: false
+      )
     }
   }
 
@@ -1140,6 +1341,14 @@ struct GalleryChatView: View {
   }
 
   private func appendInlineEvent(_ event: InlineChatEvent) {
+    appendAgentTimelineEvent(.notice(event))
+  }
+
+  private func appendAgentToolObservation(_ observation: UgotAgentToolObservation, userPrompt: String?) {
+    appendAgentTimelineEvent(.toolObservation(observation, userPrompt: userPrompt))
+  }
+
+  private func appendAgentTimelineEvent(_ event: UgotAgentTimelineEvent) {
     let marker = UnifiedChatMessage(
       id: "m\(sessionState.nextMessageIndex)",
       role: .system,
@@ -1896,6 +2105,11 @@ private struct InlineChatEvent: Equatable {
 
   init?(message: UnifiedChatMessage) {
     guard message.role == .system else { return nil }
+    if let canonical = UgotAgentTimelineEvent(message: message),
+       let event = canonical.inlineEvent {
+      self = event
+      return
+    }
     let trimmed = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard trimmed.hasPrefix(Self.marker) else { return nil }
     let jsonText = trimmed
@@ -1944,12 +2158,30 @@ private struct InlineChatEvent: Equatable {
     )
   }
 
+  static func toolSearchSkipped(connectorTitle: String) -> InlineChatEvent {
+    InlineChatEvent(
+      symbol: "text.magnifyingglass",
+      title: "대화로 이어갈게요",
+      detail: "\(connectorTitle)에서 이번 요청에 맞는 실행 도구는 선택하지 않았어요."
+    )
+  }
+
   static func toolResult(title: String) -> InlineChatEvent {
     let displayTitle = userFacingTitle(title)
     return InlineChatEvent(
       symbol: "sparkle.magnifyingglass",
       title: "필요한 정보를 가져왔어요",
       detail: displayTitle.map { "\($0)을 아래에 열었어요." } ?? "결과를 아래에 열었어요."
+    )
+  }
+
+  static func toolExecuted(_ observation: UgotAgentToolObservation) -> InlineChatEvent {
+    let title = userFacingTitle(observation.toolTitle) ?? observation.connectorTitle
+    let statusText = observation.status == "success" ? "실행 완료" : observation.status
+    return InlineChatEvent(
+      symbol: observation.didMutate ? "checkmark.shield" : "wrench.and.screwdriver",
+      title: "\(title) \(statusText)",
+      detail: observation.didMutate ? "도구 결과를 확인한 뒤 답변할게요." : "관찰 결과를 기준으로 이어서 답할게요."
     )
   }
 
@@ -1988,6 +2220,328 @@ private struct InlineChatEvent: Equatable {
       return nil
     }
     return trimmed
+  }
+}
+
+private struct UgotAgentToolTranscript {
+  private static let marker = "[UGOT_TOOL_OBSERVATION]"
+
+  let callId: String
+  let userPrompt: String?
+  let connectorTitle: String
+  let toolName: String
+  let toolTitle: String
+  let argumentsPreview: String
+  let outputText: String
+  let hasWidget: Bool
+  let didMutate: Bool
+  let status: String
+
+  fileprivate init(
+    callId: String,
+    userPrompt: String?,
+    connectorTitle: String,
+    toolName: String,
+    toolTitle: String,
+    argumentsPreview: String,
+    outputText: String,
+    hasWidget: Bool,
+    didMutate: Bool,
+    status: String
+  ) {
+    self.callId = callId
+    self.userPrompt = userPrompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? userPrompt : nil
+    self.connectorTitle = connectorTitle
+    self.toolName = toolName
+    self.toolTitle = toolTitle
+    self.argumentsPreview = argumentsPreview
+    self.outputText = outputText
+    self.hasWidget = hasWidget
+    self.didMutate = didMutate
+    self.status = status
+  }
+
+  var promptText: String {
+    var lines: [String] = [
+      "[Tool observation]",
+      "call_id: \(callId)",
+      "status: \(status)",
+      "connector: \(connectorTitle)",
+      "tool: \(toolTitle) (\(toolName))",
+      "mutation: \(didMutate ? "yes" : "no")",
+      "widget: \(hasWidget ? "yes" : "no")",
+      "arguments: \(argumentsPreview)",
+    ]
+    if let userPrompt, !userPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      lines.append("original_user_message: \(userPrompt.trimmedForPrompt(limit: 600))")
+    }
+    lines.append("output:\n\(outputText.trimmedMiddleForPrompt(limit: 1_800))")
+    return lines.joined(separator: "\n")
+  }
+
+  static func persistedText(observation: UgotAgentToolObservation, userPrompt: String?) -> String {
+    let payload: [String: Any] = [
+      "callId": "call_\(UUID().uuidString)",
+      "userPrompt": userPrompt ?? "",
+      "connectorTitle": observation.connectorTitle,
+      "toolName": observation.toolName,
+      "toolTitle": observation.toolTitle,
+      "argumentsPreview": observation.argumentsPreview,
+      "outputText": observation.outputText,
+      "hasWidget": observation.hasWidget,
+      "didMutate": observation.didMutate,
+      "status": observation.status,
+    ]
+    let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])) ?? Data()
+    let json = String(data: data, encoding: .utf8) ?? "{}"
+    return "\(Self.marker)\n\(json)"
+  }
+
+  init?(message: UnifiedChatMessage) {
+    guard message.role == .system else { return nil }
+    if let canonical = UgotAgentTimelineEvent(message: message),
+       let transcript = canonical.toolTranscript {
+      self = transcript
+      return
+    }
+    let trimmed = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.hasPrefix(Self.marker) else { return nil }
+    let jsonText = trimmed
+      .dropFirst(Self.marker.count)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let data = jsonText.data(using: .utf8),
+          let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let callId = payload["callId"] as? String,
+          let connectorTitle = payload["connectorTitle"] as? String,
+          let toolName = payload["toolName"] as? String,
+          let toolTitle = payload["toolTitle"] as? String,
+          let argumentsPreview = payload["argumentsPreview"] as? String,
+          let outputText = payload["outputText"] as? String,
+          let hasWidget = payload["hasWidget"] as? Bool,
+          let didMutate = payload["didMutate"] as? Bool,
+          let status = payload["status"] as? String else {
+      return nil
+    }
+    let userPrompt = payload["userPrompt"] as? String
+    self.init(
+      callId: callId,
+      userPrompt: userPrompt,
+      connectorTitle: connectorTitle,
+      toolName: toolName,
+      toolTitle: toolTitle,
+      argumentsPreview: argumentsPreview,
+      outputText: outputText,
+      hasWidget: hasWidget,
+      didMutate: didMutate,
+      status: status
+    )
+  }
+}
+
+/// Canonical agent timeline event persisted in chat history.
+///
+/// This is the mobile equivalent of Codex keeping tool-search/tool-call/tool-output
+/// items in the conversation stream. UI chips and model-readable transcripts are
+/// projections of this single event, so reload/auto-compact/follow-up turns do
+/// not depend on separate synthetic system rows.
+private struct UgotAgentTimelineEvent {
+  private static let marker = "[UGOT_AGENT_EVENT_V1]"
+
+  enum Kind: String {
+    case notice
+    case toolObservation = "tool_observation"
+  }
+
+  let kind: Kind
+  let eventId: String
+  let timestamp: String
+  let display: InlineChatEvent?
+  let callId: String?
+  let userPrompt: String?
+  let connectorTitle: String?
+  let toolName: String?
+  let toolTitle: String?
+  let argumentsPreview: String?
+  let outputText: String?
+  let hasWidget: Bool?
+  let didMutate: Bool?
+  let status: String?
+
+  var persistedText: String {
+    var payload: [String: Any] = [
+      "schema": 1,
+      "kind": kind.rawValue,
+      "eventId": eventId,
+      "timestamp": timestamp,
+    ]
+    if let display {
+      payload["display"] = [
+        "symbol": display.symbol,
+        "title": display.title,
+        "detail": display.detail,
+      ]
+    }
+    if let callId { payload["callId"] = callId }
+    if let userPrompt { payload["userPrompt"] = userPrompt }
+    if let connectorTitle { payload["connectorTitle"] = connectorTitle }
+    if let toolName { payload["toolName"] = toolName }
+    if let toolTitle { payload["toolTitle"] = toolTitle }
+    if let argumentsPreview { payload["argumentsPreview"] = argumentsPreview }
+    if let outputText { payload["outputText"] = outputText }
+    if let hasWidget { payload["hasWidget"] = hasWidget }
+    if let didMutate { payload["didMutate"] = didMutate }
+    if let status { payload["status"] = status }
+
+    let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])) ?? Data()
+    let json = String(data: data, encoding: .utf8) ?? "{}"
+    return "\(Self.marker)\n\(json)"
+  }
+
+  var inlineEvent: InlineChatEvent? {
+    display
+  }
+
+  var toolTranscript: UgotAgentToolTranscript? {
+    guard kind == .toolObservation,
+          let callId,
+          let connectorTitle,
+          let toolName,
+          let toolTitle,
+          let argumentsPreview,
+          let outputText,
+          let hasWidget,
+          let didMutate,
+          let status else {
+      return nil
+    }
+    return UgotAgentToolTranscript(
+      callId: callId,
+      userPrompt: userPrompt,
+      connectorTitle: connectorTitle,
+      toolName: toolName,
+      toolTitle: toolTitle,
+      argumentsPreview: argumentsPreview,
+      outputText: outputText,
+      hasWidget: hasWidget,
+      didMutate: didMutate,
+      status: status
+    )
+  }
+
+  static func notice(_ event: InlineChatEvent) -> UgotAgentTimelineEvent {
+    UgotAgentTimelineEvent(
+      kind: .notice,
+      eventId: "evt_\(UUID().uuidString)",
+      timestamp: ISO8601DateFormatter().string(from: Date()),
+      display: event,
+      callId: nil,
+      userPrompt: nil,
+      connectorTitle: nil,
+      toolName: nil,
+      toolTitle: nil,
+      argumentsPreview: nil,
+      outputText: nil,
+      hasWidget: nil,
+      didMutate: nil,
+      status: nil
+    )
+  }
+
+  static func toolObservation(
+    _ observation: UgotAgentToolObservation,
+    userPrompt: String?
+  ) -> UgotAgentTimelineEvent {
+    let callId = "call_\(UUID().uuidString)"
+    return UgotAgentTimelineEvent(
+      kind: .toolObservation,
+      eventId: "evt_\(UUID().uuidString)",
+      timestamp: ISO8601DateFormatter().string(from: Date()),
+      display: .toolExecuted(observation),
+      callId: callId,
+      userPrompt: userPrompt,
+      connectorTitle: observation.connectorTitle,
+      toolName: observation.toolName,
+      toolTitle: observation.toolTitle,
+      argumentsPreview: observation.argumentsPreview,
+      outputText: observation.outputText,
+      hasWidget: observation.hasWidget,
+      didMutate: observation.didMutate,
+      status: observation.status
+    )
+  }
+
+  init?(
+    message: UnifiedChatMessage
+  ) {
+    guard message.role == .system else { return nil }
+    let trimmed = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.hasPrefix(Self.marker) else { return nil }
+    let jsonText = trimmed
+      .dropFirst(Self.marker.count)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let data = jsonText.data(using: .utf8),
+          let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let rawKind = payload["kind"] as? String,
+          let kind = Kind(rawValue: rawKind),
+          let eventId = payload["eventId"] as? String,
+          let timestamp = payload["timestamp"] as? String else {
+      return nil
+    }
+
+    self.kind = kind
+    self.eventId = eventId
+    self.timestamp = timestamp
+    if let displayPayload = payload["display"] as? [String: Any],
+       let symbol = displayPayload["symbol"] as? String,
+       let title = displayPayload["title"] as? String,
+       let detail = displayPayload["detail"] as? String {
+      self.display = InlineChatEvent(symbol: symbol, title: title, detail: detail)
+    } else {
+      self.display = nil
+    }
+    self.callId = payload["callId"] as? String
+    let rawUserPrompt = payload["userPrompt"] as? String
+    self.userPrompt = rawUserPrompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? rawUserPrompt : nil
+    self.connectorTitle = payload["connectorTitle"] as? String
+    self.toolName = payload["toolName"] as? String
+    self.toolTitle = payload["toolTitle"] as? String
+    self.argumentsPreview = payload["argumentsPreview"] as? String
+    self.outputText = payload["outputText"] as? String
+    self.hasWidget = payload["hasWidget"] as? Bool
+    self.didMutate = payload["didMutate"] as? Bool
+    self.status = payload["status"] as? String
+  }
+
+  private init(
+    kind: Kind,
+    eventId: String,
+    timestamp: String,
+    display: InlineChatEvent?,
+    callId: String?,
+    userPrompt: String?,
+    connectorTitle: String?,
+    toolName: String?,
+    toolTitle: String?,
+    argumentsPreview: String?,
+    outputText: String?,
+    hasWidget: Bool?,
+    didMutate: Bool?,
+    status: String?
+  ) {
+    self.kind = kind
+    self.eventId = eventId
+    self.timestamp = timestamp
+    self.display = display
+    self.callId = callId
+    self.userPrompt = userPrompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? userPrompt : nil
+    self.connectorTitle = connectorTitle
+    self.toolName = toolName
+    self.toolTitle = toolTitle
+    self.argumentsPreview = argumentsPreview
+    self.outputText = outputText
+    self.hasWidget = hasWidget
+    self.didMutate = didMutate
+    self.status = status
   }
 }
 
@@ -2199,7 +2753,7 @@ private struct AutoCompactedChatPromptBuilder {
 
     var sections: [String] = []
     sections.append("""
-    You are UGOT Local AI. Answer the user directly and keep behavior grounded in the compacted context below. The context is automatically compacted when it grows too large, so prioritize the Current user message, then Current MCP widget context, then Recent turns, then Older compacted memory. Do not mention the compaction unless the user asks.
+    You are UGOT Local AI. Answer the user directly and keep behavior grounded in the compacted context below. The context is automatically compacted when it grows too large, so prioritize the Current user message, then Current MCP widget context, then Recent turns, then Older compacted memory. Do not mention the compaction unless the user asks. Never claim that you changed, saved, deleted, selected, sent, opened, or updated anything unless the current turn includes an explicit tool/action result confirming it.
     """)
 
     if let compactWidgetContext {
@@ -2239,7 +2793,7 @@ private struct AutoCompactedChatPromptBuilder {
     let historyMessages = projection.recentMessages
       .filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
       .filter { !Self.isWidgetDisplayMessage($0) }
-      .filter { $0.role != .system }
+      .filter { $0.role != .system || UgotAgentToolTranscript(message: $0) != nil }
     guard !historyMessages.isEmpty || projection.summary != nil else { return nil }
 
     let recentMessages = Array(historyMessages.suffix(Self.recentMessageCount))
@@ -2258,9 +2812,7 @@ private struct AutoCompactedChatPromptBuilder {
     if !olderMessages.isEmpty {
       let olderLines = olderMessages
         .suffix(24)
-        .map { message in
-          "- \(message.role.promptLabel): \(message.text.oneLineForPrompt(limit: 220))"
-        }
+        .map { "- \(Self.historyLine(for: $0, limit: 220))" }
       let omittedCount = max(0, olderMessages.count - olderLines.count)
       var olderSection = "Older memory summary:"
       if omittedCount > 0 {
@@ -2271,9 +2823,7 @@ private struct AutoCompactedChatPromptBuilder {
     }
 
     if !recentMessages.isEmpty {
-      let recentLines = recentMessages.map { message in
-        "\(message.role.promptLabel): \(message.text.trimmedMiddleForPrompt(limit: 1_100))"
-      }
+      let recentLines = recentMessages.map { Self.historyLine(for: $0, limit: 1_100) }
       parts.append("Recent turns:\n" + recentLines.joined(separator: "\n\n"))
     }
 
@@ -2283,6 +2833,13 @@ private struct AutoCompactedChatPromptBuilder {
 
   private static func isWidgetDisplayMessage(_ message: UnifiedChatMessage) -> Bool {
     message.role == .assistant && message.text.contains("위젯으로 표시했어요")
+  }
+
+  private static func historyLine(for message: UnifiedChatMessage, limit: Int) -> String {
+    if let transcript = UgotAgentToolTranscript(message: message) {
+      return "Tool: \(transcript.promptText.trimmedMiddleForPrompt(limit: limit))"
+    }
+    return "\(message.role.promptLabel): \(message.text.trimmedMiddleForPrompt(limit: limit))"
   }
 }
 
@@ -2455,7 +3012,7 @@ private enum ChatAutoCompactor {
 
     for message in messages.reversed() {
       guard remainingTokens > 0 else { break }
-      let line = "\(message.role.promptLabel): \(message.text.trimmedMiddleForPrompt(limit: 1_600))"
+      let line = renderMessageForPrompt(message, limit: 1_600)
       let tokens = estimatedTokenCount(line)
       if tokens <= remainingTokens {
         rendered.append(line)
@@ -2485,7 +3042,7 @@ private enum ChatAutoCompactor {
     if !messages.isEmpty {
       let importantLines = messages
         .suffix(24)
-        .map { "- \($0.role.promptLabel): \($0.text.oneLineForPrompt(limit: 260))" }
+        .map { "- \(renderMessageForPrompt($0, limit: 260))" }
         .joined(separator: "\n")
       parts.append("""
       Recent conversation facts and decisions:
@@ -2534,6 +3091,7 @@ private enum ChatAutoCompactor {
     let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty else { return false }
     if isCompactionMarker(message) { return false }
+    if UgotAgentToolTranscript(message: message) != nil { return true }
     if message.role == .system { return false }
     if message.role == .assistant && text.hasPrefix("Loaded ") { return false }
     if message.role == .assistant && text.contains("위젯으로 표시했어요") { return false }
@@ -2567,6 +3125,13 @@ private enum ChatAutoCompactor {
 
   private static func estimatedTokenCount(_ text: String) -> Int {
     max(1, Int(ceil(Double(text.count) / 4.0)))
+  }
+
+  private static func renderMessageForPrompt(_ message: UnifiedChatMessage, limit: Int) -> String {
+    if let transcript = UgotAgentToolTranscript(message: message) {
+      return "Tool: \(transcript.promptText.oneLineForPrompt(limit: limit))"
+    }
+    return "\(message.role.promptLabel): \(message.text.oneLineForPrompt(limit: limit))"
   }
 
   private static func looksLikeRuntimeFailure(_ text: String) -> Bool {

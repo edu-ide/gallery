@@ -206,14 +206,14 @@ extension GalleryConnector {
       id: fortuneMcpId,
       title: "UGOT Fortune",
       symbol: "sparkles",
-      summary: "MCP endpoint: \(fortuneMcpEndpoint)",
+      summary: "오늘의 운세, 사주, 궁합, 저장 프로필, 기본 사용자 변경을 도와줘요.",
       endpoint: fortuneMcpEndpoint
     ),
     GalleryConnector(
       id: mailMcpId,
       title: "UGOT Mail",
       symbol: "envelope",
-      summary: "Embedded mail MCP backend: \(mailMcpEndpoint)",
+      summary: "최근 메일 검색, 요약, 라벨 정리, 답장 초안을 도와줘요.",
       endpoint: mailMcpEndpoint
     ),
   ]

@@ -24,6 +24,16 @@ struct GalleryInferenceRequest {
   let supportsImage: Bool
   let supportsAudio: Bool
   let attachments: [GalleryInferenceAttachment]
+  /// The Swift chat layer already sends an auto-compacted prompt containing
+  /// the relevant conversation history. Keeping LiteRT-LM's native
+  /// Conversation object alive across turns duplicates that history invisibly:
+  /// normal chat, auto-compact, and MCP routing prompts all accumulate inside
+  /// the engine and make later turns progressively slower and less predictable.
+  ///
+  /// Keep the expensive engine cached, but reset the native conversation for
+  /// each logical request unless a future caller explicitly opts into native
+  /// stateful conversations.
+  let resetsConversation: Bool = true
 }
 
 struct GalleryInferenceResult {
@@ -135,7 +145,8 @@ struct LiteRTLMGalleryInferenceRuntime: GalleryInferenceRuntime {
           attachmentsJson: request.attachmentsJson,
           enableVision: request.supportsImage,
           enableAudio: request.supportsAudio,
-          cacheDir: LiteRTLMDynamicCAPI.cacheDirectoryPath()
+          cacheDir: LiteRTLMDynamicCAPI.cacheDirectoryPath(),
+          resetConversation: request.resetsConversation
         )
         if !text.isEmpty {
           return text
@@ -180,6 +191,7 @@ struct LiteRTLMGalleryInferenceRuntime: GalleryInferenceRuntime {
         enableVision: request.supportsImage,
         enableAudio: request.supportsAudio,
         cacheDir: LiteRTLMDynamicCAPI.cacheDirectoryPath(),
+        resetConversation: request.resetsConversation,
         onChunk: { chunk in
           lock.lock()
           accumulated.append(chunk)

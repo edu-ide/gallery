@@ -70,11 +70,15 @@ static NSString *GallerySharedModelPath = nil;
 static BOOL GallerySharedVisionBackend = NO;
 static BOOL GallerySharedAudioBackend = NO;
 
-static void GalleryResetSharedRuntime(void) {
+static void GalleryResetSharedConversation(void) {
   if (GallerySharedConversation) {
     litert_lm_conversation_delete(GallerySharedConversation);
     GallerySharedConversation = NULL;
   }
+}
+
+static void GalleryResetSharedRuntime(void) {
+  GalleryResetSharedConversation();
   if (GallerySharedEngine) {
     litert_lm_engine_delete(GallerySharedEngine);
     GallerySharedEngine = NULL;
@@ -84,11 +88,30 @@ static void GalleryResetSharedRuntime(void) {
   GallerySharedAudioBackend = NO;
 }
 
+static BOOL GalleryCreateSharedConversation(LiteRtLmEngine *engine, NSError **error) {
+  __block LiteRtLmConversationConfig *conversationConfig = NULL;
+  __block LiteRtLmConversation *conversation = NULL;
+  NSString *conversationLogs = GalleryCaptureStderr(@"gallery_litert_conversation.log", ^{
+    conversationConfig = litert_lm_conversation_config_create(engine, NULL, NULL, NULL, NULL, false);
+    conversation = litert_lm_conversation_create(engine, conversationConfig);
+  });
+  if (conversationConfig) litert_lm_conversation_config_delete(conversationConfig);
+  if (!conversation) {
+    if (error) *error = GalleryLiteRTLMError([NSString stringWithFormat:@"litert_lm_conversation_create returned NULL.%@%@",
+      conversationLogs.length ? @"\nNative log:\n" : @"", conversationLogs]);
+    return NO;
+  }
+
+  GallerySharedConversation = conversation;
+  return YES;
+}
+
 static BOOL GalleryEnsureConversation(
     NSString *modelPath,
     BOOL enableVision,
     BOOL enableAudio,
     NSString *cacheDir,
+    BOOL resetConversation,
     NSError **error) {
   if (![[NSFileManager defaultManager] fileExistsAtPath:modelPath]) {
     if (error) *error = GalleryLiteRTLMError([NSString stringWithFormat:@"Model file not found: %@", modelPath]);
@@ -102,6 +125,10 @@ static BOOL GalleryEnsureConversation(
       [GallerySharedModelPath isEqualToString:modelPath] &&
       GallerySharedVisionBackend == enableVision &&
       GallerySharedAudioBackend == enableAudio) {
+    if (resetConversation) {
+      GalleryResetSharedConversation();
+      return GalleryCreateSharedConversation(GallerySharedEngine, error);
+    }
     return YES;
   }
 
@@ -130,22 +157,12 @@ static BOOL GalleryEnsureConversation(
     return NO;
   }
 
-  __block LiteRtLmConversationConfig *conversationConfig = NULL;
-  __block LiteRtLmConversation *conversation = NULL;
-  NSString *conversationLogs = GalleryCaptureStderr(@"gallery_litert_conversation.log", ^{
-    conversationConfig = litert_lm_conversation_config_create(engine, NULL, NULL, NULL, NULL, false);
-    conversation = litert_lm_conversation_create(engine, conversationConfig);
-  });
-  if (conversationConfig) litert_lm_conversation_config_delete(conversationConfig);
-  if (!conversation) {
+  if (!GalleryCreateSharedConversation(engine, error)) {
     litert_lm_engine_delete(engine);
-    if (error) *error = GalleryLiteRTLMError([NSString stringWithFormat:@"litert_lm_conversation_create returned NULL.%@%@",
-      conversationLogs.length ? @"\nNative log:\n" : @"", conversationLogs]);
     return NO;
   }
 
   GallerySharedEngine = engine;
-  GallerySharedConversation = conversation;
   GallerySharedModelPath = [modelPath copy];
   GallerySharedVisionBackend = enableVision;
   GallerySharedAudioBackend = enableAudio;
@@ -244,6 +261,7 @@ static void GalleryStreamCallback(void *callbackData, const char *chunk, bool is
                        enableVision:(BOOL)enableVision
                          enableAudio:(BOOL)enableAudio
                            cacheDir:(NSString *)cacheDir
+                  resetConversation:(BOOL)resetConversation
                               error:(NSError **)error {
 #if !GALLERY_HAS_LITERTLM
   if (error) {
@@ -252,7 +270,7 @@ static void GalleryStreamCallback(void *callbackData, const char *chunk, bool is
   return nil;
 #else
   @synchronized([GalleryLiteRTLMBridge class]) {
-    if (!GalleryEnsureConversation(modelPath, enableVision, enableAudio, cacheDir, error)) return nil;
+    if (!GalleryEnsureConversation(modelPath, enableVision, enableAudio, cacheDir, resetConversation, error)) return nil;
     NSString *messageJson = GalleryBuildUserMessageJson(prompt, attachmentsJson);
 
     LiteRtLmJsonResponse *response = litert_lm_conversation_send_message(GallerySharedConversation, [messageJson UTF8String], NULL);
@@ -276,6 +294,7 @@ static void GalleryStreamCallback(void *callbackData, const char *chunk, bool is
                         enableVision:(BOOL)enableVision
                           enableAudio:(BOOL)enableAudio
                             cacheDir:(NSString *)cacheDir
+                    resetConversation:(BOOL)resetConversation
                              onChunk:(void (^)(NSString *chunk))onChunk
                           onComplete:(void (^)(NSError * _Nullable error))onComplete {
 #if !GALLERY_HAS_LITERTLM
@@ -285,7 +304,7 @@ static void GalleryStreamCallback(void *callbackData, const char *chunk, bool is
 #else
   @synchronized([GalleryLiteRTLMBridge class]) {
     NSError *prepareError = nil;
-    if (!GalleryEnsureConversation(modelPath, enableVision, enableAudio, cacheDir, &prepareError)) {
+    if (!GalleryEnsureConversation(modelPath, enableVision, enableAudio, cacheDir, resetConversation, &prepareError)) {
       if (onComplete) onComplete(prepareError);
       return;
     }

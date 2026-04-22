@@ -10,6 +10,7 @@ NS_ASSUME_NONNULL_BEGIN
                                 enableVision:(BOOL)enableVision
                                   enableAudio:(BOOL)enableAudio
                                     cacheDir:(nullable NSString *)cacheDir
+                            resetConversation:(BOOL)resetConversation
                                        error:(NSError **)error;
 - (void)streamGenerateWithModelPath:(NSString *)modelPath
                               prompt:(NSString *)prompt
@@ -17,6 +18,7 @@ NS_ASSUME_NONNULL_BEGIN
                         enableVision:(BOOL)enableVision
                           enableAudio:(BOOL)enableAudio
                             cacheDir:(nullable NSString *)cacheDir
+                    resetConversation:(BOOL)resetConversation
                              onChunk:(void (^)(NSString *chunk))onChunk
                           onComplete:(void (^)(NSError * _Nullable error))onComplete;
 @end

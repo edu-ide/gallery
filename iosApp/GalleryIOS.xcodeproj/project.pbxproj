@@ -415,6 +415,8 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
 				OTHER_LDFLAGS = "$(inherited) -lc++ -framework AVFAudio -framework AudioToolbox -framework GemmaModelConstraintProvider -lmail_mcp_rs_ios";
+				"OTHER_LDFLAGS[sdk=iphoneos*]" = "$(inherited) -Wl,-force_load,$(SRCROOT)/Vendor/LiteRTLM/LiteRTLM.xcframework/ios-arm64/LiteRTLM.framework/LiteRTLM";
+				"OTHER_LDFLAGS[sdk=iphonesimulator*]" = "$(inherited) -Wl,-force_load,$(SRCROOT)/Vendor/LiteRTLM/LiteRTLM.xcframework/ios-arm64-simulator/LiteRTLM.framework/LiteRTLM";
 				PRODUCT_BUNDLE_IDENTIFIER = com.ugot.galleryios;
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -513,6 +515,8 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
 				OTHER_LDFLAGS = "$(inherited) -lc++ -framework AVFAudio -framework AudioToolbox -framework GemmaModelConstraintProvider -lmail_mcp_rs_ios";
+				"OTHER_LDFLAGS[sdk=iphoneos*]" = "$(inherited) -Wl,-force_load,$(SRCROOT)/Vendor/LiteRTLM/LiteRTLM.xcframework/ios-arm64/LiteRTLM.framework/LiteRTLM";
+				"OTHER_LDFLAGS[sdk=iphonesimulator*]" = "$(inherited) -Wl,-force_load,$(SRCROOT)/Vendor/LiteRTLM/LiteRTLM.xcframework/ios-arm64-simulator/LiteRTLM.framework/LiteRTLM";
 				PRODUCT_BUNDLE_IDENTIFIER = com.ugot.galleryios;
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";

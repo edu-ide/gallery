@@ -62,7 +62,15 @@ targets:
         HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/Vendor/MailMCPRS/include"
         LIBRARY_SEARCH_PATHS: "$(inherited) $(SRCROOT)/Vendor/MailMCPRS/lib/$(PLATFORM_NAME)"
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
+        # LiteRT-LM's concrete engine implementation is registered through a
+        # static initializer inside the static LiteRTLM framework. Normal static
+        # linking can drop that object because the app references only the C API
+        # entry points, which leaves EngineFactory empty at runtime and produces
+        # "Engine type not found". Force-load the selected XCFramework slice so
+        # the engine registration object is linked and initialized.
         OTHER_LDFLAGS: "$(inherited) -lc++ -framework AVFAudio -framework AudioToolbox -framework GemmaModelConstraintProvider -lmail_mcp_rs_ios"
+        "OTHER_LDFLAGS[sdk=iphoneos*]": "$(inherited) -Wl,-force_load,$(SRCROOT)/Vendor/LiteRTLM/LiteRTLM.xcframework/ios-arm64/LiteRTLM.framework/LiteRTLM"
+        "OTHER_LDFLAGS[sdk=iphonesimulator*]": "$(inherited) -Wl,-force_load,$(SRCROOT)/Vendor/LiteRTLM/LiteRTLM.xcframework/ios-arm64-simulator/LiteRTLM.framework/LiteRTLM"
     dependencies:
       - framework: ../Android/src/shared/core/build/XCFrameworks/release/GallerySharedCore.xcframework
         embed: false
