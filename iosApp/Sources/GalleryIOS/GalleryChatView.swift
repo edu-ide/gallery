@@ -50,7 +50,7 @@ struct GalleryChatView: View {
   @State private var composerFocusToken = 0
   @State private var agentWorkspaceStatus: AgentWorkspaceStatus
   @State private var agentActivityNotice: AgentActivityNotice?
-  @State private var currentAgentTurn: UgotAgentTurnState?
+  @State private var currentAgentTurn: AgentTurnState?
   @State private var transcriptViewportHeight: CGFloat = 0
   @State private var streamingBottomY: CGFloat = 0
   @State private var streamingBottomFollowEnabled = false
@@ -803,49 +803,51 @@ struct GalleryChatView: View {
     activeAgentSkillIds: [String],
     activeConnectorIds: [String]
   ) {
-    let turn = UgotAgentTurnState.start(
+    let turn = AgentTurnStateMachineKt.createAgentTurnState(
       userPrompt: prompt,
-      attachmentCount: attachmentCount,
+      attachmentCount: Int32(attachmentCount),
       activeSkillIds: activeAgentSkillIds,
-      activeConnectorIds: activeConnectorIds
+      activeConnectorIds: activeConnectorIds,
+      id: "turn_\(UUID().uuidString)",
+      nowEpochMs: Self.currentEpochMs()
     )
     currentAgentTurn = turn
     agentActivityNotice = turn.activity.map(AgentActivityNotice.init(activity:))
   }
 
-  private func applyAgentTurnEvent(_ event: UgotAgentTurnEvent) {
-    guard var turn = currentAgentTurn else { return }
-    turn.apply(event)
-    currentAgentTurn = turn
-    agentActivityNotice = turn.activity.map(AgentActivityNotice.init(activity:))
+  private func applyAgentTurnEvent(_ event: AgentTurnEvent) {
+    guard let turn = currentAgentTurn else { return }
+    let nextTurn = turn.apply(event: event, nowEpochMs: Self.currentEpochMs())
+    currentAgentTurn = nextTurn
+    agentActivityNotice = nextTurn.activity.map(AgentActivityNotice.init(activity:))
   }
 
-  private func completeAgentTurn(_ outcome: UgotAgentTurnOutcome) {
-    applyAgentTurnEvent(.complete(outcome))
+  private func completeAgentTurn(_ outcome: AgentTurnOutcome) {
+    applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventComplete(outcome: outcome))
     currentAgentTurn = nil
     agentActivityNotice = nil
-  }
-
-  private func failAgentTurn(_ reason: String) {
-    applyAgentTurnEvent(.fail(reason))
   }
 
   private func agentTurnRoute(
     for route: GalleryCapabilityRoute,
     connectorCount: Int
-  ) -> UgotAgentTurnRoute {
+  ) -> AgentTurnRoute {
     switch route {
     case .nativeSkill(let skillId):
       let title = agentSkills.first(where: { $0.id == skillId })?.title
-      return .nativeSkill(id: skillId, title: title)
+      return AgentTurnStateMachineKt.agentTurnRouteNativeSkill(id: skillId, title: title)
     case .mcpConnector(let connectorId):
       let title = GalleryConnector.connector(for: connectorId)?.title
-      return .mcpConnector(id: connectorId, title: title)
+      return AgentTurnStateMachineKt.agentTurnRouteMcpConnector(id: connectorId, title: title)
     case .mcpConnectors:
-      return .mcpConnectors(count: connectorCount)
+      return AgentTurnStateMachineKt.agentTurnRouteMcpConnectors(count: Int32(connectorCount))
     case .model:
-      return .model
+      return AgentTurnStateMachineKt.agentTurnRouteModel()
     }
+  }
+
+  private static func currentEpochMs() -> Int64 {
+    Int64(Date().timeIntervalSince1970 * 1_000)
   }
 
   private func runMCPConnectorTurn(
@@ -863,7 +865,7 @@ struct GalleryChatView: View {
     speakResponse: Bool
   ) async -> Bool {
     await MainActor.run {
-      applyAgentTurnEvent(.searchTools(connectorTitle: connectorSearchTitle))
+      applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventSearchTools(connectorTitle: connectorSearchTitle))
       appendInlineEvent(.toolSearch(connectorTitle: connectorSearchTitle))
     }
 
@@ -893,7 +895,7 @@ struct GalleryChatView: View {
 
     guard let mcpResult else {
       await MainActor.run {
-        applyAgentTurnEvent(.skipToolSearch(connectorTitle: connectorSearchTitle))
+        applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventSkipToolSearch(connectorTitle: connectorSearchTitle))
         appendInlineEvent(.toolSearchSkipped(connectorTitle: connectorSearchTitle))
       }
       return false
@@ -962,7 +964,7 @@ struct GalleryChatView: View {
       activeAgentSkillIds: activeAgentSkillIds,
       activeConnectorIds: activeConnectorIds
     )
-    applyAgentTurnEvent(.routePlanned(agentTurnRoute(for: capabilityRoute, connectorCount: activeConnectorSet.count)))
+    applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventRoutePlanned(route: agentTurnRoute(for: capabilityRoute, connectorCount: activeConnectorSet.count)))
     isGenerating = true
     streamingAssistantText = ""
     if attachmentsOverride == nil {
@@ -973,7 +975,7 @@ struct GalleryChatView: View {
 
     Task {
       await MainActor.run {
-        applyAgentTurnEvent(.ingestAttachments(count: attachmentsToSend.count))
+        applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventIngestAttachments(count: Int32(attachmentsToSend.count)))
       }
       let ingestPayload = await ingestAttachmentsForTurn(
         sessionId: sessionId,
@@ -999,7 +1001,7 @@ struct GalleryChatView: View {
       let shouldUseVisibleContext = shouldAnswerFromWidgetContext(prompt: effectivePrompt, widgetContext: turnContext)
       if shouldUseVisibleContext {
         await MainActor.run {
-          applyAgentTurnEvent(.readVisibleContext)
+          applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventReadVisibleContext())
           appendInlineEvent(.visibleCardRead)
         }
       } else {
@@ -1071,13 +1073,13 @@ struct GalleryChatView: View {
 
       if unresolvedMCPActionCommand {
         await MainActor.run {
-          applyAgentTurnEvent(.generateFinalAnswer(.guardrail))
+          applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventGenerateFinalAnswer(source: AgentTurnStateMachineKt.agentTurnFinalAnswerSourceGuardrail()))
           completeActionResult(
             GalleryChatActionResult(
               message: "실제 MCP 도구 실행이 필요한 요청인데 실행 가능한 도구를 확정하지 못했어요. 변경·저장·삭제 작업은 도구 실행 결과 없이 완료됐다고 말하지 않도록 중단했어요. 도구 승인 설정과 대상 이름을 확인한 뒤 다시 시도해 주세요."
             ),
             speakResponse: speakResponse,
-            terminalOutcome: .guardrailStopped
+            terminalOutcome: AgentTurnStateMachineKt.agentTurnOutcomeGuardrailStopped()
           )
         }
         return
@@ -1085,13 +1087,13 @@ struct GalleryChatView: View {
 
       if Self.isLikelyStateChangingToolCommand(effectivePrompt) {
         await MainActor.run {
-          applyAgentTurnEvent(.generateFinalAnswer(.guardrail))
+          applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventGenerateFinalAnswer(source: AgentTurnStateMachineKt.agentTurnFinalAnswerSourceGuardrail()))
           completeActionResult(
             GalleryChatActionResult(
               message: "변경·저장·삭제 같은 작업은 실제 도구 실행 결과가 있어야 완료됐다고 말할 수 있어요. 이번 턴에서는 실행된 도구가 없어서 중단했어요. 해당 MCP connector가 켜져 있는지와 도구 승인 설정을 확인해 주세요."
             ),
             speakResponse: speakResponse,
-            terminalOutcome: .guardrailStopped
+            terminalOutcome: AgentTurnStateMachineKt.agentTurnOutcomeGuardrailStopped()
           )
         }
         return
@@ -1109,7 +1111,7 @@ struct GalleryChatView: View {
       }
 
       let modelPrompt = await MainActor.run {
-        applyAgentTurnEvent(.generateFinalAnswer(.model))
+        applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventGenerateFinalAnswer(source: AgentTurnStateMachineKt.agentTurnFinalAnswerSourceModel()))
         return promptForModel(
           userPrompt: effectivePrompt,
           widgetContext: turnContext,
@@ -1151,7 +1153,7 @@ struct GalleryChatView: View {
           scheduleLiveVoiceRestart()
         }
         schedulePersistSession(delayNanoseconds: 0)
-        completeAgentTurn(.answered)
+        completeAgentTurn(AgentTurnStateMachineKt.agentTurnOutcomeAnswered())
       }
     }
   }
@@ -1195,10 +1197,10 @@ struct GalleryChatView: View {
   private func completeActionResult(
     _ result: GalleryChatActionResult,
     speakResponse: Bool = false,
-    terminalOutcome: UgotAgentTurnOutcome = .answered
+    terminalOutcome: AgentTurnOutcome? = nil
   ) {
     if let approvalRequest = result.approvalRequest {
-      applyAgentTurnEvent(.requestApproval(
+      applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventRequestApproval(
         connectorTitle: approvalRequest.connectorTitle,
         toolTitle: approvalRequest.toolTitle
       ))
@@ -1206,17 +1208,17 @@ struct GalleryChatView: View {
       streamingAssistantText = ""
       isGenerating = false
       agentActivityNotice = nil
-      completeAgentTurn(.requestedApproval(toolTitle: approvalRequest.toolTitle))
+      completeAgentTurn(AgentTurnStateMachineKt.agentTurnOutcomeRequestedApproval(toolTitle: approvalRequest.toolTitle))
       schedulePersistSession(delayNanoseconds: 0)
       return
     }
     if let observation = result.toolObservation {
       appendAgentToolObservation(observation, userPrompt: nil)
-      applyAgentTurnEvent(.runTool(
+      applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventRunTool(
         connectorTitle: observation.connectorTitle,
         toolTitle: observation.toolTitle
       ))
-      applyAgentTurnEvent(.observeTool(
+      applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventObserveTool(
         connectorTitle: observation.connectorTitle,
         toolTitle: observation.toolTitle,
         status: observation.status
@@ -1231,7 +1233,7 @@ struct GalleryChatView: View {
       }
       activeWidgetModelContext = snapshot.modelContextFallbackMarkdown ?? result.message
       activeWidgetRenderKey = UUID().uuidString
-      applyAgentTurnEvent(.generateFinalAnswer(.widget(toolTitle: snapshot.title)))
+      applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventGenerateFinalAnswer(source: AgentTurnStateMachineKt.agentTurnFinalAnswerSourceWidget(toolTitle: snapshot.title)))
     } else {
       appendInlineEvent(.actionCompleted)
       sessionState = sessionState.appendAssistantMessage(text: result.message)
@@ -1248,7 +1250,10 @@ struct GalleryChatView: View {
     } else if speakResponse, liveVoiceSessionActive {
       scheduleLiveVoiceRestart()
     }
-    completeAgentTurn(result.widgetSnapshot.map { .showedWidget(toolTitle: $0.title) } ?? terminalOutcome)
+    let outcome = result.widgetSnapshot.map {
+      AgentTurnStateMachineKt.agentTurnOutcomeShowedWidget(toolTitle: $0.title)
+    } ?? terminalOutcome ?? AgentTurnStateMachineKt.agentTurnOutcomeAnswered()
+    completeAgentTurn(outcome)
     schedulePersistSession(delayNanoseconds: 0)
   }
 
@@ -1275,16 +1280,16 @@ struct GalleryChatView: View {
 
     await MainActor.run {
       appendAgentToolObservation(observation, userPrompt: userPrompt)
-      applyAgentTurnEvent(.runTool(
+      applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventRunTool(
         connectorTitle: observation.connectorTitle,
         toolTitle: observation.toolTitle
       ))
-      applyAgentTurnEvent(.observeTool(
+      applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventObserveTool(
         connectorTitle: observation.connectorTitle,
         toolTitle: observation.toolTitle,
         status: observation.status
       ))
-      applyAgentTurnEvent(.generateFinalAnswer(.toolObservation(toolTitle: observation.toolTitle)))
+      applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventGenerateFinalAnswer(source: AgentTurnStateMachineKt.agentTurnFinalAnswerSourceToolObservation(toolTitle: observation.toolTitle)))
       streamingAssistantText = ""
     }
 
@@ -1331,7 +1336,7 @@ struct GalleryChatView: View {
       } else if speakResponse, liveVoiceSessionActive {
         scheduleLiveVoiceRestart()
       }
-      completeAgentTurn(.answered)
+      completeAgentTurn(AgentTurnStateMachineKt.agentTurnOutcomeAnswered())
       schedulePersistSession(delayNanoseconds: 0)
     }
   }
@@ -1382,8 +1387,8 @@ struct GalleryChatView: View {
       activeAgentSkillIds: activeAgentSkillIds,
       activeConnectorIds: activeConnectorIds
     )
-    applyAgentTurnEvent(.routePlanned(.mcpConnector(id: approval.connectorId, title: approval.connectorTitle)))
-    applyAgentTurnEvent(.approveTool(connectorTitle: approval.connectorTitle, toolTitle: approval.toolTitle))
+    applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventRoutePlanned(route: AgentTurnStateMachineKt.agentTurnRouteMcpConnector(id: approval.connectorId, title: approval.connectorTitle)))
+    applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventApproveTool(connectorTitle: approval.connectorTitle, toolTitle: approval.toolTitle))
     isGenerating = true
     streamingAssistantText = ""
     Task {
@@ -1571,7 +1576,7 @@ struct GalleryChatView: View {
     }
 
     await MainActor.run {
-      applyAgentTurnEvent(.compactContext)
+      applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventCompactContext())
       appendInlineEvent(.contextOrganizing)
     }
 
@@ -1596,7 +1601,7 @@ struct GalleryChatView: View {
         currentUserMessageId: currentUserMessageId
       )
       appendInlineEvent(.contextOrganized)
-      applyAgentTurnEvent(.finishCompaction)
+      applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventFinishCompaction())
     }
   }
 
@@ -2160,7 +2165,7 @@ private struct AgentActivityNotice: Equatable, Sendable {
     self.detail = detail
   }
 
-  init(activity: UgotAgentTurnActivity) {
+  init(activity: AgentTurnActivity) {
     self.symbol = activity.symbol
     self.title = activity.title
     self.detail = activity.detail
