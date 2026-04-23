@@ -25,6 +25,9 @@ struct AgentWorkspaceStatus: Equatable, Sendable {
 final class UgotAgentVFS: @unchecked Sendable {
   static let shared = UgotAgentVFS()
 
+  private static let structuredArtifactThreshold = 20_000
+  private static let rawArtifactThreshold = 60_000
+
   private let lock = NSLock()
   private var vfsByRootPath: [String: OkioAgentVirtualFileSystem] = [:]
 
@@ -42,11 +45,25 @@ final class UgotAgentVFS: @unchecked Sendable {
     defer { lock.unlock() }
 
     let vfs = storeLocked()
+    pruneInternalArtifactsLocked(vfs: vfs, sessionId: sessionId)
     let blocks = Self.contentBlocks(from: result)
+    let structuredJson = Self.jsonString(result["structuredContent"] ?? result["structured_content"])
+    let rawJson = Self.jsonString(result)
+    let hasEmbeddedResources = blocks.contains { block in
+      block.resource != nil ||
+        block.uri != nil ||
+        block.type.lowercased().contains("resource")
+    }
+    let shouldPersistStructured =
+      hasEmbeddedResources ||
+      (structuredJson?.count ?? 0) >= Self.structuredArtifactThreshold
+    let shouldPersistRaw =
+      hasEmbeddedResources &&
+      (rawJson?.count ?? 0) >= Self.rawArtifactThreshold
     let toolResult = AgentVfsMcpToolResult(
       content: blocks,
-      structuredContentJson: Self.jsonString(result["structuredContent"] ?? result["structured_content"]),
-      rawResultJson: Self.jsonString(result)
+      structuredContentJson: shouldPersistStructured ? structuredJson : nil,
+      rawResultJson: shouldPersistRaw ? rawJson : nil
     )
     let ingestor = AgentVfsMcpIngestor(vfs: vfs)
     _ = ingestor.ingestDefault(
@@ -58,11 +75,7 @@ final class UgotAgentVFS: @unchecked Sendable {
       persistTextBlocks: persistTextBlocks
     )
 
-    let sanitizedSessionId = AgentVfsPaths.shared.sanitizeOpaqueSegment(
-      raw: sessionId,
-      fallback: "session"
-    )
-    return vfs.contextSummary(within: "/session/\(sanitizedSessionId)", limit: 24)
+    return contextSummaryLocked(vfs: vfs, sessionId: sessionId, limit: 24)
   }
 
   func workspaceStatus(sessionId: String) -> AgentWorkspaceStatus {
@@ -70,6 +83,7 @@ final class UgotAgentVFS: @unchecked Sendable {
     defer { lock.unlock() }
 
     let vfs = storeLocked()
+    pruneInternalArtifactsLocked(vfs: vfs, sessionId: sessionId)
     let sessionRoot = sessionRootPath(sessionId: sessionId)
     guard vfs.exists(path: sessionRoot) else {
       return .empty
@@ -78,6 +92,7 @@ final class UgotAgentVFS: @unchecked Sendable {
     let files = vfs.tree(path: sessionRoot, maxDepth: 8)
       .map(\.node)
       .filter { !$0.isDirectory }
+      .filter(Self.isUserVisibleWorkspaceNode)
       .map { node in
         AgentWorkspaceFile(
           id: node.path.value,
@@ -93,14 +108,15 @@ final class UgotAgentVFS: @unchecked Sendable {
     sessionId: String,
     attachments: [ChatInputAttachment]
   ) -> String {
-    guard !attachments.isEmpty else { return "" }
+    let persistentAttachments = attachments.filter(\.shouldPersistInWorkspace)
+    guard !persistentAttachments.isEmpty else { return "" }
 
     lock.lock()
     defer { lock.unlock() }
 
     let vfs = storeLocked()
     let ingestor = AgentVfsUserAttachmentIngestor(vfs: vfs)
-    for attachment in attachments {
+    for attachment in persistentAttachments {
       guard let data = try? Data(contentsOf: attachment.url) else { continue }
       _ = ingestor.ingestDefault(
         sessionId: sessionId,
@@ -112,12 +128,7 @@ final class UgotAgentVFS: @unchecked Sendable {
         overwrite: false
       )
     }
-
-    let sanitizedSessionId = AgentVfsPaths.shared.sanitizeOpaqueSegment(
-      raw: sessionId,
-      fallback: "session"
-    )
-    return vfs.contextSummary(within: "/session/\(sanitizedSessionId)", limit: 24)
+    return contextSummaryLocked(vfs: vfs, sessionId: sessionId, limit: 24)
   }
 
   private func sessionRootPath(sessionId: String) -> String {
@@ -126,6 +137,68 @@ final class UgotAgentVFS: @unchecked Sendable {
       fallback: "session"
     )
     return "/session/\(sanitizedSessionId)"
+  }
+
+  private func contextSummaryLocked(
+    vfs: OkioAgentVirtualFileSystem,
+    sessionId: String,
+    limit: Int
+  ) -> String {
+    let sessionRoot = sessionRootPath(sessionId: sessionId)
+    guard vfs.exists(path: sessionRoot) else { return "" }
+    let files = vfs.tree(path: sessionRoot, maxDepth: 8)
+      .map(\.node)
+      .filter { !$0.isDirectory }
+      .filter(Self.isUserVisibleWorkspaceNode)
+      .prefix(limit)
+    return files.map { node in
+      let mime = node.mimeType?.trimmingCharacters(in: .whitespacesAndNewlines)
+      let preview = node.previewText?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+      var line = "- \(node.path.value)"
+      if let mime, !mime.isEmpty {
+        line += " (\(mime))"
+      }
+      if let preview, !preview.isEmpty {
+        line += ": \(String(preview.prefix(220)))"
+      }
+      return line
+    }.joined(separator: "\n")
+  }
+
+  private func pruneInternalArtifactsLocked(vfs: OkioAgentVirtualFileSystem, sessionId: String) {
+    let sessionRoot = sessionRootPath(sessionId: sessionId)
+    guard vfs.exists(path: sessionRoot) else { return }
+    let paths = vfs.tree(path: sessionRoot, maxDepth: 8)
+      .map(\.node)
+      .filter { !$0.isDirectory }
+      .filter(Self.isInternalWorkspaceNode)
+      .map { $0.path.value }
+    for path in paths {
+      _ = vfs.delete(path: path, recursive: false)
+    }
+  }
+
+  private static func isUserVisibleWorkspaceNode(_ node: AgentVfsNode) -> Bool {
+    !isInternalWorkspaceNode(node)
+  }
+
+  private static func isInternalWorkspaceNode(_ node: AgentVfsNode) -> Bool {
+    let name = node.name.lowercased()
+    if name.hasPrefix("raw-result") || name.hasPrefix("structured-content") {
+      return true
+    }
+    if name.range(of: #"^text-\d+\.txt$"#, options: .regularExpression) != nil {
+      return true
+    }
+    if node.mimeType?.lowercased().hasPrefix("audio/") == true {
+      return true
+    }
+    if ["wav", "m4a", "mp3", "aac", "flac", "caf"].contains((name as NSString).pathExtension.lowercased()) {
+      return true
+    }
+    return false
   }
 
   private func storeLocked() -> OkioAgentVirtualFileSystem {

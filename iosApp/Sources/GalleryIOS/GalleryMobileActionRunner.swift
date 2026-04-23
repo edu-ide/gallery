@@ -6,18 +6,21 @@ struct GalleryChatActionResult {
   let message: String
   let widgetSnapshot: McpWidgetSnapshot?
   let approvalRequest: UgotMCPToolApprovalRequest?
-  let toolObservation: UgotAgentToolObservation?
+  let toolObservations: [UgotAgentToolObservation]
+
+  var toolObservation: UgotAgentToolObservation? { toolObservations.last }
 
   init(
     message: String,
     widgetSnapshot: McpWidgetSnapshot? = nil,
     approvalRequest: UgotMCPToolApprovalRequest? = nil,
-    toolObservation: UgotAgentToolObservation? = nil
+    toolObservation: UgotAgentToolObservation? = nil,
+    toolObservations: [UgotAgentToolObservation] = []
   ) {
     self.message = message
     self.widgetSnapshot = widgetSnapshot
     self.approvalRequest = approvalRequest
-    self.toolObservation = toolObservation
+    self.toolObservations = toolObservations + [toolObservation].compactMap { $0 }
   }
 }
 
@@ -43,6 +46,30 @@ struct UgotAgentToolObservation {
     Observation:
     \(outputText.trimmingCharacters(in: .whitespacesAndNewlines))
     """
+  }
+
+  static func hostObservation(
+    connectorId: String? = nil,
+    connectorTitle: String,
+    toolName: String,
+    toolTitle: String,
+    argumentsPreview: String = "`{}`",
+    outputText: String,
+    hasWidget: Bool = false,
+    didMutate: Bool = false,
+    status: String
+  ) -> UgotAgentToolObservation {
+    UgotAgentToolObservation(
+      connectorId: connectorId,
+      connectorTitle: connectorTitle,
+      toolName: toolName,
+      toolTitle: toolTitle,
+      argumentsPreview: argumentsPreview,
+      outputText: outputText,
+      hasWidget: hasWidget,
+      didMutate: didMutate,
+      status: status
+    )
   }
 }
 

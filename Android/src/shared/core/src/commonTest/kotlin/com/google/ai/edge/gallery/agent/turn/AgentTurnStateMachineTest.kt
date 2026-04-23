@@ -61,6 +61,75 @@ class AgentTurnStateMachineTest {
   }
 
   @Test
+  fun agentTurnStateMachine_allowsResolverObservationBeforeApproval() {
+    val waitingForApproval =
+      createAgentTurnState(
+        userPrompt = "기본 타깃을 Yw로 바꿔",
+        attachmentCount = 0,
+        activeSkillIds = emptyList(),
+        activeConnectorIds = listOf("fortune.ugot.uk/mcp"),
+        id = "turn-resolver-approval",
+        nowEpochMs = 1,
+      )
+        .apply(agentTurnEventRoutePlanned(agentTurnRouteMcpConnector("fortune.ugot.uk/mcp", "UGOT Fortune")), 2)
+        .apply(agentTurnEventSearchTools("UGOT Fortune"), 3)
+        .apply(agentTurnEventRunTool("UGOT Fortune", "find_saved_user"), 4)
+        .apply(agentTurnEventObserveTool("UGOT Fortune", "find_saved_user", "success"), 5)
+        .apply(agentTurnEventRequestApproval("UGOT Fortune", "set_default_user"), 6)
+
+    assertEquals(AgentTurnPhaseKind.AWAITING_APPROVAL, waitingForApproval.phase.kind)
+    assertEquals("set_default_user", waitingForApproval.phase.toolTitle)
+    assertEquals(
+      listOf(
+        AgentTurnStepKind.PLAN,
+        AgentTurnStepKind.PLAN,
+        AgentTurnStepKind.SEARCH_TOOLS,
+        AgentTurnStepKind.RUN_TOOL,
+        AgentTurnStepKind.OBSERVE,
+        AgentTurnStepKind.REQUEST_APPROVAL,
+      ),
+      waitingForApproval.steps.map { it.kind },
+    )
+  }
+
+  @Test
+  fun agentTurnStateMachine_allowsFailedReadOnlyToolThenAlternativeTool() {
+    val completed =
+      createAgentTurnState(
+        userPrompt = "최근 메일 요약해줘",
+        attachmentCount = 0,
+        activeSkillIds = emptyList(),
+        activeConnectorIds = listOf("gmail"),
+        id = "turn-replan",
+        nowEpochMs = 1,
+      )
+        .apply(agentTurnEventRoutePlanned(agentTurnRouteMcpConnector("gmail", "Gmail")), 2)
+        .apply(agentTurnEventSearchTools("Gmail"), 3)
+        .apply(agentTurnEventRunTool("Gmail", "summarize_recent_mail"), 4)
+        .apply(agentTurnEventObserveTool("Gmail", "summarize_recent_mail", "error"), 5)
+        .apply(agentTurnEventRunTool("Gmail", "search_emails"), 6)
+        .apply(agentTurnEventObserveTool("Gmail", "search_emails", "success"), 7)
+        .apply(agentTurnEventGenerateFinalAnswer(agentTurnFinalAnswerSourceToolObservation("search_emails")), 8)
+        .apply(agentTurnEventComplete(agentTurnOutcomeAnswered()), 9)
+
+    assertEquals(AgentTurnPhaseKind.COMPLETED, completed.phase.kind)
+    assertEquals(
+      listOf(
+        AgentTurnStepKind.PLAN,
+        AgentTurnStepKind.PLAN,
+        AgentTurnStepKind.SEARCH_TOOLS,
+        AgentTurnStepKind.RUN_TOOL,
+        AgentTurnStepKind.OBSERVE,
+        AgentTurnStepKind.RUN_TOOL,
+        AgentTurnStepKind.OBSERVE,
+        AgentTurnStepKind.FINAL_ANSWER,
+        AgentTurnStepKind.COMPLETE,
+      ),
+      completed.steps.map { it.kind },
+    )
+  }
+
+  @Test
   fun agentTurnStateMachine_skippedToolSearchFallsBackToModelRoute() {
     val state =
       createAgentTurnState(

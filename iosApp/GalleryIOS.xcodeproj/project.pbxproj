@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		001D1C10C1E418CE2B5EACDE /* GalleryHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 024400A0E7FEC65CE325154E /* GalleryHomeView.swift */; };
-		012905427D7B2A27104B3D15 /* UgotMCPCompatibilityContextRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F08D67BBE47C3B43D6E4D098 /* UgotMCPCompatibilityContextRenderer.swift */; };
 		02F114BB6CAF697F8372C153 /* GemmaModelConstraintProvider.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 5459EBE807B9509DD8E7F3AD /* GemmaModelConstraintProvider.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		0A2C28980BFBEAB26B6EE591 /* GallerySharedCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = FCEC6975CCF9D6917AE6D6F3 /* GallerySharedCore.xcframework */; };
 		0C3497332CDE02A3C90B5A10 /* LiteRTLM.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 058841216256B13C493F9A07 /* LiteRTLM.xcframework */; };
@@ -75,7 +74,6 @@
 		C4081138E2A43FFE74CCA921 /* GalleryChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryChatView.swift; sourceTree = "<group>"; };
 		CB8A6C3C53121962982A20FE /* UgotMCPPrompts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UgotMCPPrompts.swift; sourceTree = "<group>"; };
 		E52CD9190ACFA31DD6CB7680 /* GalleryIOS-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "GalleryIOS-Bridging-Header.h"; sourceTree = "<group>"; };
-		F08D67BBE47C3B43D6E4D098 /* UgotMCPCompatibilityContextRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UgotMCPCompatibilityContextRenderer.swift; sourceTree = "<group>"; };
 		F4BF835A99924231132153A8 /* GalleryMobileActionRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryMobileActionRunner.swift; sourceTree = "<group>"; };
 		FA7EFE460A55FDE59E8B835E /* GalleryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryModel.swift; sourceTree = "<group>"; };
 		FCEC6975CCF9D6917AE6D6F3 /* GallerySharedCore.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = GallerySharedCore.xcframework; path = ../Android/src/shared/core/build/XCFrameworks/release/GallerySharedCore.xcframework; sourceTree = "<group>"; };
@@ -119,7 +117,6 @@
 				5DEBEE234E0845891292A22A /* UgotLoginView.swift */,
 				4993E3F65846A6B66A900F9B /* UgotMCPActionRunner.swift */,
 				509F436E46B19F9A11103D7E /* UgotMCPClient.swift */,
-				F08D67BBE47C3B43D6E4D098 /* UgotMCPCompatibilityContextRenderer.swift */,
 				CB8A6C3C53121962982A20FE /* UgotMCPPrompts.swift */,
 				453D946B60B995E95003F97C /* UgotMCPRuntimeClient.swift */,
 				7B4F8628C19E6D0B33F341BA /* UgotMCPToolSearchIndex.swift */,
@@ -328,7 +325,6 @@
 				770A6E7022D2CB477751FE06 /* UgotLoginView.swift in Sources */,
 				4852A6D3F759A5F0EBAED9DC /* UgotMCPActionRunner.swift in Sources */,
 				AC09D4DBC360B49E70C48D52 /* UgotMCPClient.swift in Sources */,
-				012905427D7B2A27104B3D15 /* UgotMCPCompatibilityContextRenderer.swift in Sources */,
 				E4240D3A1AAEA9A77824E5C4 /* UgotMCPPrompts.swift in Sources */,
 				4E0C0AA2D66D5FB77B0C7AD0 /* UgotMCPRuntimeClient.swift in Sources */,
 				D1403D567AFE1CB7792E341E /* UgotMCPToolSearchIndex.swift in Sources */,

@@ -643,6 +643,8 @@ private fun AgentTurnPhaseKind.accepts(event: AgentTurnEventKind): Boolean {
     AgentTurnPhaseKind.OBSERVING_TOOL ->
       event in
         setOf(
+          AgentTurnEventKind.REQUEST_APPROVAL,
+          AgentTurnEventKind.APPROVE_TOOL,
           AgentTurnEventKind.RUN_TOOL,
           AgentTurnEventKind.OBSERVE_TOOL,
           AgentTurnEventKind.GENERATE_FINAL_ANSWER,

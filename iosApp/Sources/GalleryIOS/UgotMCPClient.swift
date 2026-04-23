@@ -16,15 +16,17 @@ final class UgotMCPClient {
   let connectorId: String
   let endpoint: URL
 
-  private let accessToken: String
+  private let bearerToken: String?
   private var sessionId: String?
   private var nextId = 1
   private var didInitialize = false
 
-  init(connectorId: String, endpoint: URL, accessToken: String) {
+  init(connectorId: String, endpoint: URL, bearerToken: String?) {
     self.connectorId = connectorId
     self.endpoint = endpoint
-    self.accessToken = accessToken
+    self.bearerToken = bearerToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+      ? bearerToken
+      : nil
   }
 
   func initialize() async throws {
@@ -34,7 +36,7 @@ final class UgotMCPClient {
         "jsonrpc": "2.0",
         "id": nextRequestId(),
         "method": "initialize",
-        "params": [
+        "params": Self.paramsWithLocaleMeta([
           "protocolVersion": "2025-03-26",
           "capabilities": [
             "tools": [:],
@@ -49,7 +51,7 @@ final class UgotMCPClient {
             "name": "ugot-ios",
             "version": "0.1",
           ],
-        ],
+        ]),
       ],
       expectsResponse: true
     )
@@ -100,6 +102,41 @@ final class UgotMCPClient {
         "arguments": arguments,
       ]
     )
+  }
+
+  func completePromptArgument(
+    promptName: String,
+    argumentName: String,
+    partialValue: String = "",
+    arguments: [String: String] = [:]
+  ) async throws -> UgotMCPPromptCompletionResult {
+    var params: [String: Any] = [
+      "ref": [
+        "type": "ref/prompt",
+        "name": promptName,
+      ],
+      "argument": [
+        "name": argumentName,
+        "value": partialValue,
+      ],
+    ]
+    if !arguments.isEmpty {
+      params["context"] = ["arguments": arguments]
+    }
+    let result = try await request(method: "completion/complete", params: params)
+    guard let completion = result["completion"] as? [String: Any] else { return .empty }
+    let values = (completion["values"] as? [String] ?? [])
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+    let total = (completion["total"] as? Int) ??
+      (completion["total"] as? NSNumber)?.intValue ??
+      values.count
+    let hasMore = (completion["hasMore"] as? Bool) ??
+      (completion["has_more"] as? Bool) ??
+      ((completion["hasMore"] as? NSNumber)?.boolValue) ??
+      ((completion["has_more"] as? NSNumber)?.boolValue) ??
+      false
+    return UgotMCPPromptCompletionResult(values: values, total: total, hasMore: hasMore)
   }
 
   func listResources() async throws -> [[String: Any]] {
@@ -155,40 +192,24 @@ final class UgotMCPClient {
     toolName: String,
     result: [String: Any]
   ) async throws -> UgotMCPWidgetResource? {
-    var candidateURIs: [String] = []
-
-    if let tool = tools.first(where: { ($0["name"] as? String) == toolName }),
-       let uri = Self.widgetResourceURI(from: tool) {
-      candidateURIs.append(uri)
-    }
-
-    let resources = (try? await listResources()) ?? []
-    let preferredResources = resources
-      .compactMap { resource -> (uri: String, mimeType: String?)? in
-        guard let uri = resource["uri"] as? String else { return nil }
-        return (uri, resource["mimeType"] as? String)
-      }
-      .filter { Self.isSupportedWidgetMime($0.mimeType) }
-      .sorted { lhs, rhs in
-        if Self.mimePriority(lhs.mimeType) != Self.mimePriority(rhs.mimeType) {
-          return Self.mimePriority(lhs.mimeType) > Self.mimePriority(rhs.mimeType)
-        }
-        return lhs.uri.contains("?v=") && !rhs.uri.contains("?v=")
-      }
-      .map(\.uri)
-    candidateURIs.append(contentsOf: preferredResources)
-
+    // The tool result is the source of truth. If a tool returns an inline HTML
+    // resource, render it regardless of static metadata.
     if let inline = Self.widgetResource(fromToolResult: result) {
       return inline
     }
 
-    var seen = Set<String>()
-    for uri in candidateURIs where seen.insert(uri).inserted {
-      if let resource = try? await readWidgetResource(uri: uri, listedResources: resources) {
-        return resource
-      }
+    // Otherwise render only the widget template explicitly declared by this
+    // exact tool. Do not fall back to arbitrary resources/list HTML entries:
+    // servers commonly expose multiple app resources, and choosing the first
+    // one can show an unrelated widget after a data-only tool such as
+    // set_default_user.
+    guard let tool = tools.first(where: { ($0["name"] as? String) == toolName }),
+          let uri = Self.widgetResourceURI(from: tool) else {
+      return nil
     }
-    return nil
+
+    let resources = (try? await listResources()) ?? []
+    return try? await readWidgetResource(uri: uri, listedResources: resources)
   }
 
   func widgetBaseURL(for uri: String) -> String {
@@ -209,14 +230,17 @@ final class UgotMCPClient {
     if let uri = tool["outputTemplate"] as? String {
       return uri
     }
-    if let meta = tool["_meta"] as? [String: Any] {
+    for metaKey in ["_meta", "meta"] {
+      guard let meta = tool[metaKey] as? [String: Any] else { continue }
       if let ui = meta["ui"] as? [String: Any], let uri = ui["resourceUri"] as? String {
         return uri
       }
-      return meta["ui/resourceUri"] as? String ??
+      if let uri = meta["ui/resourceUri"] as? String ??
         meta["openai/outputTemplate"] as? String ??
         meta["openai/output_template"] as? String ??
-        meta["outputTemplate"] as? String
+        meta["outputTemplate"] as? String {
+        return uri
+      }
     }
     return nil
   }
@@ -251,7 +275,9 @@ final class UgotMCPClient {
     var request = URLRequest(url: endpoint)
     request.httpMethod = "POST"
     request.timeoutInterval = Self.isLocalEndpoint(endpoint) ? 8 : 30
-    request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+    if let bearerToken {
+      request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+    }
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
     request.setValue(UgotMCPLocale.acceptLanguageHeader, forHTTPHeaderField: "Accept-Language")
@@ -292,11 +318,19 @@ final class UgotMCPClient {
     return nextId
   }
 
-  private static func paramsWithLocaleMeta(_ params: [String: Any]) -> [String: Any] {
+  static func localeMeta(locale: String = UgotMCPLocale.preferredLanguageTag) -> [String: Any] {
+    [
+      "locale": locale,
+      "openai/locale": locale,
+    ]
+  }
+
+  static func paramsWithLocaleMeta(_ params: [String: Any]) -> [String: Any] {
     var out = params
     var meta = out["_meta"] as? [String: Any] ?? [:]
-    meta["locale"] = UgotMCPLocale.preferredLanguageTag
-    meta["openai/locale"] = UgotMCPLocale.preferredLanguageTag
+    for (key, value) in localeMeta() {
+      meta[key] = value
+    }
     out["_meta"] = meta
     return out
   }

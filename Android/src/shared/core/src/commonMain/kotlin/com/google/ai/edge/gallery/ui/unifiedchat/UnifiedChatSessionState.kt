@@ -63,6 +63,22 @@ data class UnifiedChatSessionState(
   fun toggleConnector(connectorId: String): UnifiedChatSessionState =
     copy(connectorBarState = connectorBarState.toggle(connectorId))
 
+  fun withConnectors(
+    visibleConnectorIds: List<String>,
+    activeConnectorIds: Set<String>,
+  ): UnifiedChatSessionState {
+    val visible = visibleConnectorIds.distinct()
+    val visibleSet = visible.toSet()
+    val active = activeConnectorIds.filter { visibleSet.contains(it) }.toSet()
+    return copy(
+      connectorBarState =
+        ConnectorBarState(
+          visibleConnectorIds = visible,
+          activeConnectorIds = active,
+        )
+    )
+  }
+
   fun appendUserMessage(text: String): UnifiedChatSessionState {
     val trimmedText = text.trim()
     if (trimmedText.isEmpty()) {

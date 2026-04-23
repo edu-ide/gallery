@@ -38,6 +38,7 @@ struct ContentView: View {
       modelFileName: model.modelFileName,
       prompt: prompt,
       route: "ios-smoke",
+      thinkingMode: .on,
       activeAgentSkillIds: GalleryAgentSkill.defaultSelectedIds,
       activeConnectorIds: GalleryConnector.defaultSelectedIds,
       supportsImage: false,

@@ -2,23 +2,31 @@ import Foundation
 import GallerySharedCore
 import Darwin
 
-enum GalleryInferenceAttachmentKind: String, Codable {
+enum GalleryInferenceAttachmentKind: String, Codable, Sendable {
   case image
   case audio
 }
 
-struct GalleryInferenceAttachment: Codable, Hashable {
+enum GalleryModelThinkingMode: String, CaseIterable, Identifiable, Sendable {
+  case off
+  case on
+
+  var id: String { rawValue }
+}
+
+struct GalleryInferenceAttachment: Codable, Hashable, Sendable {
   let kind: GalleryInferenceAttachmentKind
   let path: String
   let displayName: String
 }
 
-struct GalleryInferenceRequest {
+struct GalleryInferenceRequest: Sendable {
   let modelName: String
   let modelDisplayName: String
   let modelFileName: String
   let prompt: String
   let route: String
+  let thinkingMode: GalleryModelThinkingMode
   let activeAgentSkillIds: [String]
   let activeConnectorIds: [String]
   let supportsImage: Bool
@@ -33,15 +41,43 @@ struct GalleryInferenceRequest {
   /// Keep the expensive engine cached, but reset the native conversation for
   /// each logical request unless a future caller explicitly opts into native
   /// stateful conversations.
-  let resetsConversation: Bool = true
+  let resetsConversation: Bool
+
+  init(
+    modelName: String,
+    modelDisplayName: String,
+    modelFileName: String,
+    prompt: String,
+    route: String,
+    thinkingMode: GalleryModelThinkingMode = .on,
+    activeAgentSkillIds: [String],
+    activeConnectorIds: [String],
+    supportsImage: Bool,
+    supportsAudio: Bool,
+    attachments: [GalleryInferenceAttachment],
+    resetsConversation: Bool = true
+  ) {
+    self.modelName = modelName
+    self.modelDisplayName = modelDisplayName
+    self.modelFileName = modelFileName
+    self.prompt = prompt
+    self.route = route
+    self.thinkingMode = thinkingMode
+    self.activeAgentSkillIds = activeAgentSkillIds
+    self.activeConnectorIds = activeConnectorIds
+    self.supportsImage = supportsImage
+    self.supportsAudio = supportsAudio
+    self.attachments = attachments
+    self.resetsConversation = resetsConversation
+  }
 }
 
-struct GalleryInferenceResult {
+struct GalleryInferenceResult: Sendable {
   let text: String
   let runtimeName: String
 }
 
-protocol GalleryInferenceRuntime {
+protocol GalleryInferenceRuntime: Sendable {
   var id: String { get }
   var displayName: String { get }
   var isAvailable: Bool { get }
@@ -141,7 +177,7 @@ struct LiteRTLMGalleryInferenceRuntime: GalleryInferenceRuntime {
       do {
         let text = try GalleryLiteRTLMBridge().generate(
           withModelPath: modelPath,
-          prompt: request.prompt,
+          prompt: request.effectivePrompt,
           attachmentsJson: request.attachmentsJson,
           enableVision: request.supportsImage,
           enableAudio: request.supportsAudio,
@@ -184,13 +220,13 @@ struct LiteRTLMGalleryInferenceRuntime: GalleryInferenceRuntime {
         continuation.resume(returning: result)
       }
 
-      GalleryLiteRTLMBridge().streamGenerate(
-        withModelPath: modelPath,
-        prompt: request.prompt,
-        attachmentsJson: request.attachmentsJson,
-        enableVision: request.supportsImage,
-        enableAudio: request.supportsAudio,
-        cacheDir: LiteRTLMDynamicCAPI.cacheDirectoryPath(),
+    GalleryLiteRTLMBridge().streamGenerate(
+      withModelPath: modelPath,
+      prompt: request.effectivePrompt,
+      attachmentsJson: request.attachmentsJson,
+      enableVision: request.supportsImage,
+      enableAudio: request.supportsAudio,
+      cacheDir: LiteRTLMDynamicCAPI.cacheDirectoryPath(),
         resetConversation: request.resetsConversation,
         onChunk: { chunk in
           lock.lock()
@@ -214,6 +250,20 @@ struct LiteRTLMGalleryInferenceRuntime: GalleryInferenceRuntime {
 }
 
 private extension GalleryInferenceRequest {
+  var effectivePrompt: String {
+    switch thinkingMode {
+    case .off:
+      return prompt
+    case .on:
+      return """
+      [System instruction]
+      Model Thinking mode is ON for this request. Do a deliberate private planning pass before answering, but never reveal chain-of-thought. Return only the final user-facing answer, or only the required machine-readable format if the prompt requests one.
+
+      \(prompt)
+      """
+    }
+  }
+
   var attachmentsJson: String {
     guard !attachments.isEmpty,
           let data = try? JSONEncoder().encode(attachments),
@@ -369,7 +419,7 @@ private final class LiteRTLMDynamicCAPI {
         }
         defer { sessionDelete(session) }
 
-        request.prompt.withCString { promptCString in
+        request.effectivePrompt.withCString { promptCString in
           var input = LiteRTLMInputData(
             type: 0,
             data: UnsafeRawPointer(promptCString),

@@ -1,29 +1,56 @@
 import Foundation
 import GallerySharedCore
 
+struct UgotMCPConnectorStatusEvent: Sendable {
+  enum Status: String, Sendable {
+    case checking
+    case ready
+    case failed
+  }
+
+  let connectorId: String
+  let connectorTitle: String
+  let status: Status
+  let detail: String
+}
+
 enum UgotMCPActionRunner {
   typealias ToolPlanningProvider = (UgotMCPToolPlanningRequest) async -> UgotMCPToolPlanningDecision?
+  typealias ConnectorStatusHandler = (UgotMCPConnectorStatusEvent) async -> Void
 
   static func runIfNeeded(
     prompt: String,
     activeSkillIds: Set<String>,
     activeConnectorIds: Set<String>,
     sessionId: String,
-    toolPlanningProvider: ToolPlanningProvider? = nil
+    requireToolObservation: Bool = false,
+    toolPlanningProvider: ToolPlanningProvider? = nil,
+    connectorStatusHandler: ConnectorStatusHandler? = nil
   ) async -> GalleryChatActionResult? {
     let activeConnectors = GalleryConnector.samples.filter { activeConnectorIds.contains($0.id) }
     guard !activeConnectors.isEmpty else { return nil }
 
     do {
       guard let accessToken = try await UgotAuthStore.validAccessToken() else {
-        return GalleryChatActionResult(message: "UGOT 세션이 만료됐어요. 다시 로그인해 주세요.")
+        let message = "UGOT 세션이 만료됐어요. 다시 로그인해 주세요."
+        return GalleryChatActionResult(
+          message: message,
+          toolObservation: hostObservation(
+            connectorTitle: "MCP",
+            toolName: "mcp.auth",
+            toolTitle: "MCP 로그인 확인",
+            outputText: message,
+            status: "auth_required"
+          )
+        )
       }
       let clients = activeConnectors.map { connector in
         UgotMCPConnectorAction(
           connector: connector,
           accessToken: accessToken,
           sessionId: sessionId,
-          toolPlanningProvider: toolPlanningProvider
+          toolPlanningProvider: toolPlanningProvider,
+          connectorStatusHandler: connectorStatusHandler
         )
       }
 
@@ -31,36 +58,121 @@ enum UgotMCPActionRunner {
         clients,
         prompt: prompt,
         sessionId: sessionId,
-        activeConnectorIds: activeConnectorIds
+        activeConnectorIds: activeConnectorIds,
+        requireToolObservation: requireToolObservation
       )
-      guard !orderedClients.isEmpty else { return nil }
-      for client in orderedClients {
-        if let response = try await client.run(
+      guard !orderedClients.isEmpty else {
+        return requireToolObservation ? noMatchingToolResult(
           prompt: prompt,
-          emitNoToolFailure: false
-        ) {
-          return GalleryChatActionResult(
-            message: response.message,
-            widgetSnapshot: response.snapshot,
-            approvalRequest: response.approvalRequest,
-            toolObservation: response.observation
-          )
+          connectorTitle: activeConnectors.map(\.title).joined(separator: ", ")
+        ) : nil
+      }
+      var connectorErrors: [String] = []
+      for client in orderedClients {
+        do {
+          if let response = try await client.run(
+            prompt: prompt,
+            emitNoToolFailure: false
+          ) {
+            return GalleryChatActionResult(
+              message: response.message,
+              widgetSnapshot: response.snapshot,
+              approvalRequest: response.approvalRequest,
+              toolObservations: response.observations
+            )
+          }
+        } catch {
+          connectorErrors.append("\(client.connectorTitle): \(error.localizedDescription)")
+          continue
         }
       }
-      // No MCP tool matched this turn. This is not an action failure: active
-      // connectors are optional capabilities, so the chat pipeline should fall
-      // back to the normal model response instead of surfacing a no-op message.
-      return nil
+      if requireToolObservation, !connectorErrors.isEmpty {
+        return GalleryChatActionResult(
+          message: "활성 MCP 커넥터에 연결하지 못했어요.",
+          toolObservation: hostObservation(
+            connectorTitle: activeConnectors.map(\.title).joined(separator: ", "),
+            toolName: "mcp.connector_status",
+            toolTitle: "MCP 커넥터 연결",
+            argumentsPreview: compactHostArguments(["prompt": prompt]),
+            outputText: connectorErrors.joined(separator: "\n"),
+            status: "connector_error"
+          )
+        )
+      }
+      // No MCP tool matched this turn. For optional connector availability, fall
+      // back to normal model chat. For a tool-required turn, return a canonical
+      // observation so the agent loop cannot finish from thinking without an
+      // observed tool/search result.
+      return requireToolObservation ? noMatchingToolResult(
+        prompt: prompt,
+        connectorTitle: activeConnectors.map(\.title).joined(separator: ", ")
+      ) : nil
     } catch {
-      return GalleryChatActionResult(message: "MCP 호출에 실패했어요.\n\n\(error.localizedDescription)")
+      let message = "MCP 호출에 실패했어요.\n\n\(error.localizedDescription)"
+      return GalleryChatActionResult(
+        message: message,
+        toolObservation: hostObservation(
+          connectorTitle: "MCP",
+          toolName: "mcp.call",
+          toolTitle: "MCP 호출",
+          outputText: message,
+          status: "error"
+        )
+      )
     }
+  }
+
+  private static func noMatchingToolResult(prompt: String, connectorTitle: String) -> GalleryChatActionResult {
+    let normalizedTitle = connectorTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      ? "활성 MCP 커넥터"
+      : connectorTitle
+    let message = "MCP 도구 실행이 필요한 요청인데 실행 가능한 도구를 확정하지 못했어요. 일반 대화로 처리하면 거짓 답변이 될 수 있어서 중단했어요."
+    return GalleryChatActionResult(
+      message: message,
+      toolObservation: hostObservation(
+        connectorTitle: normalizedTitle,
+        toolName: "mcp.tool_search",
+        toolTitle: "도구 검색",
+        argumentsPreview: compactHostArguments(["prompt": prompt]),
+        outputText: message,
+        status: "no_matching_tool"
+      )
+    )
+  }
+
+  private static func hostObservation(
+    connectorTitle: String,
+    toolName: String,
+    toolTitle: String,
+    argumentsPreview: String = "`{}`",
+    outputText: String,
+    status: String
+  ) -> UgotAgentToolObservation {
+    UgotAgentToolObservation.hostObservation(
+      connectorTitle: connectorTitle,
+      toolName: toolName,
+      toolTitle: toolTitle,
+      argumentsPreview: argumentsPreview,
+      outputText: outputText,
+      status: status
+    )
+  }
+
+  private static func compactHostArguments(_ arguments: [String: Any]) -> String {
+    guard JSONSerialization.isValidJSONObject(arguments),
+          let data = try? JSONSerialization.data(withJSONObject: arguments, options: [.sortedKeys]),
+          let json = String(data: data, encoding: .utf8) else {
+      return "`{}`"
+    }
+    return json.count <= 320 ? "`\(json)`" : "`\(String(json.prefix(320)))…`"
   }
 
   private static func orderedClients(
     _ clients: [UgotMCPConnectorAction],
     prompt: String,
     sessionId: String,
-    activeConnectorIds: Set<String>
+    activeConnectorIds: Set<String>,
+    requireToolObservation: Bool
   ) async throws -> [UgotMCPConnectorAction] {
     if let pendingConnectorId = UgotMCPToolApprovalStore.pendingConnectorId(
       sessionId: sessionId,
@@ -69,14 +181,55 @@ enum UgotMCPActionRunner {
       return [pendingClient] + clients.filter { $0.connectorId != pendingConnectorId }
     }
 
-    guard clients.count > 1 else { return clients }
+    let minimumConnectorEvidenceScore = requireToolObservation
+      ? UgotMCPToolPlanner.minimumSearchScoreForPlanning
+      : UgotMCPToolPlanner.minimumOptionalSearchScoreForPlanning
+
+    let sourceRanked = clients
+      .map { client in
+        (
+          client: client,
+          score: UgotMCPToolSearchIndex.searchScore(
+            query: prompt,
+            document: "\(client.connectorTitle) \(client.connectorSummary)"
+          ).score
+        )
+      }
+      .sorted { lhs, rhs in
+        if lhs.score != rhs.score { return lhs.score > rhs.score }
+        if lhs.client.connectorTitle != rhs.client.connectorTitle { return lhs.client.connectorTitle < rhs.client.connectorTitle }
+        return lhs.client.connectorId < rhs.client.connectorId
+      }
+    if clients.count > 1 {
+      if let best = sourceRanked.first,
+         best.score >= minimumConnectorEvidenceScore {
+        let secondScore = sourceRanked.dropFirst().first?.score ?? 0
+        if best.score - secondScore >= 6 {
+          // If connector-level metadata clearly identifies one connector, do not
+          // probe unrelated connectors for this turn.
+          return [best.client]
+        }
+      }
+    } else if let only = sourceRanked.first,
+              only.score >= minimumConnectorEvidenceScore {
+      return [only.client]
+    } else if requireToolObservation {
+      return clients
+    } else {
+      let candidates = try? await clients[0].planningCandidate(prompt: prompt)
+      if let candidates,
+         candidates.searchScore >= minimumConnectorEvidenceScore {
+        return clients
+      }
+      return []
+    }
 
     var candidates: [UgotMCPConnectorToolSearchCandidate] = []
     await withTaskGroup(of: UgotMCPConnectorToolSearchCandidate?.self) { group in
       for client in clients {
         group.addTask {
           guard let candidate = try? await client.planningCandidate(prompt: prompt),
-                candidate.searchScore >= UgotMCPToolPlanner.minimumSearchScoreForPlanning else {
+                candidate.searchScore >= minimumConnectorEvidenceScore else {
             return nil
           }
           return candidate
@@ -89,10 +242,14 @@ enum UgotMCPActionRunner {
         }
       }
     }
-    // Metadata search is an optimization gate, not a user-visible failure.
-    // If no connector advertises a relevant tool for this turn, skip MCP and
-    // let the caller continue with the normal model path.
-    guard !candidates.isEmpty else { return [] }
+    // Metadata search is an optimization, not the source of truth. However, for
+    // optional connector turns, a zero-candidate search is evidence that the
+    // active connector should not inspect a generic ambiguous follow-up;
+    // otherwise the planner model may pick an unrelated available tool. When a
+    // tool observation is explicitly required, fail closed by trying the active
+    // connectors and surfacing a no-match/error observation instead of falling
+    // back to ordinary chat.
+    guard !candidates.isEmpty else { return requireToolObservation ? clients : [] }
 
     let byConnectorId = Dictionary(uniqueKeysWithValues: clients.map { ($0.connectorId, $0) })
     let metadataOrderedIds = candidates
@@ -102,7 +259,11 @@ enum UgotMCPActionRunner {
         return lhs.connectorId < rhs.connectorId
       }
       .map(\.connectorId)
-    return orderedClients(ids: metadataOrderedIds, lookup: byConnectorId, fallback: [])
+    return orderedClients(
+      ids: metadataOrderedIds,
+      lookup: byConnectorId,
+      fallback: requireToolObservation ? clients : []
+    )
   }
 
   private static func orderedClients(
@@ -162,7 +323,17 @@ enum UgotMCPActionRunner {
     }
     do {
       guard let accessToken = try await UgotAuthStore.validAccessToken() else {
-        return GalleryChatActionResult(message: "UGOT 세션이 만료됐어요. 다시 로그인해 주세요.")
+        let message = "UGOT 세션이 만료됐어요. 다시 로그인해 주세요."
+        return GalleryChatActionResult(
+          message: message,
+          toolObservation: hostObservation(
+            connectorTitle: "MCP",
+            toolName: "mcp.auth",
+            toolTitle: "MCP 로그인 확인",
+            outputText: message,
+            status: "auth_required"
+          )
+        )
       }
       let client = UgotMCPConnectorAction(
         connector: connector,
@@ -176,7 +347,7 @@ enum UgotMCPActionRunner {
         message: response.message,
         widgetSnapshot: response.snapshot,
         approvalRequest: response.approvalRequest,
-        toolObservation: response.observation
+        toolObservations: response.observations
       )
     } catch {
       return GalleryChatActionResult(message: "MCP 승인 실행에 실패했어요.\n\n\(error.localizedDescription)")
@@ -188,18 +359,21 @@ struct UgotMCPActionResponse {
   let message: String
   let snapshot: McpWidgetSnapshot?
   let approvalRequest: UgotMCPToolApprovalRequest?
-  let observation: UgotAgentToolObservation?
+  let observations: [UgotAgentToolObservation]
+
+  var observation: UgotAgentToolObservation? { observations.last }
 
   init(
     message: String,
     snapshot: McpWidgetSnapshot?,
     approvalRequest: UgotMCPToolApprovalRequest? = nil,
-    observation: UgotAgentToolObservation? = nil
+    observation: UgotAgentToolObservation? = nil,
+    observations: [UgotAgentToolObservation] = []
   ) {
     self.message = message
     self.snapshot = snapshot
     self.approvalRequest = approvalRequest
-    self.observation = observation
+    self.observations = observations + [observation].compactMap { $0 }
   }
 }
 
@@ -220,6 +394,9 @@ struct UgotMCPToolPlanningRequest {
   let connectorId: String
   let connectorTitle: String
   let tools: [[String: Any]]
+  let previousObservations: [UgotAgentToolObservation]
+  let stepIndex: Int
+  let maxSteps: Int
 }
 
 struct UgotMCPConnectorToolSearchCandidate {
@@ -234,6 +411,7 @@ struct UgotMCPToolPlanningDecision {
   let toolName: String?
   let arguments: [String: Any]
   let entityReference: String?
+  let intentEffect: String?
   let confidence: Double
   let requiresTool: Bool
 
@@ -245,196 +423,84 @@ struct UgotMCPToolPlanningDecision {
   }
 
   static func parse(from rawText: String) -> UgotMCPToolPlanningDecision? {
-    guard let object = jsonObject(from: rawText) else { return nil }
-    let rawTool = firstString(in: object, keys: ["tool_name", "toolName", "tool", "name"])
-    let normalizedTool = rawTool?.trimmingCharacters(in: .whitespacesAndNewlines)
-    let nullToolNames = ["", "none", "null", "no_tool", "no tool", "model"]
-    let toolName = normalizedTool.flatMap { value in
-      nullToolNames.contains(value.lowercased()) ? nil : value
+    guard let sharedDecision = AgentToolPlanningPromptKt.parseAgentToolPlanningDecision(rawText: rawText) else {
+      return nil
     }
-    let arguments =
-      (object["arguments"] as? [String: Any]) ??
-      (object["args"] as? [String: Any]) ??
-      [:]
-    let entityReference = firstString(in: object, keys: [
-      "entity_reference",
-      "entityReference",
-      "target_reference",
-      "targetReference",
-      "profile_name",
-      "profileName",
-      "name_reference",
-      "nameReference",
-    ])?.trimmingCharacters(in: .whitespacesAndNewlines)
-    let confidence = firstDouble(in: object, keys: ["confidence", "score"]) ?? (toolName == nil ? 0 : 0.7)
-    let requiresTool =
-      firstBool(in: object, keys: ["requires_tool", "requiresTool", "needs_tool", "needsTool"]) ??
-      (toolName != nil)
-    return UgotMCPToolPlanningDecision(
-      toolName: toolName,
-      arguments: arguments,
-      entityReference: entityReference?.isEmpty == false ? entityReference : nil,
-      confidence: confidence,
-      requiresTool: requiresTool
-    )
+    return UgotMCPToolPlanningDecision(sharedDecision: sharedDecision)
   }
 
-  private static func jsonObject(from text: String) -> [String: Any]? {
-    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    let candidates = [
-      trimmed,
-      fencedJSONBody(from: trimmed),
-      firstJSONObjectSubstring(in: trimmed),
-    ].compactMap { $0 }
-
-    for candidate in candidates {
-      guard let data = candidate.data(using: .utf8),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-        continue
-      }
-      return object
-    }
-    return nil
+  private init(sharedDecision: AgentToolPlanningDecision) {
+    self.toolName = sharedDecision.toolName
+    self.arguments = Self.argumentsObject(from: sharedDecision.argumentsJson)
+    self.entityReference = sharedDecision.entityReference
+    self.intentEffect = sharedDecision.intentEffect
+    self.confidence = sharedDecision.confidence
+    self.requiresTool = sharedDecision.requiresTool
   }
 
-  private static func fencedJSONBody(from text: String) -> String? {
-    guard let start = text.range(of: "```") else { return nil }
-    let afterStart = text[start.upperBound...]
-    guard let end = afterStart.range(of: "```") else { return nil }
-    var body = String(afterStart[..<end.lowerBound])
-    if body.lowercased().hasPrefix("json") {
-      body = String(body.dropFirst(4))
+  private static func argumentsObject(from json: String) -> [String: Any] {
+    guard let data = json.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+      return [:]
     }
-    return body.trimmingCharacters(in: .whitespacesAndNewlines)
-  }
-
-  private static func firstJSONObjectSubstring(in text: String) -> String? {
-    guard let start = text.firstIndex(of: "{") else { return nil }
-    var depth = 0
-    var inString = false
-    var isEscaped = false
-    var index = start
-    while index < text.endIndex {
-      let character = text[index]
-      if inString {
-        if isEscaped {
-          isEscaped = false
-        } else if character == "\\" {
-          isEscaped = true
-        } else if character == "\"" {
-          inString = false
-        }
-      } else if character == "\"" {
-        inString = true
-      } else if character == "{" {
-        depth += 1
-      } else if character == "}" {
-        depth -= 1
-        if depth == 0 {
-          return String(text[start...index])
-        }
-      }
-      index = text.index(after: index)
-    }
-    return nil
-  }
-
-  private static func firstString(in object: [String: Any], keys: [String]) -> String? {
-    for key in keys {
-      if let value = object[key] as? String {
-        return value
-      }
-    }
-    return nil
-  }
-
-  private static func firstDouble(in object: [String: Any], keys: [String]) -> Double? {
-    for key in keys {
-      if let value = object[key] as? Double {
-        return value
-      }
-      if let value = object[key] as? NSNumber {
-        return value.doubleValue
-      }
-      if let value = object[key] as? String,
-         let parsed = Double(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
-        return parsed
-      }
-    }
-    return nil
-  }
-
-  private static func firstBool(in object: [String: Any], keys: [String]) -> Bool? {
-    for key in keys {
-      if let value = object[key] as? Bool {
-        return value
-      }
-      if let value = object[key] as? NSNumber {
-        return value.boolValue
-      }
-      if let value = object[key] as? String {
-        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if ["true", "yes", "1"].contains(normalized) { return true }
-        if ["false", "no", "0"].contains(normalized) { return false }
-      }
-    }
-    return nil
+    return object
   }
 }
 
 enum UgotMCPToolPlanningPromptBuilder {
   static func build(request: UgotMCPToolPlanningRequest) -> String {
-    let tools = request.tools
-      .map(toolSummary)
-      .joined(separator: "\n")
-      .trimmedForPrompt(limit: 10_000)
-    return """
-    You are a model-agnostic MCP tool router for the mobile chat host.
-
-    Decide whether the user's latest message should call exactly one MCP tool from connector "\(request.connectorTitle)".
-    Use semantic intent, not keyword matching. The user may write in any language.
-
-    Return ONLY one JSON object with this schema:
-    {
-      "tool_name": "exact listed tool name or null",
-      "arguments": { "schema_parameter": "value" },
-      "entity_reference": "visible user/profile/place/name to resolve later, or null",
-      "confidence": 0.0,
-      "requires_tool": false
-    }
-
-    Rules:
-    - Use only tools listed below.
-    - App-only/internal widget tools are intentionally omitted. Never invent or request hidden app-only tools.
-    - If no listed tool is clearly needed, return {"tool_name": null, "arguments": {}, "entity_reference": null, "confidence": 0, "requires_tool": false}.
-    - If the user requests an action that would require a tool but none of the listed tools can do it, return tool_name null and requires_tool true.
-    - For read-only display requests, prefer the most specific read-only display tool.
-    - For mutation/settings tools, choose them only when the user explicitly asks to set, change, save, delete, clear, or select something.
-    - Never choose a destructive or clearing tool for an informational question.
-    - Do not invent opaque IDs. If a required argument looks like an ID but the user gave a visible name, leave that ID out of arguments and put the visible name in entity_reference.
-    - Fill arguments only from the user's message or safe schema defaults. Do not fabricate birth data, gender, date, or time.
-
-    Available MCP tools:
-    \(tools)
-
-    User message:
-    \(request.prompt.trimmedForPrompt(limit: 2_000))
-    """
+    AgentToolPlanningPromptKt.buildAgentToolPlanningPrompt(
+      request: AgentToolPlanningRequest(
+        userPrompt: request.prompt,
+        connectorId: request.connectorId,
+        connectorTitle: request.connectorTitle,
+        tools: request.tools.map(planningDescriptor),
+        previousObservations: request.previousObservations.map(loopObservation),
+        stepIndex: Int32(request.stepIndex),
+        maxSteps: Int32(request.maxSteps)
+      )
+    )
   }
 
-  static func toolSummary(_ tool: [String: Any]) -> String {
+  private static func planningDescriptor(_ tool: [String: Any]) -> AgentToolPlanningDescriptor {
     let name = tool["name"] as? String ?? "unknown"
     let title =
       (tool["title"] as? String) ??
       ((tool["annotations"] as? [String: Any])?["title"] as? String) ??
       name
-    let description = (tool["description"] as? String)?.oneLineForPrompt(limit: 520) ?? ""
+    let description = (tool["description"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     let annotations = tool["annotations"] as? [String: Any] ?? [:]
-    let readOnly = (annotations["readOnlyHint"] as? Bool).map(String.init) ?? "unknown"
-    let destructive = (annotations["destructiveHint"] as? Bool).map(String.init) ?? "unknown"
     let schema = tool["inputSchema"] as? [String: Any] ?? [:]
-    let required = (schema["required"] as? [String] ?? []).joined(separator: ", ")
-    let properties = (schema["properties"] as? [String: Any] ?? [:])
+    let required = (schema["required"] as? [String] ?? []).sorted()
+
+    return AgentToolPlanningDescriptor(
+      name: name,
+      title: title,
+      description: description,
+      isReadOnly: annotationBool(annotations["readOnlyHint"]).map(KotlinBoolean.init(bool:)),
+      isDestructive: annotationBool(annotations["destructiveHint"]).map(KotlinBoolean.init(bool:)),
+      hasWidget: UgotMCPClient.widgetResourceURI(from: tool) != nil,
+      requiredParameters: required,
+      parametersSummary: parameterSummary(from: schema)
+    )
+  }
+
+  private static func loopObservation(_ observation: UgotAgentToolObservation) -> AgentToolLoopObservation {
+    AgentToolLoopObservation(
+      connectorId: observation.connectorId,
+      connectorTitle: observation.connectorTitle,
+      toolName: observation.toolName,
+      toolTitle: observation.toolTitle,
+      argumentsPreview: observation.argumentsPreview,
+      outputText: observation.outputText,
+      hasWidget: observation.hasWidget,
+      didMutate: observation.didMutate,
+      status: observation.status
+    )
+  }
+
+  private static func parameterSummary(from schema: [String: Any]) -> String {
+    (schema["properties"] as? [String: Any] ?? [:])
       .sorted { $0.key < $1.key }
       .map { key, raw -> String in
         guard let property = raw as? [String: Any] else { return key }
@@ -445,15 +511,17 @@ enum UgotMCPToolPlanningPromptBuilder {
       }
       .joined(separator: "; ")
       .trimmedForPrompt(limit: 1_000)
-    return """
-    - name: \(name)
-      title: \(title)
-      readOnly: \(readOnly)
-      destructive: \(destructive)
-      required: [\(required)]
-      parameters: \(properties)
-      description: \(description)
-    """
+  }
+
+  private static func annotationBool(_ raw: Any?) -> Bool? {
+    if let value = raw as? Bool { return value }
+    if let value = raw as? NSNumber { return value.boolValue }
+    if let value = raw as? String {
+      let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+      if ["true", "yes", "1"].contains(normalized) { return true }
+      if ["false", "no", "0"].contains(normalized) { return false }
+    }
+    return nil
   }
 }
 
@@ -539,7 +607,7 @@ struct UgotMCPToolDescriptor: Identifiable, Hashable {
 
   private static func isDestructive(tool: [String: Any]) -> Bool {
     if let annotations = tool["annotations"] as? [String: Any],
-       let destructive = annotations["destructiveHint"] as? Bool {
+       let destructive = annotationBool(annotations["destructiveHint"]) {
       return destructive
     }
     let name = ((tool["name"] as? String) ?? "").lowercased()
@@ -548,10 +616,41 @@ struct UgotMCPToolDescriptor: Identifiable, Hashable {
 
   private static func isReadOnly(tool: [String: Any]) -> Bool {
     if let annotations = tool["annotations"] as? [String: Any],
-       let readOnly = annotations["readOnlyHint"] as? Bool {
+       let readOnly = annotationBool(annotations["readOnlyHint"]) {
       return readOnly
     }
-    return false
+    return inferredReadOnlyFromToolName(tool)
+  }
+
+  private static func inferredReadOnlyFromToolName(_ tool: [String: Any]) -> Bool {
+    let name = ((tool["name"] as? String) ?? "")
+      .lowercased()
+      .replacingOccurrences(of: "-", with: "_")
+    guard !name.isEmpty else { return false }
+    let mutatingNameMarkers = [
+      "set_", "save_", "create_", "register_", "update_", "delete_", "remove_",
+      "clear_", "reset_", "send_", "move_", "import_", "upload_", "write_", "edit_",
+      "apply_", "commit_", "cancel_"
+    ]
+    if mutatingNameMarkers.contains(where: { name.contains($0) || name.hasPrefix(String($0.dropLast())) }) {
+      return false
+    }
+    let readNameMarkers = [
+      "show_", "get_", "list_", "find_", "search_", "view_", "read_", "fetch_",
+      "summarize_", "summary_", "analyze_", "analyse_", "lookup_"
+    ]
+    return readNameMarkers.contains { name.contains($0) || name.hasPrefix(String($0.dropLast())) }
+  }
+
+  private static func annotationBool(_ raw: Any?) -> Bool? {
+    if let value = raw as? Bool { return value }
+    if let value = raw as? NSNumber { return value.boolValue }
+    if let value = raw as? String {
+      let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+      if ["true", "yes", "1"].contains(normalized) { return true }
+      if ["false", "no", "0"].contains(normalized) { return false }
+    }
+    return nil
   }
 }
 
@@ -660,7 +759,11 @@ enum UgotMCPToolApprovalStore {
 private enum UgotMCPToolMetadataCache {
   private static let ttl: TimeInterval = 300
   private static let persistentTTL: TimeInterval = 86_400
-  private static let persistentPrefix = "ugot.mcp.toolMetadataCache.v3"
+  // Bump when routing-relevant MCP metadata semantics change. Tool
+  // descriptions/search keywords are part of the planner contract; keeping an
+  // older persisted catalog can make the host route to a stale/wrong tool even
+  // after the MCP server was fixed.
+  private static let persistentPrefix = "ugot.mcp.toolMetadataCache.v5"
   private static let lock = NSLock()
   private static var values: [String: (timestamp: Date, tools: [[String: Any]])] = [:]
 
@@ -829,6 +932,9 @@ private enum UgotMCPPromptEntityExtractor {
     let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
 
+    if let attachedArgument = firstAttachedArgumentTarget(in: trimmed) {
+      return attachedArgument
+    }
     if let quoted = firstQuotedSpan(in: trimmed) {
       return quoted
     }
@@ -836,6 +942,51 @@ private enum UgotMCPPromptEntityExtractor {
       return patterned
     }
     return lastMeaningfulToken(in: trimmed)
+  }
+
+  private static func firstAttachedArgumentTarget(in text: String) -> String? {
+    if let selectedLine = firstRegexCapture(pattern: #"(?im)^\s*-?\s*selected\s+arguments\s*:\s*([^\n]{1,800})"#, in: text),
+       let value = firstEntityLikeArgumentValue(in: selectedLine) {
+      return value
+    }
+    if let jsonValue = firstRegexCapture(
+      pattern: #"(?i)["'](?:target|target_name|targetName|entity|entity_reference|entityReference|name)["']\s*:\s*["']([^"']{1,80})["']"#,
+      in: text
+    ) {
+      return jsonValue
+    }
+    return nil
+  }
+
+  private static func firstRegexCapture(pattern: String, in text: String) -> String? {
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+    let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+    guard let match = regex.firstMatch(in: text, range: nsRange),
+          match.numberOfRanges > 1,
+          let range = Range(match.range(at: 1), in: text) else {
+      return nil
+    }
+    return cleanCandidate(String(text[range]))
+  }
+
+  private static func firstEntityLikeArgumentValue(in argumentList: String) -> String? {
+    let pairs = argumentList.split(separator: ",").map(String.init)
+    let preferredKeys = Set([
+      "target", "targetname", "entity", "entityreference", "name", "profile", "user",
+    ])
+    for pair in pairs {
+      let parts = pair.split(separator: "=", maxSplits: 1).map(String.init)
+      guard parts.count == 2 else { continue }
+      let key = parts[0]
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+        .replacingOccurrences(of: "[^\\p{L}\\p{N}]+", with: "", options: .regularExpression)
+      guard preferredKeys.contains(key) else { continue }
+      if let value = cleanCandidate(parts[1]) {
+        return value
+      }
+    }
+    return nil
   }
 
   private static func firstQuotedSpan(in text: String) -> String? {
@@ -852,11 +1003,9 @@ private enum UgotMCPPromptEntityExtractor {
 
   private static func firstPatternTarget(in text: String) -> String? {
     let patterns = [
-      #"(?i)(?:default\s+(?:saved\s+)?user|default\s+profile)\s+(?:to|as)?\s*([\p{L}\p{N}._-]{1,40})"#,
-      #"(?i)(?:set|change|make|select)\s+(?:the\s+)?(?:default\s+(?:saved\s+)?user|default\s+profile)\s+(?:to|as)?\s*([\p{L}\p{N}._-]{1,40})"#,
-      #"([\p{L}\p{N}._-]{1,40})(?:을|를)?\s*(?:기본\s*사용자|기본\s*프로필|대표\s*사용자)\s*(?:로|으로)?\s*(?:설정|변경|바꿔|해)"#,
-      #"(?:기본\s*사용자|기본\s*프로필|대표\s*사용자)(?:를|을)?\s*([\p{L}\p{N}._-]{1,40})\s*(?:로|으로)?\s*(?:설정|변경|바꿔|해)"#,
-      #"([\p{L}\p{N}._-]{1,40})\s*(?:로|으로)\s*(?:설정|변경|바꿔|해)"#,
+      #"(?i)(?:set|change|make|select)\s+(?:the\s+)?(?:target|profile|user|entity|item)\s+(?:to|as)?\s*([\p{L}\p{N}._-]{1,40})"#,
+      #"(?i)(?:target|profile|user|entity|item)\s+(?:to|as)\s*([\p{L}\p{N}._-]{1,40})"#,
+      #"([\p{L}\p{N}._-]{1,40})\s*(?:로|으로)\s*(?:설정|설정해|설정할|변경|변경해|변경할|바꿔|바꿀|바꾸|지정|선택|해)"#,
     ]
     for pattern in patterns {
       guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
@@ -906,13 +1055,13 @@ private enum UgotMCPPromptEntityExtractor {
 
   private static let stopwords: Set<String> = [
     "a", "an", "the", "to", "for", "of", "with", "as", "by",
-    "default", "user", "profile", "person", "member", "saved",
+    "default", "user", "profile", "target", "person", "member",
     "set", "change", "update", "select", "save", "delete", "clear", "remove", "make",
-    "기본", "사용자", "기본사용자", "프로필", "기본프로필", "대표", "대표사용자",
+    "기본", "사용자", "프로필", "타깃", "타겟", "대표",
     "로", "으로", "을", "를", "은", "는", "이", "가",
-    "저장", "저장목록", "저장된", "사람", "대상", "계정",
-    "설정", "설정해", "설정해줘", "변경", "변경해", "변경해줘",
-    "바꿔", "바꿔줘", "바꿔주세요", "해", "해줘", "해주세요",
+    "사람", "대상", "계정",
+    "설정", "설정해", "설정해줘", "설정할", "변경", "변경해", "변경해줘", "변경할",
+    "바꿔", "바꿔줘", "바꿔주세요", "바꿀", "바꾸", "지정", "선택", "해", "해줘", "해주세요",
   ]
 }
 
@@ -938,8 +1087,12 @@ private struct UgotMCPToolPlan {
 
 private enum UgotMCPToolPlanner {
   static let minimumSearchScoreForPlanning = 8
-  private static let minimumDirectMetadataMutationScore = 36
-  private static let minimumDirectMetadataMutationMargin = 8
+  // Optional connector turns should not route a generic chat continuation to a
+  // tool planner from a weak metadata hit. Tool-required turns still use the
+  // lower threshold and fail closed if no valid plan can be executed.
+  static let minimumOptionalSearchScoreForPlanning = 30
+  private static let deterministicFallbackScore = 30
+  private static let deterministicFallbackMargin = 8
 
   static func toolsForModelPlanning(
     prompt: String,
@@ -947,50 +1100,115 @@ private enum UgotMCPToolPlanner {
     searchIndex: UgotMCPToolSearchIndex? = nil,
     limit: Int = 18
   ) -> [[String: Any]] {
-    let eligibleTools = searchIndex?.eligibleTools(query: prompt) ?? tools
+    let intent = UgotMCPToolIntent(prompt: prompt)
+    let eligibleTools = (searchIndex?.eligibleTools(query: prompt) ?? tools)
+      .filter { !intent.isIncompatiblePrimaryTool(tool: $0) }
+      .filter { !intent.prefersReadOnlyTool || isReadOnly(tool: $0) }
+      .filter { !intent.requiresPlannerBeforeToolExecution || !isReadOnly(tool: $0) }
     let searched = (searchIndex ?? UgotMCPToolSearchIndex(tools: tools)).search(query: prompt, limit: limit)
     guard !searched.isEmpty else {
       return Array(eligibleTools.prefix(limit))
     }
 
-    var selected = searched.map(\.tool)
-    let selectedNames = Set(selected.compactMap { $0["name"] as? String })
-    let remaining = eligibleTools.filter { tool in
-      guard let name = tool["name"] as? String else { return false }
-      return !selectedNames.contains(name)
-    }
-    selected.append(contentsOf: remaining.prefix(max(0, limit - selected.count)))
+    let selected = searched
+      .map(\.tool)
+      .filter { !intent.prefersReadOnlyTool || isReadOnly(tool: $0) }
+      .filter { !intent.requiresPlannerBeforeToolExecution || !isReadOnly(tool: $0) }
+    // The model planner is not the retrieval layer. Once metadata search has a
+    // non-empty candidate set, expose only those candidates to the model;
+    // appending "remaining eligible" tools lets a small local model switch to a
+    // semantically unrelated tool just because it appears in the catalog.
     return Array(selected.prefix(limit))
   }
 
   static func plan(
     prompt: String,
     tools: [[String: Any]],
-    searchIndex: UgotMCPToolSearchIndex? = nil,
     decision: UgotMCPToolPlanningDecision?
   ) -> UgotMCPToolPlan? {
-    if let decision,
-       decision.shouldUseTool,
-       let plan = planFromDecision(decision, tools: tools) {
-      return plan
+    let intent = UgotMCPToolIntent(prompt: prompt)
+    guard let decision, decision.shouldUseTool else { return nil }
+    return planFromDecision(decision, tools: tools, intent: intent, prompt: prompt)
+  }
+
+  static func fallbackPlanFromSearch(
+    prompt: String,
+    tools: [[String: Any]],
+    searchIndex: UgotMCPToolSearchIndex
+  ) -> UgotMCPToolPlan? {
+    let toolNames = Set(tools.compactMap { $0["name"] as? String })
+    let results = searchIndex.search(query: prompt, limit: 4)
+      .filter { result in
+        guard let name = result.tool["name"] as? String else { return false }
+        return toolNames.contains(name)
+      }
+    guard let first = results.first,
+          let name = first.tool["name"] as? String,
+          first.score >= deterministicFallbackScore else {
+      return nil
     }
-    return planFromMetadataSearch(prompt: prompt, tools: tools, searchIndex: searchIndex)
+    if let second = results.dropFirst().first,
+       first.score - second.score < deterministicFallbackMargin {
+      return nil
+    }
+
+    let intent = UgotMCPToolIntent(prompt: prompt)
+    let tool = first.tool
+    guard !intent.isIncompatiblePrimaryTool(tool: tool),
+          !intent.requiresStateChangingTool || intent.isPreferredPrimaryTool(tool: tool),
+          !intent.prefersReadOnlyTool || isReadOnly(tool: tool),
+          !intent.requiresPlannerBeforeToolExecution || !isReadOnly(tool: tool) else {
+      return nil
+    }
+
+    let promptArguments = schemaArguments(from: prompt, for: tool)
+    let normalized = normalizeOpaqueArguments(
+      promptArguments,
+      for: tool,
+      existingEntityReference: UgotMCPPromptEntityExtractor.entityText(from: prompt)
+    )
+
+    return UgotMCPToolPlan(
+      tool: tool,
+      name: name,
+      title: displayTitle(for: tool, fallbackName: name),
+      arguments: argumentsWithDefaults(normalized.arguments, for: tool),
+      score: min(100, first.score),
+      entityReference: normalized.entityReference
+    )
   }
 
   private static func planFromDecision(
     _ decision: UgotMCPToolPlanningDecision,
-    tools: [[String: Any]]
+    tools: [[String: Any]],
+    intent: UgotMCPToolIntent,
+    prompt: String
   ) -> UgotMCPToolPlan? {
     guard let requestedName = decision.toolName?.trimmingCharacters(in: .whitespacesAndNewlines),
           !requestedName.isEmpty,
-          let tool = tools.first(where: { (($0["name"] as? String) ?? "").caseInsensitiveCompare(requestedName) == .orderedSame }),
+          let tool = resolveDecisionTool(requestedName, tools: tools),
           let name = tool["name"] as? String else {
+      return nil
+    }
+    guard !intent.isIncompatiblePrimaryTool(tool: tool),
+          !intent.requiresStateChangingTool || intent.isPreferredPrimaryTool(tool: tool) else {
+      return nil
+    }
+    guard !intent.prefersReadOnlyTool || isReadOnly(tool: tool) else {
+      return nil
+    }
+    guard !intent.requiresPlannerBeforeToolExecution || !isReadOnly(tool: tool) else {
+      return nil
+    }
+    guard isCompatibleWithDeclaredEffect(decision.intentEffect, tool: tool) else {
       return nil
     }
 
     let sanitized = sanitizedArguments(decision.arguments, for: tool)
+    let promptArguments = schemaArguments(from: prompt, for: tool)
+    let merged = mergeMissingArguments(sanitized, fallback: promptArguments)
     let normalized = normalizeOpaqueArguments(
-      sanitized,
+      merged,
       for: tool,
       existingEntityReference: decision.entityReference
     )
@@ -1006,104 +1224,67 @@ private enum UgotMCPToolPlanner {
     )
   }
 
-  private static func planFromMetadataSearch(
-    prompt: String,
-    tools: [[String: Any]],
-    searchIndex: UgotMCPToolSearchIndex?
-  ) -> UgotMCPToolPlan? {
-    let searched = (searchIndex ?? UgotMCPToolSearchIndex(tools: tools)).search(query: prompt, limit: 6)
-    let ranked = searched.enumerated().compactMap { index, result -> UgotMCPToolPlan? in
-      guard result.score >= minimumSearchScoreForPlanning,
-            let name = result.tool["name"] as? String,
-            !name.isEmpty else {
-        return nil
-      }
-      let isReadOnlyTool = isReadOnly(tool: result.tool)
-      if !isReadOnlyTool {
-        // Mutating/data-only tools can still be metadata-routed when the match
-        // is very strong. This avoids a slow extra LLM planner turn for clear
-        // commands like “set default user to YW”, while approval policy still
-        // gates execution before any mutation happens.
-        guard isHighConfidenceMetadataMutationResult(
-          result,
-          at: index,
-          allResults: searched
-        ) else {
-          return nil
+  private static func resolveDecisionTool(_ requestedName: String, tools: [[String: Any]]) -> [String: Any]? {
+    let requestedKey = compactToolLookupKey(requestedName)
+    guard !requestedKey.isEmpty else { return nil }
+
+    if let exactName = tools.first(where: { tool in
+      ((toolName(tool) ?? "").caseInsensitiveCompare(requestedName) == .orderedSame)
+    }) {
+      return exactName
+    }
+
+    if let aliasMatch = tools.first(where: { tool in
+      toolLookupAliases(tool).contains(requestedKey)
+    }) {
+      return aliasMatch
+    }
+
+    let ranked = UgotMCPToolSearchIndex(
+      tools: tools,
+      queryExpansionProvider: .none
+    ).search(query: requestedName, limit: 2)
+    guard let first = ranked.first,
+          first.score >= 12 else {
+      return nil
+    }
+    if let second = ranked.dropFirst().first, first.score - second.score < 4 {
+      return nil
+    }
+    return first.tool
+  }
+
+  private static func toolName(_ tool: [String: Any]) -> String? {
+    tool["name"] as? String
+  }
+
+  private static func toolLookupAliases(_ tool: [String: Any]) -> Set<String> {
+    var aliases: [String] = []
+    if let name = tool["name"] as? String {
+      aliases.append(name)
+      aliases.append(name.replacingOccurrences(of: "_", with: " "))
+      aliases.append(name.replacingOccurrences(of: "-", with: " "))
+    }
+    if let title = tool["title"] as? String {
+      aliases.append(title)
+    }
+    let display = displayTitle(for: tool, fallbackName: (tool["name"] as? String) ?? "")
+    aliases.append(display)
+    for metaKey in ["_meta", "meta", "annotations"] {
+      guard let meta = tool[metaKey] as? [String: Any] else { continue }
+      for key in ["title", "displayTitle", "ui/title", "openai/toolInvocation/invoking", "openai/toolInvocation/invoked"] {
+        if let value = meta[key] as? String {
+          aliases.append(value)
         }
       }
-
-      let seededArguments = metadataSeedArguments(prompt: prompt, for: result.tool)
-      let arguments = argumentsWithDefaults(seededArguments, for: result.tool)
-      let missing = missingRequiredArguments(for: result.tool, arguments: arguments)
-      if isReadOnlyTool {
-        guard missing.isEmpty else { return nil }
-      } else {
-        // Missing opaque IDs can be resolved by `preparePlanForExecution`
-        // through the connector's own read-only resolver/list tools. Other
-        // required values must not be fabricated by metadata search.
-        guard missing.allSatisfy(isOpaqueReferenceParameter) else { return nil }
-      }
-      let entityReference = missing.contains(where: isOpaqueReferenceParameter)
-        ? UgotMCPPromptEntityExtractor.entityText(from: prompt)
-        : nil
-      return UgotMCPToolPlan(
-        tool: result.tool,
-        name: name,
-        title: displayTitle(for: result.tool, fallbackName: name),
-        arguments: arguments,
-        score: result.score,
-        entityReference: entityReference
-      )
     }
-    return ranked.sorted { lhs, rhs in
-      if lhs.score != rhs.score { return lhs.score > rhs.score }
-      return hasWidget(tool: lhs.tool) && !hasWidget(tool: rhs.tool)
-    }.first
+    return Set(aliases.map(compactToolLookupKey).filter { !$0.isEmpty })
   }
 
-  private static func isHighConfidenceMetadataMutationResult(
-    _ result: UgotMCPToolSearchResult,
-    at index: Int,
-    allResults: [UgotMCPToolSearchResult]
-  ) -> Bool {
-    guard result.score >= minimumDirectMetadataMutationScore else { return false }
-    guard index == 0 else { return false }
-    let runnerUpScore = allResults.dropFirst().first?.score ?? 0
-    return result.score - runnerUpScore >= minimumDirectMetadataMutationMargin ||
-      result.score >= minimumDirectMetadataMutationScore + minimumDirectMetadataMutationMargin
-  }
-
-  private static func metadataSeedArguments(prompt: String, for tool: [String: Any]) -> [String: Any] {
-    guard let properties = inputProperties(for: tool),
-          let required = (tool["inputSchema"] as? [String: Any])?["required"] as? [String],
-          !required.isEmpty,
-          let entity = metadataEntityText(from: prompt) else {
-      return [:]
-    }
-
-    var out: [String: Any] = [:]
-    for key in required where out[key] == nil {
-      guard let property = properties[key] as? [String: Any] else { continue }
-      let type = (property["type"] as? String)?.lowercased()
-      guard type == nil || type == "string" else { continue }
-      let lower = key.lowercased()
-      guard lower == "search" ||
-        lower == "query" ||
-        lower == "q" ||
-        lower == "name" ||
-        lower.contains("name") ||
-        lower.contains("search") ||
-        lower.contains("query") else {
-        continue
-      }
-      out[key] = entity
-    }
-    return out
-  }
-
-  private static func metadataEntityText(from prompt: String) -> String? {
-    UgotMCPPromptEntityExtractor.entityText(from: prompt)
+  private static func compactToolLookupKey(_ value: String) -> String {
+    value
+      .lowercased()
+      .replacingOccurrences(of: "[^\\p{L}\\p{N}]+", with: "", options: .regularExpression)
   }
 
   private static func sanitizedArguments(_ raw: [String: Any], for tool: [String: Any]) -> [String: Any] {
@@ -1141,6 +1322,197 @@ private enum UgotMCPToolPlanner {
     return (out, entityReference?.isEmpty == false ? entityReference : nil)
   }
 
+  static func schemaArguments(from prompt: String, for tool: [String: Any]) -> [String: Any] {
+    guard let properties = inputProperties(for: tool), !properties.isEmpty else { return [:] }
+    let keyLookup = schemaArgumentKeyLookup(properties)
+    var out: [String: Any] = [:]
+    for pair in promptKeyValuePairs(from: prompt) {
+      let lookupKey = compactArgumentLookupKey(pair.key)
+      guard let schemaKey = keyLookup[lookupKey],
+            out[schemaKey] == nil,
+            let property = properties[schemaKey] as? [String: Any],
+            let value = coercePromptArgument(pair.value, property: property) else {
+        continue
+      }
+      out[schemaKey] = value
+    }
+    return out
+  }
+
+  static func mergeMissingArguments(_ base: [String: Any], fallback: [String: Any]) -> [String: Any] {
+    guard !fallback.isEmpty else { return base }
+    var out = base
+    for (key, value) in fallback where isMissingArgumentValue(out[key]) {
+      out[key] = value
+    }
+    return out
+  }
+
+  private static func promptKeyValuePairs(from prompt: String) -> [(key: String, value: String)] {
+    var pairs: [(key: String, value: String)] = []
+
+    for selectedArguments in regexCaptures(
+      pattern: #"(?im)^\s*[-*]?\s*selected\s+arguments\s*[:：]\s*([^\n]{1,1600})"#,
+      in: prompt
+    ) {
+      pairs.append(contentsOf: commaSeparatedKeyValuePairs(from: selectedArguments))
+    }
+
+    pairs.append(
+      contentsOf: regexCapturePairs(
+        pattern: #"(?m)^\s*[-*]?\s*([A-Za-z_][A-Za-z0-9_.-]{0,80})\s*[:：=]\s*([^\n]{0,1200})"#,
+        in: prompt
+      )
+    )
+    pairs.append(
+      contentsOf: regexCapturePairs(
+        pattern: #"(?m)["']([A-Za-z_][A-Za-z0-9_.-]{0,80})["']\s*:\s*(?:"([^"\n]{0,1200})"|'([^'\n]{0,1200})'|([^,\n}\]]{1,400}))"#,
+        in: prompt
+      )
+    )
+
+    return pairs
+  }
+
+  private static func commaSeparatedKeyValuePairs(from text: String) -> [(key: String, value: String)] {
+    text
+      .split(separator: ",")
+      .compactMap { segment -> (key: String, value: String)? in
+        let raw = String(segment)
+        let separators = ["=", ":", "："]
+        guard let separator = separators
+          .compactMap({ raw.range(of: $0) })
+          .min(by: { $0.lowerBound < $1.lowerBound }) else {
+          return nil
+        }
+        let key = String(raw[..<separator.lowerBound])
+        let value = String(raw[separator.upperBound...])
+        return (key, value)
+      }
+  }
+
+  private static func regexCaptures(pattern: String, in text: String) -> [String] {
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+    let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+    return regex.matches(in: text, range: nsRange).compactMap { match in
+      guard match.numberOfRanges > 1,
+            let range = Range(match.range(at: 1), in: text) else {
+        return nil
+      }
+      return String(text[range])
+    }
+  }
+
+  private static func regexCapturePairs(pattern: String, in text: String) -> [(key: String, value: String)] {
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+    let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+    return regex.matches(in: text, range: nsRange).compactMap { match in
+      guard match.numberOfRanges > 2,
+            let keyRange = Range(match.range(at: 1), in: text) else {
+        return nil
+      }
+      let value: String?
+      if match.numberOfRanges > 3 {
+        value = (2..<match.numberOfRanges).compactMap { index -> String? in
+          guard match.range(at: index).location != NSNotFound,
+                let valueRange = Range(match.range(at: index), in: text) else {
+            return nil
+          }
+          return String(text[valueRange])
+        }.first
+      } else if let valueRange = Range(match.range(at: 2), in: text) {
+        value = String(text[valueRange])
+      } else {
+        value = nil
+      }
+      guard let value else { return nil }
+      return (String(text[keyRange]), value)
+    }
+  }
+
+  private static func schemaArgumentKeyLookup(_ properties: [String: Any]) -> [String: String] {
+    var lookup: [String: String] = [:]
+    for key in properties.keys {
+      lookup[compactArgumentLookupKey(key)] = key
+    }
+    return lookup
+  }
+
+  private static func compactArgumentLookupKey(_ value: String) -> String {
+    value
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased()
+      .replacingOccurrences(of: "[^\\p{L}\\p{N}]+", with: "", options: .regularExpression)
+  }
+
+  private static func coercePromptArgument(_ raw: String, property: [String: Any]) -> Any? {
+    guard let cleaned = cleanPromptArgumentValue(raw) else { return nil }
+    let type = (property["type"] as? String)?.lowercased()
+    switch type {
+    case "boolean":
+      switch cleaned.lowercased() {
+      case "true", "yes", "y", "1", "on": return true
+      case "false", "no", "n", "0", "off": return false
+      default: return nil
+      }
+    case "integer":
+      return Int(cleaned)
+    case "number":
+      return Double(cleaned)
+    case "array", "object":
+      guard let data = cleaned.data(using: .utf8),
+            let value = try? JSONSerialization.jsonObject(with: data) else {
+        return nil
+      }
+      return value
+    default:
+      return cleaned
+    }
+  }
+
+  private static func cleanPromptArgumentValue(_ raw: String) -> String? {
+    var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    while value.hasSuffix(",") || value.hasSuffix(";") {
+      value.removeLast()
+      value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    let quotePairs: [(String, String)] = [
+      ("\"", "\""),
+      ("'", "'"),
+      ("`", "`"),
+      ("“", "”"),
+      ("‘", "’"),
+    ]
+    for (open, close) in quotePairs where value.hasPrefix(open) && value.hasSuffix(close) && value.count >= open.count + close.count {
+      value.removeFirst(open.count)
+      value.removeLast(close.count)
+      value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+      break
+    }
+    guard !value.isEmpty else { return nil }
+
+    let lowered = value.lowercased()
+    guard !["null", "nil", "none", "n/a", "na", "tbd", "unknown"].contains(lowered) else {
+      return nil
+    }
+    guard !(value.hasPrefix("<") && value.hasSuffix(">")) else { return nil }
+    return value
+  }
+
+  private static func isMissingArgumentValue(_ value: Any?) -> Bool {
+    guard let value, !(value is NSNull) else { return true }
+    if let string = value as? String {
+      return string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    if let array = value as? [Any] {
+      return array.isEmpty
+    }
+    if let dict = value as? [String: Any] {
+      return dict.isEmpty
+    }
+    return false
+  }
+
   private static func argumentsWithDefaults(_ arguments: [String: Any], for tool: [String: Any]) -> [String: Any] {
     guard let properties = inputProperties(for: tool) else { return arguments }
     var out = arguments
@@ -1151,21 +1523,6 @@ private enum UgotMCPToolPlanner {
       }
     }
     return out
-  }
-
-  private static func missingRequiredArguments(for tool: [String: Any], arguments: [String: Any]) -> [String] {
-    guard let schema = tool["inputSchema"] as? [String: Any],
-          let required = schema["required"] as? [String],
-          !required.isEmpty else {
-      return []
-    }
-    return required.filter { name in
-      guard let value = arguments[name], !(value is NSNull) else { return true }
-      if let string = value as? String {
-        return string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      }
-      return false
-    }
   }
 
   private static func inputProperties(for tool: [String: Any]) -> [String: Any]? {
@@ -1187,16 +1544,74 @@ private enum UgotMCPToolPlanner {
       .joined(separator: " ")
   }
 
-  private static func hasWidget(tool: [String: Any]) -> Bool {
-    UgotMCPClient.widgetResourceURI(from: tool) != nil
-  }
-
   private static func isReadOnly(tool: [String: Any]) -> Bool {
     if let annotations = tool["annotations"] as? [String: Any],
-       let readOnly = annotations["readOnlyHint"] as? Bool {
+       let readOnly = annotationBool(annotations["readOnlyHint"]) {
       return readOnly
     }
-    return false
+    return inferredReadOnlyFromToolName(tool)
+  }
+
+  private static func isCompatibleWithDeclaredEffect(_ rawEffect: String?, tool: [String: Any]) -> Bool {
+    guard let rawEffect else { return true }
+    let effect = rawEffect
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased()
+      .replacingOccurrences(of: "_", with: "-")
+    guard !effect.isEmpty, effect != "none", effect != "no-tool" else {
+      return false
+    }
+
+    if ["read", "readonly", "read-only", "view", "display", "search", "summarize"].contains(effect) {
+      return isReadOnly(tool: tool)
+    }
+    if ["write", "mutate", "mutation", "setting", "settings", "set", "update", "create", "send"].contains(effect) {
+      return !isReadOnly(tool: tool) && !isDestructive(tool: tool)
+    }
+    if ["destructive", "delete", "remove", "clear", "reset"].contains(effect) {
+      return !isReadOnly(tool: tool) && isDestructive(tool: tool)
+    }
+    return true
+  }
+
+  private static func isDestructive(tool: [String: Any]) -> Bool {
+    if let annotations = tool["annotations"] as? [String: Any],
+       let destructive = annotationBool(annotations["destructiveHint"]) {
+      return destructive
+    }
+    let name = ((tool["name"] as? String) ?? "").lowercased()
+    return ["delete", "remove", "clear", "reset"].contains { name.contains($0) }
+  }
+
+  private static func inferredReadOnlyFromToolName(_ tool: [String: Any]) -> Bool {
+    let name = ((tool["name"] as? String) ?? "")
+      .lowercased()
+      .replacingOccurrences(of: "-", with: "_")
+    guard !name.isEmpty else { return false }
+    let mutatingNameMarkers = [
+      "set_", "save_", "create_", "register_", "update_", "delete_", "remove_",
+      "clear_", "reset_", "send_", "move_", "import_", "upload_", "write_", "edit_",
+      "apply_", "commit_", "cancel_"
+    ]
+    if mutatingNameMarkers.contains(where: { name.contains($0) || name.hasPrefix(String($0.dropLast())) }) {
+      return false
+    }
+    let readNameMarkers = [
+      "show_", "get_", "list_", "find_", "search_", "view_", "read_", "fetch_",
+      "summarize_", "summary_", "analyze_", "analyse_", "lookup_"
+    ]
+    return readNameMarkers.contains { name.contains($0) || name.hasPrefix(String($0.dropLast())) }
+  }
+
+  private static func annotationBool(_ raw: Any?) -> Bool? {
+    if let value = raw as? Bool { return value }
+    if let value = raw as? NSNumber { return value.boolValue }
+    if let value = raw as? String {
+      let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+      if ["true", "yes", "1"].contains(normalized) { return true }
+      if ["false", "no", "0"].contains(normalized) { return false }
+    }
+    return nil
   }
 
   private static func isOpaqueReferenceParameter(_ rawName: String) -> Bool {
@@ -1229,6 +1644,10 @@ final class UgotMCPConnectorAction {
   private let mcpClient: UgotMCPRuntimeClient
   private let sessionId: String
   private let toolPlanningProvider: UgotMCPActionRunner.ToolPlanningProvider?
+  private let connectorStatusHandler: UgotMCPActionRunner.ConnectorStatusHandler?
+  private let catalogStatusLock = NSLock()
+  private var didEmitCatalogChecking = false
+  private var didEmitCatalogResult = false
 
   var connectorId: String { connector.id }
   var connectorTitle: String { connector.title }
@@ -1238,11 +1657,13 @@ final class UgotMCPConnectorAction {
     connector: GalleryConnector,
     accessToken: String,
     sessionId: String,
-    toolPlanningProvider: UgotMCPActionRunner.ToolPlanningProvider? = nil
+    toolPlanningProvider: UgotMCPActionRunner.ToolPlanningProvider? = nil,
+    connectorStatusHandler: UgotMCPActionRunner.ConnectorStatusHandler? = nil
   ) {
     self.connector = connector
     self.sessionId = sessionId
     self.toolPlanningProvider = toolPlanningProvider
+    self.connectorStatusHandler = connectorStatusHandler
     self.mcpClient = UgotMCPRuntimeClient.make(
       connectorId: connector.id,
       endpoint: URL(string: connector.endpoint)!,
@@ -1251,14 +1672,53 @@ final class UgotMCPConnectorAction {
   }
 
   private func loadCatalog() async throws -> UgotMCPToolCatalog {
-    try await UgotMCPToolCatalogCache.catalog(
-      connectorId: connector.id,
-      sourceName: nil,
-      sourceDescription: nil
-    ) {
-      try await mcpClient.initialize()
-      return try await mcpClient.listTools()
+    if shouldEmitCatalogChecking() {
+      await emitConnectorStatus(.checking, detail: "연결과 도구 목록을 확인 중이에요.")
     }
+    do {
+      let catalog = try await UgotMCPToolCatalogCache.catalog(
+        connectorId: connector.id,
+        sourceName: nil,
+        sourceDescription: nil
+      ) {
+        try await mcpClient.initialize()
+        return try await mcpClient.listTools()
+      }
+      if shouldEmitCatalogResult() {
+        await emitConnectorStatus(.ready, detail: "연결됨 · 실행 가능 도구 \(catalog.modelVisibleTools.count)개")
+      }
+      return catalog
+    } catch {
+      if shouldEmitCatalogResult() {
+        await emitConnectorStatus(.failed, detail: error.localizedDescription)
+      }
+      throw error
+    }
+  }
+
+  private func shouldEmitCatalogChecking() -> Bool {
+    catalogStatusLock.lock()
+    defer { catalogStatusLock.unlock() }
+    guard !didEmitCatalogChecking else { return false }
+    didEmitCatalogChecking = true
+    return true
+  }
+
+  private func shouldEmitCatalogResult() -> Bool {
+    catalogStatusLock.lock()
+    defer { catalogStatusLock.unlock() }
+    guard !didEmitCatalogResult else { return false }
+    didEmitCatalogResult = true
+    return true
+  }
+
+  private func emitConnectorStatus(_ status: UgotMCPConnectorStatusEvent.Status, detail: String) async {
+    await connectorStatusHandler?(UgotMCPConnectorStatusEvent(
+      connectorId: connector.id,
+      connectorTitle: connector.title,
+      status: status,
+      detail: detail
+    ))
   }
 
   func warmToolCatalog() async throws {
@@ -1296,7 +1756,6 @@ final class UgotMCPConnectorAction {
     emitNoToolFailure: Bool = true
   ) async throws -> UgotMCPActionResponse? {
     let catalog = try await loadCatalog()
-    let tools = catalog.allTools
     if let pending = UgotMCPToolApprovalStore.pendingApproval(
       sessionId: sessionId,
       connectorIds: [connector.id]
@@ -1319,60 +1778,293 @@ final class UgotMCPConnectorAction {
     let planningTools = catalog.modelVisibleTools
     guard !planningTools.isEmpty else {
       if emitNoToolFailure {
+        let message = "이 connector에는 대화에서 직접 실행할 수 있는 MCP 도구가 없어요."
         return UgotMCPActionResponse(
-          message: "이 connector에는 대화에서 직접 실행할 수 있는 MCP 도구가 없어요.",
-          snapshot: nil
+          message: message,
+          snapshot: nil,
+          observation: UgotAgentToolObservation.hostObservation(
+            connectorId: connector.id,
+            connectorTitle: connector.title,
+            toolName: "mcp.tool_catalog",
+            toolTitle: "도구 목록",
+            outputText: message,
+            status: "no_model_visible_tools"
+          )
         )
       }
       return nil
     }
 
-    let topSearchScore = max(
-      catalog.modelVisibleToolSearchIndex.topScore(query: prompt),
-      connectorSourceSearchScore(prompt: prompt)
+    return try await runToolLoop(
+      prompt: prompt,
+      catalog: catalog,
+      emitNoToolFailure: emitNoToolFailure
     )
-    guard topSearchScore >= UgotMCPToolPlanner.minimumSearchScoreForPlanning else {
-      return nil
+  }
+
+  private static let maxAgentToolLoopSteps = 4
+
+  private func runToolLoop(
+    prompt: String,
+    catalog: UgotMCPToolCatalog,
+    emitNoToolFailure: Bool
+  ) async throws -> UgotMCPActionResponse? {
+    let allTools = catalog.allTools
+    let planningTools = catalog.modelVisibleTools
+    var observations: [UgotAgentToolObservation] = []
+    var loopState = AgentToolLoopStateMachineKt.createAgentToolLoopState(maxSteps: Int32(Self.maxAgentToolLoopSteps))
+
+    while loopState.canPlan {
+      let availablePlanningTools = planningToolsForStep(
+        planningTools,
+        observations: observations,
+        attemptedToolNames: Set(loopState.attemptedToolNames)
+      )
+      let stepSearchIndex = UgotMCPToolSearchIndex(tools: availablePlanningTools)
+      // Search/ranking must use only the original user utterance. Previous
+      // observations can contain tool names, schema field names, and error text
+      // such as "birth_date" that are not user-provided evidence. Feeding that
+      // back into retrieval makes the router re-select the failed tool.
+      let stepPlanningTools = UgotMCPToolPlanner.toolsForModelPlanning(
+        prompt: prompt,
+        tools: availablePlanningTools,
+        searchIndex: stepSearchIndex
+      )
+      let deterministicPlan = UgotMCPToolPlanner.fallbackPlanFromSearch(
+        prompt: prompt,
+        tools: stepPlanningTools,
+        searchIndex: stepSearchIndex
+      )
+      let decision: UgotMCPToolPlanningDecision?
+      if deterministicPlan == nil {
+        decision = await toolPlanningProvider?(UgotMCPToolPlanningRequest(
+          prompt: prompt,
+          connectorId: connector.id,
+          connectorTitle: connector.title,
+          tools: stepPlanningTools,
+          previousObservations: observations,
+          stepIndex: Int(loopState.nextStepIndex),
+          maxSteps: Self.maxAgentToolLoopSteps
+        ))
+      } else {
+        decision = nil
+      }
+      let planned = deterministicPlan ?? UgotMCPToolPlanner.plan(
+        prompt: prompt,
+        tools: stepPlanningTools,
+        decision: decision
+      )
+
+      guard let planned else {
+        return noPlanResponse(
+          prompt: prompt,
+          observations: observations,
+          decisionRequiresTool: decision?.requiresTool == true,
+          emitNoToolFailure: emitNoToolFailure,
+          stepIndex: Int(loopState.nextStepIndex)
+        )
+      }
+
+      let signature = toolCallSignature(toolName: planned.name, arguments: planned.arguments)
+      let callPolicy = AgentToolLoopStateMachineKt.agentToolLoopCanRunCall(
+        state: loopState,
+        toolName: planned.name,
+        callSignature: signature
+      )
+      guard callPolicy.allowed else {
+        let message = "\(planned.title) 도구가 같은 인자로 반복 계획되어 loop를 중단했어요."
+        observations.append(makeObservation(
+          toolName: "mcp.tool_replan",
+          title: "도구 재계획",
+          arguments: [
+            "step": Int(loopState.nextStepIndex),
+            "repeated_tool": planned.name,
+            "reason": callPolicy.reason,
+          ],
+          tool: nil,
+          outputText: message,
+          hasWidget: false,
+          didMutateOverride: false,
+          status: "duplicate_tool_plan"
+        ))
+        return UgotMCPActionResponse(message: message, snapshot: nil, observations: observations)
+      }
+
+      loopState = AgentToolLoopStateMachineKt.agentToolLoopRecordCall(
+        state: loopState,
+        toolName: planned.name,
+        callSignature: signature
+      )
+      let stepResponse = try await executePlannedTool(planned, prompt: prompt, allTools: allTools)
+      let newObservations = stepResponse.observations
+      observations.append(contentsOf: newObservations)
+      loopState = AgentToolLoopStateMachineKt.agentToolLoopRecordObservations(
+        state: loopState,
+        observations: newObservations.map(loopObservation)
+      )
+
+      let nextAction = AgentToolLoopStateMachineKt.agentToolLoopNextActionAfterToolResponse(
+        state: loopState,
+        latestObservation: newObservations.last.map { loopObservation($0) },
+        plannedTool: loopToolDescriptor(for: planned),
+        hasApprovalRequest: stepResponse.approvalRequest != nil,
+        hasWidget: stepResponse.snapshot != nil,
+        newObservationCount: Int32(newObservations.count)
+      )
+      if nextAction.shouldStop {
+        return response(stepResponse, replacingObservations: observations)
+      }
     }
 
-    if let planned = UgotMCPToolPlanner.plan(
-      prompt: prompt,
-      tools: planningTools,
-      searchIndex: catalog.modelVisibleToolSearchIndex,
-      decision: nil
-    ) {
-      return try await executePlannedTool(planned, prompt: prompt, allTools: tools)
-    }
-
-    let modelPlanningTools = UgotMCPToolPlanner.toolsForModelPlanning(
-      prompt: prompt,
-      tools: planningTools,
-      searchIndex: catalog.modelVisibleToolSearchIndex
-    )
-    let decision = await toolPlanningProvider?(UgotMCPToolPlanningRequest(
-      prompt: prompt,
-      connectorId: connector.id,
-      connectorTitle: connector.title,
-      tools: modelPlanningTools
+    let message = "도구 실행 단계 제한에 도달해서 추가 호출을 중단했어요."
+    observations.append(makeObservation(
+      toolName: "mcp.tool_loop",
+      title: "도구 실행 loop",
+      arguments: [
+        "max_steps": Self.maxAgentToolLoopSteps,
+      ],
+      tool: nil,
+      outputText: message,
+      hasWidget: false,
+      didMutateOverride: false,
+      status: "step_limit"
     ))
-    guard let planned = UgotMCPToolPlanner.plan(
-      prompt: prompt,
-      tools: modelPlanningTools,
-      decision: decision
-    ) else {
-      if decision?.requiresTool == true, emitNoToolFailure {
-        return UgotMCPActionResponse(
-          message: """
-          실행할 수 있는 MCP 도구를 찾지 못해서 아무 작업도 하지 않았어요.
+    return UgotMCPActionResponse(message: message, snapshot: nil, observations: observations)
+  }
 
-          도구 승인 목록에서 connector와 도구가 켜져 있는지 확인하거나, 대상을 더 구체적으로 말해 주세요.
-          """,
-          snapshot: nil
-        )
-      }
-      return nil
+  private func planningSearchPrompt(
+    userPrompt: String,
+    observations: [UgotAgentToolObservation]
+  ) -> String {
+    guard !observations.isEmpty else { return userPrompt }
+    let compactObservations = observations
+      .suffix(5)
+      .map { "\($0.toolName) status=\($0.status) mutate=\($0.didMutate ? "yes" : "no") output=\($0.outputText.oneLineForPrompt(limit: 240))" }
+      .joined(separator: "\n")
+    return """
+    \(userPrompt)
+
+    Previous MCP observations:
+    \(compactObservations)
+    """
+  }
+
+  private func planningToolsForStep(
+    _ tools: [[String: Any]],
+    observations: [UgotAgentToolObservation],
+    attemptedToolNames: Set<String>
+  ) -> [[String: Any]] {
+    guard let last = observations.last,
+          shouldAvoidPreviouslyAttemptedTool(after: last),
+          !attemptedToolNames.isEmpty else {
+      return tools
     }
-    return try await executePlannedTool(planned, prompt: prompt, allTools: tools)
+    let alternativeTools = tools.filter { tool in
+      guard let name = tool["name"] as? String else { return false }
+      return !attemptedToolNames.contains(name)
+    }
+    return alternativeTools.isEmpty ? tools : alternativeTools
+  }
+
+  private func shouldAvoidPreviouslyAttemptedTool(after observation: UgotAgentToolObservation) -> Bool {
+    AgentToolLoopStateMachineKt.agentToolLoopShouldAvoidPreviouslyAttemptedTool(
+      latestObservation: loopObservation(observation)
+    )
+  }
+
+  private func noPlanResponse(
+    prompt: String,
+    observations: [UgotAgentToolObservation],
+    decisionRequiresTool: Bool,
+    emitNoToolFailure: Bool,
+    stepIndex: Int
+  ) -> UgotMCPActionResponse? {
+    if !observations.isEmpty {
+      if decisionRequiresTool {
+        let message = "이전 도구 결과를 관찰했지만, 안전하게 이어서 실행할 다음 MCP 도구를 확정하지 못했어요."
+        var out = observations
+        out.append(makeObservation(
+          toolName: "mcp.tool_replan",
+          title: "도구 재계획",
+          arguments: [
+            "step": stepIndex,
+            "prompt": prompt,
+          ],
+          tool: nil,
+          outputText: message,
+          hasWidget: false,
+          didMutateOverride: false,
+          status: "no_matching_tool"
+        ))
+        return UgotMCPActionResponse(message: message, snapshot: nil, observations: out)
+      }
+      return UgotMCPActionResponse(message: "도구 실행 결과를 확인했어요.", snapshot: nil, observations: observations)
+    }
+
+    guard decisionRequiresTool && emitNoToolFailure else { return nil }
+    let message = """
+    실행할 수 있는 MCP 도구를 찾지 못해서 아무 작업도 하지 않았어요.
+
+    도구 승인 목록에서 connector와 도구가 켜져 있는지 확인하거나, 대상을 더 구체적으로 말해 주세요.
+    """
+    return UgotMCPActionResponse(
+      message: message,
+      snapshot: nil,
+      observation: UgotAgentToolObservation.hostObservation(
+        connectorId: connector.id,
+        connectorTitle: connector.title,
+        toolName: "mcp.tool_search",
+        toolTitle: "도구 검색",
+        argumentsPreview: compactArguments(["prompt": prompt]),
+        outputText: message,
+        status: "no_matching_tool"
+      )
+    )
+  }
+
+  private func response(
+    _ response: UgotMCPActionResponse,
+    replacingObservations observations: [UgotAgentToolObservation]
+  ) -> UgotMCPActionResponse {
+    UgotMCPActionResponse(
+      message: response.message,
+      snapshot: response.snapshot,
+      approvalRequest: response.approvalRequest,
+      observations: observations
+    )
+  }
+
+  private func loopObservation(_ observation: UgotAgentToolObservation) -> AgentToolLoopObservation {
+    AgentToolLoopObservation(
+      connectorId: observation.connectorId,
+      connectorTitle: observation.connectorTitle,
+      toolName: observation.toolName,
+      toolTitle: observation.toolTitle,
+      argumentsPreview: observation.argumentsPreview,
+      outputText: observation.outputText,
+      hasWidget: observation.hasWidget,
+      didMutate: observation.didMutate,
+      status: observation.status
+    )
+  }
+
+  private func loopToolDescriptor(for plan: UgotMCPToolPlan) -> AgentToolLoopToolDescriptor {
+    AgentToolLoopToolDescriptor(
+      name: plan.name,
+      title: plan.title,
+      isReadOnly: isReadOnlyTool(plan.tool),
+      isDestructive: isDestructiveTool(plan.tool),
+      hasWidget: UgotMCPClient.widgetResourceURI(from: plan.tool) != nil
+    )
+  }
+
+  private func toolCallSignature(toolName: String, arguments: [String: Any]) -> String {
+    guard JSONSerialization.isValidJSONObject(arguments),
+          let data = try? JSONSerialization.data(withJSONObject: arguments, options: [.sortedKeys]),
+          let json = String(data: data, encoding: .utf8) else {
+      return "\(toolName)::{}"
+    }
+    return "\(toolName)::\(json)"
   }
 
   private func connectorSourceSearchScore(prompt: String) -> Int {
@@ -1387,29 +2079,55 @@ final class UgotMCPConnectorAction {
     prompt: String,
     allTools tools: [[String: Any]]
   ) async throws -> UgotMCPActionResponse {
-    let plan = try await preparePlanForExecution(planned, prompt: prompt, tools: tools)
+    let prepared = try await preparePlanForExecution(planned, prompt: prompt, tools: tools)
+    let plan = prepared.plan
+    let prefixObservations = prepared.observations
     let missingArguments = missingRequiredArguments(for: plan.tool, arguments: plan.arguments)
     if !missingArguments.isEmpty {
-      return UgotMCPActionResponse(
-        message: """
-        \(plan.title) 도구를 실행하려면 \(missingArguments.joined(separator: ", ")) 값이 더 필요해요.
+      let message = """
+      \(plan.title) 도구를 실행하려면 \(missingArguments.joined(separator: ", ")) 값이 더 필요해요.
 
-        예: “기본사용자를 Yw로 바꿔”처럼 대상 이름을 함께 말하거나, 먼저 저장목록에서 대상을 선택해 주세요.
-        """,
-        snapshot: nil
+      예: “기본사용자를 Yw로 바꿔”처럼 대상 이름을 함께 말하거나, 먼저 저장목록에서 대상을 선택해 주세요.
+      """
+      return UgotMCPActionResponse(
+        message: message,
+        snapshot: nil,
+        observation: makeObservation(
+          toolName: plan.name,
+          title: plan.title,
+          arguments: plan.arguments,
+          tool: plan.tool,
+          outputText: message,
+          hasWidget: false,
+          didMutateOverride: false,
+          status: "missing_arguments"
+        ),
+        observations: prefixObservations
       )
     }
     let descriptor = UgotMCPToolDescriptor(connectorId: connector.id, tool: plan.tool)
     let policy = UgotMCPToolApprovalStore.policy(connectorId: connector.id, descriptor: descriptor)
     switch policy {
     case .deny:
-      return UgotMCPActionResponse(
-        message: """
-        \(plan.title) 도구는 현재 차단되어 있어요.
+      let message = """
+      \(plan.title) 도구는 현재 차단되어 있어요.
 
-        상단 슬라이더 → 도구 승인 → \(connector.title)에서 정책을 바꿀 수 있어요.
-        """,
-        snapshot: nil
+      상단 슬라이더 → 도구 승인 → \(connector.title)에서 정책을 바꿀 수 있어요.
+      """
+      return UgotMCPActionResponse(
+        message: message,
+        snapshot: nil,
+        observation: makeObservation(
+          toolName: plan.name,
+          title: plan.title,
+          arguments: plan.arguments,
+          tool: plan.tool,
+          outputText: message,
+          hasWidget: false,
+          didMutateOverride: false,
+          status: "blocked"
+        ),
+        observations: prefixObservations
       )
     case .ask:
       let argumentsPreview = compactArguments(plan.arguments)
@@ -1432,43 +2150,82 @@ final class UgotMCPConnectorAction {
           toolTitle: plan.title,
           argumentsPreview: argumentsPreview,
           userPrompt: prompt
-        )
+        ),
+        observations: prefixObservations
       )
     case .allow:
-      return try await executeTool(
-        toolName: plan.name,
-        title: plan.title,
-        arguments: plan.arguments,
-        tools: tools
-      )
+      do {
+        let response = try await executeTool(
+          toolName: plan.name,
+          title: plan.title,
+          arguments: plan.arguments,
+          tools: tools
+        )
+        guard !prefixObservations.isEmpty else { return response }
+        return UgotMCPActionResponse(
+          message: response.message,
+          snapshot: response.snapshot,
+          approvalRequest: response.approvalRequest,
+          observations: prefixObservations + response.observations
+        )
+      } catch {
+        let message = "\(plan.title) 도구 호출에 실패했어요. \(error.localizedDescription)"
+        return UgotMCPActionResponse(
+          message: message,
+          snapshot: nil,
+          observation: makeObservation(
+            toolName: plan.name,
+            title: plan.title,
+            arguments: plan.arguments,
+            tool: plan.tool,
+            outputText: message,
+            hasWidget: false,
+            didMutateOverride: false,
+            status: "error"
+          ),
+          observations: prefixObservations
+        )
+      }
     }
+  }
+
+  private struct PreparedMCPToolPlan {
+    let plan: UgotMCPToolPlan
+    let observations: [UgotAgentToolObservation]
   }
 
   private func preparePlanForExecution(
     _ plan: UgotMCPToolPlan,
     prompt: String,
     tools: [[String: Any]]
-  ) async throws -> UgotMCPToolPlan {
-    let missing = missingRequiredArguments(for: plan.tool, arguments: plan.arguments)
-    guard !missing.isEmpty else { return plan }
+  ) async throws -> PreparedMCPToolPlan {
+    let promptArguments = UgotMCPToolPlanner.schemaArguments(from: prompt, for: plan.tool)
+    let seededPlan = plan.with(
+      arguments: UgotMCPToolPlanner.mergeMissingArguments(plan.arguments, fallback: promptArguments)
+    )
+    let missing = missingRequiredArguments(for: seededPlan.tool, arguments: seededPlan.arguments)
+    guard !missing.isEmpty else {
+      return PreparedMCPToolPlan(plan: seededPlan, observations: [])
+    }
 
-    var arguments = plan.arguments
-    var didResolve = false
+    var arguments = seededPlan.arguments
+    var observations: [UgotAgentToolObservation] = []
     for parameterName in missing where isOpaqueReferenceParameter(parameterName) {
       guard arguments[parameterName] == nil else { continue }
-      if let resolved = try await resolveOpaqueReference(
+      let resolved = await resolveOpaqueReference(
         parameterName: parameterName,
         prompt: prompt,
-        entityReference: plan.entityReference,
-        targetToolName: plan.name,
+        entityReference: seededPlan.entityReference,
+        targetToolName: seededPlan.name,
         tools: tools
-      ) {
-        arguments[parameterName] = resolved
-        didResolve = true
+      )
+      observations.append(contentsOf: resolved.observations)
+      if let value = resolved.value {
+        arguments[parameterName] = value
       }
     }
 
-    return didResolve ? plan.with(arguments: arguments) : plan
+    return PreparedMCPToolPlan(plan: seededPlan.with(arguments: arguments), observations: observations)
   }
 
   private func resolveOpaqueReference(
@@ -1477,42 +2234,81 @@ final class UgotMCPConnectorAction {
     entityReference: String?,
     targetToolName: String,
     tools: [[String: Any]]
-  ) async throws -> Any? {
+  ) async -> (value: Any?, observations: [UgotAgentToolObservation]) {
     let trimmedEntityReference = entityReference?.trimmingCharacters(in: .whitespacesAndNewlines)
     let searchText = trimmedEntityReference?.isEmpty == false
       ? trimmedEntityReference
       : entitySearchText(from: prompt)
-    guard let searchText else { return nil }
-    guard let resolver = resolverTool(
+    guard let searchText else { return (nil, []) }
+    let resolvers = resolverTools(
       parameterName: parameterName,
       targetToolName: targetToolName,
       searchText: searchText,
       tools: tools
-    ) else {
-      return nil
-    }
-    let result = try await mcpClient.callTool(name: resolver.name, arguments: resolver.arguments)
-    return extractResolvedValue(
-      from: result,
-      preferredKeys: preferredResolverKeys(for: parameterName)
     )
+    guard !resolvers.isEmpty else { return (nil, []) }
+
+    var observations: [UgotAgentToolObservation] = []
+    for resolver in resolvers.prefix(3) {
+      do {
+        let result = try await mcpClient.callTool(name: resolver.name, arguments: resolver.arguments)
+        let value = extractResolvedValue(
+          from: result,
+          preferredKeys: preferredResolverKeys(for: parameterName)
+        )
+        let output = renderToolResult(result, toolName: resolver.name)
+        observations.append(
+          makeObservation(
+            toolName: resolver.name,
+            title: resolver.name,
+            arguments: resolver.arguments,
+            tool: resolver.tool,
+            outputText: output.isEmpty
+              ? (value == nil ? "참조 값을 찾지 못했어요." : "참조 값을 찾았어요.")
+              : output,
+            hasWidget: false,
+            didMutateOverride: false,
+            status: value == nil ? "no_resolved_value" : "success"
+          )
+        )
+        if let value {
+          return (value, observations)
+        }
+      } catch {
+        observations.append(
+          makeObservation(
+            toolName: resolver.name,
+            title: resolver.name,
+            arguments: resolver.arguments,
+            tool: resolver.tool,
+            outputText: "참조 조회 도구 호출에 실패했어요. \(error.localizedDescription)",
+            hasWidget: false,
+            didMutateOverride: false,
+            status: "error"
+          )
+        )
+      }
+    }
+    return (nil, observations)
   }
 
-  private func resolverTool(
+  private func resolverTools(
     parameterName: String,
     targetToolName: String,
     searchText: String,
     tools: [[String: Any]]
-  ) -> (name: String, arguments: [String: Any])? {
+  ) -> [(tool: [String: Any], name: String, arguments: [String: Any])] {
     let parameterTerms = parameterName
       .replacingOccurrences(of: "_", with: " ")
       .replacingOccurrences(of: "-", with: " ")
-    let query = "\(searchText) \(parameterTerms) find search lookup list saved registered profile user"
+    let query = "\(searchText) \(parameterTerms) find search lookup resolve list get"
     let candidates = UgotMCPToolSearchIndex(tools: tools).search(query: query, limit: 8)
 
     let ranked = candidates.compactMap { result -> (tool: [String: Any], name: String, arguments: [String: Any], score: Int)? in
       guard let name = result.tool["name"] as? String,
             name != targetToolName,
+            isReadOnlyTool(result.tool),
+            UgotMCPClient.widgetResourceURI(from: result.tool) == nil,
             !isDestructiveTool(result.tool) else {
         return nil
       }
@@ -1520,7 +2316,7 @@ final class UgotMCPConnectorAction {
         return nil
       }
       let document = UgotMCPToolSearchIndex.document(for: result.tool)
-      let resolverWords = ["find", "search", "lookup", "resolve", "list", "get", "saved", "registered", "profile", "user"]
+      let resolverWords = ["find", "search", "lookup", "resolve", "list", "get"]
       guard resolverWords.contains(where: { document.contains($0) }) else {
         return nil
       }
@@ -1541,13 +2337,12 @@ final class UgotMCPConnectorAction {
       if compactName.contains("find") || compactName.contains("search") || compactName.contains("lookup") {
         score += 20
       }
-      if compactName.contains("saved") || compactName.contains("profile") || compactName.contains("user") {
-        score += 10
-      }
       return (result.tool, name, arguments, score)
     }
 
-    return ranked.sorted { $0.score > $1.score }.first.map { ($0.name, $0.arguments) }
+    return ranked
+      .sorted { $0.score > $1.score }
+      .map { ($0.tool, $0.name, $0.arguments) }
   }
 
   private func entitySearchText(from prompt: String) -> String? {
@@ -1628,11 +2423,7 @@ final class UgotMCPConnectorAction {
   private func preferredResolverKeys(for parameterName: String) -> [String] {
     let camel = snakeToCamel(parameterName)
     var keys = [parameterName, camel]
-    if parameterName.lowercased().contains("saved") && parameterName.lowercased().contains("user") {
-      keys += ["saved_user_id", "savedUserId", "user_id", "userId", "id"]
-    } else {
-      keys += ["id"]
-    }
+    keys += ["id"]
     var seen = Set<String>()
     return keys.filter { seen.insert($0).inserted }
   }
@@ -1714,13 +2505,52 @@ final class UgotMCPConnectorAction {
     (tool["inputSchema"] as? [String: Any])?["properties"] as? [String: Any]
   }
 
+  private func isReadOnlyTool(_ tool: [String: Any]) -> Bool {
+    if let annotations = tool["annotations"] as? [String: Any],
+       let readOnly = annotationBool(annotations["readOnlyHint"]) {
+      return readOnly
+    }
+    return inferredReadOnlyFromToolName(tool)
+  }
+
   private func isDestructiveTool(_ tool: [String: Any]) -> Bool {
     if let annotations = tool["annotations"] as? [String: Any],
-       let destructive = annotations["destructiveHint"] as? Bool {
+       let destructive = annotationBool(annotations["destructiveHint"]) {
       return destructive
     }
     let document = UgotMCPToolSearchIndex.document(for: tool)
     return ["delete", "remove", "clear", "reset", "unset"].contains { document.contains($0) }
+  }
+
+  private func inferredReadOnlyFromToolName(_ tool: [String: Any]) -> Bool {
+    let name = ((tool["name"] as? String) ?? "")
+      .lowercased()
+      .replacingOccurrences(of: "-", with: "_")
+    guard !name.isEmpty else { return false }
+    let mutatingNameMarkers = [
+      "set_", "save_", "create_", "register_", "update_", "delete_", "remove_",
+      "clear_", "reset_", "send_", "move_", "import_", "upload_", "write_", "edit_",
+      "apply_", "commit_", "cancel_"
+    ]
+    if mutatingNameMarkers.contains(where: { name.contains($0) || name.hasPrefix(String($0.dropLast())) }) {
+      return false
+    }
+    let readNameMarkers = [
+      "show_", "get_", "list_", "find_", "search_", "view_", "read_", "fetch_",
+      "summarize_", "summary_", "analyze_", "analyse_", "lookup_"
+    ]
+    return readNameMarkers.contains { name.contains($0) || name.hasPrefix(String($0.dropLast())) }
+  }
+
+  private func annotationBool(_ raw: Any?) -> Bool? {
+    if let value = raw as? Bool { return value }
+    if let value = raw as? NSNumber { return value.boolValue }
+    if let value = raw as? String {
+      let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+      if ["true", "yes", "1"].contains(normalized) { return true }
+      if ["false", "no", "0"].contains(normalized) { return false }
+    }
+    return nil
   }
 
   private func compactIdentifier(_ value: String) -> String {
@@ -1763,22 +2593,19 @@ final class UgotMCPConnectorAction {
       (try? await mcpClient.resolveWidgetResource(tools: tools, toolName: toolName, result: result)) ??
       widgetResource(fromToolResult: result)
     let message = renderToolResult(result, toolName: toolName)
-    let descriptor = tools
-      .first(where: { ($0["name"] as? String) == toolName })
-      .map { UgotMCPToolDescriptor(connectorId: connector.id, tool: $0) }
-    let observation = UgotAgentToolObservation(
-      connectorId: connector.id,
-      connectorTitle: connector.title,
+    let tool = tools.first(where: { ($0["name"] as? String) == toolName })
+    let toolDeclaresWidget = tool.flatMap { UgotMCPClient.widgetResourceURI(from: $0) } != nil
+    let observation = makeObservation(
       toolName: toolName,
-      toolTitle: descriptor?.title ?? title,
-      argumentsPreview: compactArguments(arguments),
+      title: title,
+      arguments: arguments,
+      tool: tool,
       outputText: message.isEmpty ? "도구가 결과 텍스트 없이 성공 상태를 반환했어요." : message,
-      hasWidget: widgetResource != nil,
-      didMutate: !(descriptor?.isReadOnly ?? false),
+      hasWidget: widgetResource != nil || toolDeclaresWidget,
       status: "success"
     )
     guard let widgetResource else {
-      // Data-only tools, e.g. preference/default-user mutations, should not go
+      // Data-only tools, e.g. preference mutations, should not go
       // through the widget WebView path. Returning a plain assistant result keeps
       // the app stable and avoids rendering an empty MCP view.
       return UgotMCPActionResponse(message: message, snapshot: nil, observation: observation)
@@ -1796,6 +2623,32 @@ final class UgotMCPConnectorAction {
         tools: tools
       ),
       observation: observation
+    )
+  }
+
+  private func makeObservation(
+    toolName: String,
+    title: String,
+    arguments: [String: Any],
+    tool: [String: Any]?,
+    outputText: String,
+    hasWidget: Bool,
+    didMutateOverride: Bool? = nil,
+    status: String
+  ) -> UgotAgentToolObservation {
+    let descriptor = tool.map { UgotMCPToolDescriptor(connectorId: connector.id, tool: $0) }
+    return UgotAgentToolObservation(
+      connectorId: connector.id,
+      connectorTitle: connector.title,
+      toolName: toolName,
+      toolTitle: descriptor?.title ?? title,
+      argumentsPreview: compactArguments(arguments),
+      outputText: outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        ? "도구가 결과 텍스트 없이 상태 \(status)를 반환했어요."
+        : outputText,
+      hasWidget: hasWidget,
+      didMutate: didMutateOverride ?? (status == "success" && !(descriptor?.isReadOnly ?? false)),
+      status: status
     )
   }
 
@@ -1938,12 +2791,7 @@ final class UgotMCPConnectorAction {
     }
 
     if let structured = result["structuredContent"] ?? result["structured_content"] {
-      let compatibility = UgotMCPCompatibilityContextRenderer.markdown(from: structured)
-      if let compatibility {
-        sections.append(compatibility)
-      }
-      if compatibility == nil,
-         let summary = markdownSummary(from: structured),
+      if let summary = markdownSummary(from: structured),
          !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
          !message.contains(summary) {
         sections.append("Structured summary:\n\(trimForWidget(summary, maxLength: 1_500))")
@@ -2015,11 +2863,8 @@ final class UgotMCPConnectorAction {
 
   private func toolResultForWidget(_ result: [String: Any]) -> [String: Any] {
     var out: [String: Any] = [:]
-    let structured = result["structuredContent"] ?? result["structured_content"]
-    let isCompatibilityResult = structured.flatMap(UgotMCPCompatibilityContextRenderer.groupResult(from:)) != nil
 
-    if !isCompatibilityResult,
-       let content = result["content"] as? [[String: Any]] {
+    if let content = result["content"] as? [[String: Any]] {
       let compactContent = content.compactMap(compactContentItemForWidget)
       if !compactContent.isEmpty {
         out["content"] = compactContent
@@ -2183,9 +3028,6 @@ final class UgotMCPConnectorAction {
   }
 
   private func markdownSummary(from value: Any) -> String? {
-    if let compatibility = UgotMCPCompatibilityContextRenderer.markdown(from: value) {
-      return compatibility
-    }
     if let string = value as? String {
       return cleanToolText(string)
     }

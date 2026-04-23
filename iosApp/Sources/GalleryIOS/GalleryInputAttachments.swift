@@ -14,6 +14,7 @@ struct ChatInputAttachment: Identifiable, Hashable, Sendable {
   let kind: Kind
   let url: URL
   let displayName: String
+  let shouldPersistInWorkspace: Bool
 
   var symbol: String {
     switch kind {
@@ -38,7 +39,7 @@ enum ChatInputAttachmentStore {
     }
     let fileExtension = item.supportedContentTypes.first?.preferredFilenameExtension ?? "jpg"
     let url = try write(data: data, fileExtension: fileExtension)
-    return ChatInputAttachment(kind: .image, url: url, displayName: url.lastPathComponent)
+    return ChatInputAttachment(kind: .image, url: url, displayName: url.lastPathComponent, shouldPersistInWorkspace: true)
   }
 
   static func saveCameraImage(_ image: UIImage) throws -> ChatInputAttachment {
@@ -46,10 +47,13 @@ enum ChatInputAttachmentStore {
       throw AttachmentError.couldNotEncodeImage
     }
     let url = try write(data: data, fileExtension: "jpg")
-    return ChatInputAttachment(kind: .image, url: url, displayName: url.lastPathComponent)
+    return ChatInputAttachment(kind: .image, url: url, displayName: url.lastPathComponent, shouldPersistInWorkspace: true)
   }
 
-  static func copyAudioFile(from sourceURL: URL) throws -> ChatInputAttachment {
+  static func copyAudioFile(
+    from sourceURL: URL,
+    shouldPersistInWorkspace: Bool = false
+  ) throws -> ChatInputAttachment {
     let didStartAccessing = sourceURL.startAccessingSecurityScopedResource()
     defer {
       if didStartAccessing { sourceURL.stopAccessingSecurityScopedResource() }
@@ -60,7 +64,12 @@ enum ChatInputAttachmentStore {
       try FileManager.default.removeItem(at: destination)
     }
     try FileManager.default.copyItem(at: sourceURL, to: destination)
-    return ChatInputAttachment(kind: .audio, url: destination, displayName: sourceURL.lastPathComponent)
+    return ChatInputAttachment(
+      kind: .audio,
+      url: destination,
+      displayName: sourceURL.lastPathComponent,
+      shouldPersistInWorkspace: shouldPersistInWorkspace
+    )
   }
 
   static func newRecordingURL() throws -> URL {

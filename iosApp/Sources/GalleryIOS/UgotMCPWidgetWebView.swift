@@ -258,19 +258,9 @@ struct UgotMCPWidgetWebView: UIViewRepresentable {
         }
       }
       if let structured = dict["structuredContent"] ?? dict["structured_content"] {
-        let compatibility = UgotMCPCompatibilityContextRenderer.markdown(from: structured)
-        if let compatibility {
-          sections.append(compatibility)
-        }
-        // Compatibility results can contain full natal member data. The
-        // dedicated renderer above preserves the answerable facts; adding the
-        // raw JSON again bloats local-model context and can prevent effective
-        // compaction on small mobile models.
-        if compatibility == nil {
-          let json = compactJSON(structured)
-          if !json.isEmpty && json != "{}" {
-            sections.append("Structured widget context:\n\(json)")
-          }
+        let json = compactJSON(structured)
+        if !json.isEmpty && json != "{}" {
+          sections.append("Structured widget context:\n\(json)")
         }
       }
       if sections.isEmpty {
@@ -386,21 +376,20 @@ struct UgotMCPWidgetWebView: UIViewRepresentable {
     }
 
     private static func compactMCPResultForWidgetBridge(_ result: [String: Any]) -> Any {
-      var sanitized = result
-      let structured = result["structuredContent"] ?? result["structured_content"]
-      if let structured,
-         UgotMCPCompatibilityContextRenderer.groupResult(from: structured) != nil {
-        // The compatibility widget renders from structuredContent. Dropping the
-        // duplicate "[Raw Compatibility Data]" text prevents huge postMessage
-        // payloads and makes WKWebView accordion interaction less janky.
-        sanitized.removeValue(forKey: "content")
-      }
-      return UgotMCPClient.compactForWidget(sanitized, maxStringLength: 120_000, maxArrayCount: 160)
+      UgotMCPClient.compactForWidget(result, maxStringLength: 120_000, maxArrayCount: 160)
     }
 
     private func makeClient() async throws -> UgotMCPClient {
-      guard let accessToken = try await UgotAuthStore.validAccessToken() else {
-        throw WidgetBridgeError.missingAuth
+      let connector = GalleryConnector.connector(for: snapshot.connectorId)
+      let needsUGOTToken = connector?.authMode == .ugotBearer || connector == nil
+      let accessToken: String?
+      if needsUGOTToken {
+        guard let token = try await UgotAuthStore.validAccessToken() else {
+          throw WidgetBridgeError.missingAuth
+        }
+        accessToken = token
+      } else {
+        accessToken = try? await UgotAuthStore.validAccessToken()
       }
       let state = snapshot.widgetStateDictionary ?? [:]
       let endpointString = (state["endpoint"] as? String) ??
@@ -409,10 +398,11 @@ struct UgotMCPWidgetWebView: UIViewRepresentable {
       guard let endpoint = URL(string: endpointString) else {
         throw WidgetBridgeError.invalidRequest("Invalid MCP endpoint")
       }
+      let bearerToken = connector?.bearerTokenForRequest(ugotAccessToken: accessToken ?? "") ?? accessToken
       return UgotMCPClient(
         connectorId: snapshot.connectorId,
         endpoint: endpoint,
-        accessToken: accessToken
+        bearerToken: bearerToken
       )
     }
 
@@ -484,7 +474,7 @@ private struct UgotMCPWidgetHostPayload {
       "toolResult": toolResult,
       "toolDefinition": state["toolDefinition"] ?? [:],
       "widgetState": widgetState,
-      "locale": "ko",
+      "locale": UgotMCPLocale.preferredLanguageTag,
       "maxHeight": 12_000,
     ]
 

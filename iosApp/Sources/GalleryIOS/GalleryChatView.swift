@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import GallerySharedCore
 import MarkdownUI
@@ -11,8 +12,89 @@ private enum AudioRecorderMode {
   case voiceTurn
 }
 
+private enum ThinkingDisplayMode: String, CaseIterable, Identifiable {
+  case detailed
+  case compact
+  case hidden
+
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .detailed: return "상세"
+    case .compact: return "Compact"
+    case .hidden: return "숨김"
+    }
+  }
+
+  var detail: String {
+    switch self {
+    case .detailed: return "실행 로그를 펼쳐서 표시"
+    case .compact: return "한 줄로 표시"
+    case .hidden: return "숨김"
+    }
+  }
+
+  var symbol: String {
+    switch self {
+    case .detailed: return "list.bullet.rectangle"
+    case .compact: return "ellipsis.bubble"
+    case .hidden: return "eye.slash"
+    }
+  }
+}
+
+private extension GalleryModelThinkingMode {
+  var title: String {
+    switch self {
+    case .off: return "끄기"
+    case .on: return "켜기"
+    }
+  }
+
+  var detail: String {
+    switch self {
+    case .off: return "빠른 직접 답변을 우선해요."
+    case .on: return "답변 전에 더 신중하게 계획하도록 요청해요."
+    }
+  }
+
+  var symbol: String {
+    switch self {
+    case .off: return "bolt"
+    case .on: return "brain.head.profile.fill"
+    }
+  }
+}
+
+private final class GalleryInferenceTimeoutState: @unchecked Sendable {
+  private let lock = NSLock()
+  private var completed = false
+  private let continuation: CheckedContinuation<GalleryInferenceResult?, Never>
+
+  init(_ continuation: CheckedContinuation<GalleryInferenceResult?, Never>) {
+    self.continuation = continuation
+  }
+
+  func finish(_ result: GalleryInferenceResult?) {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !completed else { return }
+    completed = true
+    continuation.resume(returning: result)
+  }
+
+  func shouldEmitToken() -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return !completed
+  }
+}
+
 struct GalleryChatView: View {
   private static let transcriptScrollCoordinateSpace = "gallery-chat-transcript-scroll"
+  private static let mcpToolPlanningTimeoutNanoseconds: UInt64 = 12_000_000_000
+  private static let mcpToolFinalAnswerTimeoutNanoseconds: UInt64 = 15_000_000_000
   // Gemma/local LLM responses are text. Voice playback here would be iOS TTS,
   // which can accidentally read raw MCP tool payloads aloud. Keep assistant
   // audio output disabled unless a dedicated voice-generation model is wired in.
@@ -20,7 +102,6 @@ struct GalleryChatView: View {
 
   let model: GalleryModel
   let agentSkills: [GalleryAgentSkill]
-  let connectors: [GalleryConnector]
   let entryHint: UnifiedChatEntryHint
 
   private let sessionId: String
@@ -35,9 +116,14 @@ struct GalleryChatView: View {
   @State private var showAudioRecorder = false
   @State private var audioRecorderMode: AudioRecorderMode = .attachment
   @State private var showAudioFilePicker = false
+  @State private var connectors: [GalleryConnector]
+  @State private var showConnectorSettings = false
   @State private var toolApprovalConnector: GalleryConnector?
   @State private var pendingToolApproval: UgotMCPToolApprovalRequest?
   @State private var mcpPromptItems: [UgotMCPPromptDescriptor] = []
+  @State private var mcpResourceItems: [UgotMCPResourceDescriptor] = []
+  @State private var mcpContextAttachments: [UgotMCPContextAttachment] = []
+  @State private var pendingMCPPromptForArguments: PendingMCPPromptArgumentsPresentation?
   @State private var isLoadingMCPPrompts = false
   @State private var showAttachmentError = false
   @State private var attachmentErrorMessage = ""
@@ -51,6 +137,9 @@ struct GalleryChatView: View {
   @State private var agentWorkspaceStatus: AgentWorkspaceStatus
   @State private var agentActivityNotice: AgentActivityNotice?
   @State private var currentAgentTurn: AgentTurnState?
+  @State private var agentThinkingText = ""
+  @State private var mcpConnectorStatusEvents: [String: UgotMCPConnectorStatusEvent] = [:]
+  @State private var mcpConnectorStatusMessageId: String?
   @State private var transcriptViewportHeight: CGFloat = 0
   @State private var streamingBottomY: CGFloat = 0
   @State private var streamingBottomFollowEnabled = false
@@ -64,6 +153,8 @@ struct GalleryChatView: View {
   @State private var liveVoiceSessionActive = false
   @State private var liveVoiceAutoStopTask: Task<Void, Never>?
   @State private var liveVoiceRestartTask: Task<Void, Never>?
+  @AppStorage("gallery.modelThinkingMode") private var modelThinkingModeRaw = GalleryModelThinkingMode.on.rawValue
+  @AppStorage("gallery.thinkingDisplayMode") private var thinkingDisplayModeRaw = ThinkingDisplayMode.compact.rawValue
   @FocusState private var isComposerFocused: Bool
 
   init(
@@ -76,8 +167,8 @@ struct GalleryChatView: View {
   ) {
     self.model = model
     self.agentSkills = agentSkills
-    self.connectors = connectors
     self.entryHint = entryHint
+    self._connectors = State(initialValue: connectors)
     let computedSessionId = sessionIdOverride ?? GallerySessionStore.makeSessionId(
       taskId: model.taskId,
       modelName: model.name,
@@ -158,6 +249,18 @@ struct GalleryChatView: View {
       }
       ToolbarItem(placement: .topBarTrailing) {
         Menu {
+          Section("모델 Thinking") {
+            Picker("모델 Thinking", selection: Binding(
+              get: { modelThinkingMode },
+              set: { modelThinkingModeRaw = $0.rawValue }
+            )) {
+              ForEach(GalleryModelThinkingMode.allCases) { mode in
+                Label(mode.title, systemImage: mode.symbol)
+                  .tag(mode)
+              }
+            }
+            .pickerStyle(.inline)
+          }
           if !agentSkills.isEmpty {
             Section("기능") {
               ForEach(agentSkills) { skill in
@@ -179,6 +282,11 @@ struct GalleryChatView: View {
                 )) {
                   Label(connectorMenuTitle(connector), systemImage: connector.symbol)
                 }
+              }
+              Button {
+                showConnectorSettings = true
+              } label: {
+                Label("Connector 설정", systemImage: "externaldrive.connected.to.line.below")
               }
             }
             Section("도구 승인") {
@@ -264,6 +372,19 @@ struct GalleryChatView: View {
     .sheet(item: $toolApprovalConnector) { connector in
       UgotMCPToolApprovalView(connector: connector)
     }
+    .sheet(isPresented: $showConnectorSettings) {
+      NavigationStack {
+        GalleryConnectorSettingsView(
+          selectedConnectorIds: Binding(
+            get: { Set(sessionState.connectorBarState.activeConnectorIds) },
+            set: { applyConnectorSelection($0) }
+          ),
+          onChanged: {
+            reloadConnectorRegistry()
+          }
+        )
+      }
+    }
     .sheet(item: $pendingToolApproval) { approval in
       UgotMCPToolApprovalPromptView(
         approval: approval,
@@ -276,6 +397,27 @@ struct GalleryChatView: View {
       )
       .presentationDetents([.medium])
       .interactiveDismissDisabled()
+    }
+    .sheet(item: $pendingMCPPromptForArguments) { presentation in
+      MCPPromptArgumentsSheet(
+        prompt: presentation.prompt,
+        automaticArguments: automaticMCPPromptArguments(for: presentation.prompt),
+        onCancel: { pendingMCPPromptForArguments = nil },
+        onAttach: { arguments in
+          pendingMCPPromptForArguments = nil
+          attachMCPPrompt(presentation.prompt, arguments: arguments)
+        },
+        onCompleteArgument: { prompt, argumentName, partialValue, arguments in
+          await completeMCPPromptArgument(
+            prompt,
+            argumentName: argumentName,
+            partialValue: partialValue,
+            arguments: arguments
+          )
+        }
+      )
+      .id(presentation.id)
+      .presentationDetents([.medium, .large])
     }
     .fileImporter(
       isPresented: $showAudioFilePicker,
@@ -315,8 +457,11 @@ struct GalleryChatView: View {
             isLatestWidget: true
           )
         }
-        if isGenerating {
-          StreamingBubble(text: streamingAssistantText)
+        if shouldShowStreamingBubble {
+          StreamingBubble(
+            text: streamingAssistantText,
+            modelThinkingMode: modelThinkingMode
+          )
             .id("streaming-assistant")
             .zIndex(1)
           Color.clear
@@ -380,17 +525,23 @@ struct GalleryChatView: View {
     }
   }
 
-  private var shouldReserveTurnTopSpace: Bool {
-    isGenerating || pendingTurnTopAnchorMessageId != nil
+  private var modelThinkingMode: GalleryModelThinkingMode {
+    GalleryModelThinkingMode(rawValue: modelThinkingModeRaw) ?? .on
   }
 
-  private var shouldShowAgentVisibilityPanel: Bool {
-    agentActivityNotice != nil ||
-      compactionStatus != nil ||
-      !agentWorkspaceStatus.isEmpty ||
-      !activeSkillTitles.isEmpty ||
-      !activeConnectorTitles.isEmpty
+  private var thinkingDisplayMode: ThinkingDisplayMode {
+    ThinkingDisplayMode(rawValue: thinkingDisplayModeRaw) ?? .compact
   }
+
+  private var shouldShowStreamingBubble: Bool {
+    !streamingAssistantText.isEmpty || isGenerating
+  }
+
+  private var shouldReserveTurnTopSpace: Bool {
+    pendingTurnTopAnchorMessageId != nil || isGenerating
+  }
+
+  private var shouldShowAgentVisibilityPanel: Bool { false }
 
   private var compactionStatus: ChatCompactionStatus? {
     ChatAutoCompactor.status(messages: sessionState.messages)
@@ -682,10 +833,13 @@ struct GalleryChatView: View {
       isVoiceSpeaking: voiceOutput.isSpeaking,
       voiceLevel: liveVoiceInput.audioLevel,
       mcpPromptItems: mcpPromptItems,
+      mcpResourceItems: mcpResourceItems,
+      mcpContextAttachments: $mcpContextAttachments,
       isLoadingMCPPrompts: isLoadingMCPPrompts,
       onRecordAudio: openAttachmentAudioRecorder,
       onVoiceInput: openLiveVoiceRecorder,
       onSelectMCPPrompt: applyMCPPrompt,
+      onSelectMCPResource: applyMCPResource,
       onSend: { draft in
         sendDraftThroughRuntime(prompt: draft)
       }
@@ -813,6 +967,7 @@ struct GalleryChatView: View {
     )
     currentAgentTurn = turn
     agentActivityNotice = turn.activity.map(AgentActivityNotice.init(activity:))
+    agentThinkingText = Self.agentThinkingText(from: turn)
   }
 
   private func applyAgentTurnEvent(_ event: AgentTurnEvent) {
@@ -820,12 +975,48 @@ struct GalleryChatView: View {
     let nextTurn = turn.apply(event: event, nowEpochMs: Self.currentEpochMs())
     currentAgentTurn = nextTurn
     agentActivityNotice = nextTurn.activity.map(AgentActivityNotice.init(activity:))
+    agentThinkingText = Self.agentThinkingText(from: nextTurn)
   }
 
   private func completeAgentTurn(_ outcome: AgentTurnOutcome) {
     applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventComplete(outcome: outcome))
     currentAgentTurn = nil
     agentActivityNotice = nil
+    agentThinkingText = ""
+  }
+
+  private static func agentThinkingText(from turn: AgentTurnState?) -> String {
+    guard let turn else { return "" }
+    var lines: [String] = []
+    let prompt = turn.userPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !prompt.isEmpty {
+      lines.append("요청 해석: \(prompt.trimmedMiddleForPrompt(limit: 180))")
+    }
+    for (index, step) in turn.steps.enumerated() {
+      let title = step.title.trimmingCharacters(in: .whitespacesAndNewlines)
+      let detail = step.detail.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !title.isEmpty || !detail.isEmpty else { continue }
+      if detail.isEmpty {
+        lines.append("\(index + 1). \(title)")
+      } else {
+        lines.append("\(index + 1). \(title) — \(detail)")
+      }
+    }
+    let phaseTitle = turn.phase.title.trimmingCharacters(in: .whitespacesAndNewlines)
+    let phaseDetail = turn.phase.detail.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !phaseTitle.isEmpty || !phaseDetail.isEmpty {
+      let currentLine = phaseDetail.isEmpty ? "현재: \(phaseTitle)" : "현재: \(phaseTitle) — \(phaseDetail)"
+      if lines.last != currentLine {
+        lines.append(currentLine)
+      }
+    }
+    return lines.joined(separator: "\n")
+  }
+
+  private func assistantMessageText(content: String) -> String {
+    // Do not persist or render a separate trace/thinking envelope in normal chat.
+    // Tool/search/approval activity is projected as explicit inline event rows.
+    content
   }
 
   private func agentTurnRoute(
@@ -850,6 +1041,34 @@ struct GalleryChatView: View {
     Int64(Date().timeIntervalSince1970 * 1_000)
   }
 
+  private func generateWithTimeout(
+    request: GalleryInferenceRequest,
+    timeoutNanoseconds: UInt64,
+    onToken: (@Sendable (String) -> Void)? = nil
+  ) async -> GalleryInferenceResult? {
+    let runtime = runtime
+    return await withCheckedContinuation { continuation in
+      let state = GalleryInferenceTimeoutState(continuation)
+      let generationTask = Task.detached(priority: .userInitiated) {
+        let result: GalleryInferenceResult
+        if let onToken {
+          result = await runtime.generate(request: request) { token in
+            guard state.shouldEmitToken() else { return }
+            onToken(token)
+          }
+        } else {
+          result = await runtime.generate(request: request)
+        }
+        state.finish(result)
+      }
+      Task.detached(priority: .utility) {
+        try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+        generationTask.cancel()
+        state.finish(nil)
+      }
+    }
+  }
+
   private func runMCPConnectorTurn(
     prompt: String,
     turnContext: String?,
@@ -862,6 +1081,7 @@ struct GalleryChatView: View {
     plannerModelFileName: String,
     plannerActiveAgentSkillIds: [String],
     plannerActiveConnectorIds: [String],
+    requireToolObservation: Bool,
     speakResponse: Bool
   ) async -> Bool {
     await MainActor.run {
@@ -874,6 +1094,7 @@ struct GalleryChatView: View {
       activeSkillIds: Set(activeAgentSkillIds),
       activeConnectorIds: connectorIds,
       sessionId: sessionId,
+      requireToolObservation: requireToolObservation,
       toolPlanningProvider: { request in
         let planningPrompt = UgotMCPToolPlanningPromptBuilder.build(request: request)
         let planningRequest = GalleryInferenceRequest(
@@ -882,21 +1103,31 @@ struct GalleryChatView: View {
           modelFileName: plannerModelFileName,
           prompt: planningPrompt,
           route: "mcp-tool-router",
+          thinkingMode: .off,
           activeAgentSkillIds: plannerActiveAgentSkillIds,
           activeConnectorIds: plannerActiveConnectorIds,
           supportsImage: false,
           supportsAudio: false,
           attachments: []
         )
-        let plannerResult = await runtime.generate(request: planningRequest)
+        guard let plannerResult = await generateWithTimeout(
+          request: planningRequest,
+          timeoutNanoseconds: Self.mcpToolPlanningTimeoutNanoseconds
+        ) else {
+          return nil
+        }
         return UgotMCPToolPlanningDecision.parse(from: plannerResult.text)
+      },
+      connectorStatusHandler: { event in
+        await MainActor.run {
+          upsertMCPConnectorStatusEvent(event)
+        }
       }
     )
 
     guard let mcpResult else {
       await MainActor.run {
         applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventSkipToolSearch(connectorTitle: connectorSearchTitle))
-        appendInlineEvent(.toolSearchSkipped(connectorTitle: connectorSearchTitle))
       }
       return false
     }
@@ -922,23 +1153,38 @@ struct GalleryChatView: View {
   ) {
     let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
     let attachmentsToSend = attachmentsOverride ?? attachments
-    guard !isGenerating && (!prompt.isEmpty || !attachmentsToSend.isEmpty) else { return }
-    let effectivePrompt = prompt.isEmpty ? "Please describe the attached input." : prompt
+    let mcpContextAttachmentsToSend = mcpContextAttachments
+    guard !isGenerating && (!prompt.isEmpty || !attachmentsToSend.isEmpty || !mcpContextAttachmentsToSend.isEmpty) else { return }
+    let effectivePrompt = Self.effectiveTurnPrompt(
+      typedPrompt: prompt,
+      mcpContextAttachments: mcpContextAttachmentsToSend
+    )
     let widgetContext = currentWidgetModelContext
     let activeAgentSkillIds = Array(sessionState.agentSkillState.activeSkillIds).sorted()
-    let activeConnectorIds = Array(sessionState.connectorBarState.activeConnectorIds).sorted()
-    let activeConnectorSet = Set(activeConnectorIds)
+    let activeConnectorSet = Set(sessionState.connectorBarState.activeConnectorIds)
+    let mcpContextConnectorSet = Set(mcpContextAttachmentsToSend.map(\.connectorId))
+    let turnConnectorSet = activeConnectorSet.union(mcpContextConnectorSet)
+    let activeConnectorIds = Array(turnConnectorSet).sorted()
+    let hasMCPPromptAttachment = mcpContextAttachmentsToSend.contains { $0.kind == .prompt }
+    let mcpContextRequiresToolObservation = hasMCPPromptAttachment || Self.isLikelyMCPToolCommand(effectivePrompt)
     let capabilityRoute: GalleryCapabilityRoute = {
       if let pendingConnectorId = UgotMCPToolApprovalStore.pendingConnectorId(
           sessionId: sessionId,
-          connectorIds: activeConnectorSet
+          connectorIds: turnConnectorSet
          ) {
         return .mcpConnector(pendingConnectorId)
+      }
+      if mcpContextConnectorSet.count == 1,
+         let connectorId = mcpContextConnectorSet.first {
+        return .mcpConnector(connectorId)
+      }
+      if !mcpContextConnectorSet.isEmpty {
+        return .mcpConnectors
       }
       return GalleryCapabilityRouter.route(
         prompt: effectivePrompt,
         activeSkillIds: Set(activeAgentSkillIds),
-        activeConnectorIds: activeConnectorSet
+        activeConnectorIds: turnConnectorSet
       )
     }()
     let route = sessionState.route()
@@ -950,8 +1196,16 @@ struct GalleryChatView: View {
     let supportsImageInput = attachmentsToSend.contains { $0.kind == .image } && supports(.image)
     let supportsAudioInput = attachmentsToSend.contains { $0.kind == .audio } && supports(.audio)
 
-    sessionState = sessionState.appendUserMessage(text: userVisiblePrompt(prompt: effectivePrompt, attachments: attachmentsToSend))
-    let currentUserMessageId = sessionState.messages.last?.id
+    let visibleUserText = userVisiblePrompt(
+      prompt: prompt,
+      attachments: attachmentsToSend,
+      mcpContextAttachments: mcpContextAttachmentsToSend
+    )
+    let previousLastMessageId = sessionState.messages.last?.id
+    sessionState = sessionState.appendUserMessage(text: visibleUserText)
+    let currentUserMessageId = sessionState.messages.last?.id == previousLastMessageId
+      ? nil
+      : sessionState.messages.last?.id
     pendingTurnTopScrollTask?.cancel()
     pendingTurnTopScrollTask = nil
     pendingTurnTopAnchorMessageId = currentUserMessageId
@@ -964,14 +1218,29 @@ struct GalleryChatView: View {
       activeAgentSkillIds: activeAgentSkillIds,
       activeConnectorIds: activeConnectorIds
     )
-    applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventRoutePlanned(route: agentTurnRoute(for: capabilityRoute, connectorCount: activeConnectorSet.count)))
+    applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventRoutePlanned(route: agentTurnRoute(for: capabilityRoute, connectorCount: turnConnectorSet.count)))
     isGenerating = true
     streamingAssistantText = ""
+    mcpConnectorStatusEvents = [:]
+    mcpConnectorStatusMessageId = nil
     if attachmentsOverride == nil {
       attachments = []
+      mcpContextAttachments = []
     }
     isComposerFocused = false
     schedulePersistSession(delayNanoseconds: 0)
+
+    if turnConnectorSet.isEmpty && Self.isLikelyMCPToolCommand(effectivePrompt) {
+      applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventGenerateFinalAnswer(source: AgentTurnStateMachineKt.agentTurnFinalAnswerSourceGuardrail()))
+      completeActionResult(
+        GalleryChatActionResult(
+          message: "이 요청은 MCP connector 도구가 필요하지만 현재 켜진 connector가 없어요. Chat input 옆 connector 메뉴에서 Fortune/Gmail 같은 connector를 켠 뒤 다시 실행해 주세요."
+        ),
+        speakResponse: speakResponse,
+        terminalOutcome: AgentTurnStateMachineKt.agentTurnOutcomeGuardrailStopped()
+      )
+      return
+    }
 
     Task {
       await MainActor.run {
@@ -991,14 +1260,18 @@ struct GalleryChatView: View {
             )
           )
         }
+        if !mcpContextAttachmentsToSend.isEmpty {
+          appendInlineEvent(.mcpContextAttached(mcpContextAttachmentsToSend))
+        }
       }
       let turnContext = Self.mergedAgentContext(
         widgetContext: widgetContext,
-        attachmentContext: ingestPayload.context
+        attachmentContext: ingestPayload.context,
+        mcpContext: Self.mcpContextSummary(mcpContextAttachmentsToSend)
       )
 
       var unresolvedMCPActionCommand = false
-      let shouldUseVisibleContext = shouldAnswerFromWidgetContext(prompt: effectivePrompt, widgetContext: turnContext)
+      let shouldUseVisibleContext = !hasMCPPromptAttachment && shouldAnswerFromWidgetContext(prompt: effectivePrompt, widgetContext: turnContext)
       if shouldUseVisibleContext {
         await MainActor.run {
           applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventReadVisibleContext())
@@ -1043,17 +1316,18 @@ struct GalleryChatView: View {
             plannerModelFileName: plannerModelFileName,
             plannerActiveAgentSkillIds: plannerActiveAgentSkillIds,
             plannerActiveConnectorIds: plannerActiveConnectorIds,
+            requireToolObservation: true,
             speakResponse: speakResponse
           ) {
             return
           }
-          unresolvedMCPActionCommand = Self.isLikelyStateChangingToolCommand(effectivePrompt)
+          unresolvedMCPActionCommand = mcpContextRequiresToolObservation
         case .mcpConnectors:
           if await runMCPConnectorTurn(
             prompt: effectivePrompt,
             turnContext: turnContext,
-            connectorIds: activeConnectorSet,
-            connectorSearchTitle: "활성 MCP 커넥터",
+            connectorIds: turnConnectorSet,
+            connectorSearchTitle: mcpContextConnectorSet.isEmpty ? "활성 MCP 커넥터" : "첨부 MCP 커넥터",
             activeAgentSkillIds: activeAgentSkillIds,
             route: route,
             plannerModelName: plannerModelName,
@@ -1061,11 +1335,12 @@ struct GalleryChatView: View {
             plannerModelFileName: plannerModelFileName,
             plannerActiveAgentSkillIds: plannerActiveAgentSkillIds,
             plannerActiveConnectorIds: plannerActiveConnectorIds,
+            requireToolObservation: mcpContextRequiresToolObservation,
             speakResponse: speakResponse
           ) {
             return
           }
-          unresolvedMCPActionCommand = Self.isLikelyStateChangingToolCommand(effectivePrompt)
+          unresolvedMCPActionCommand = mcpContextRequiresToolObservation
         case .model:
           break
         }
@@ -1076,7 +1351,7 @@ struct GalleryChatView: View {
           applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventGenerateFinalAnswer(source: AgentTurnStateMachineKt.agentTurnFinalAnswerSourceGuardrail()))
           completeActionResult(
             GalleryChatActionResult(
-              message: "실제 MCP 도구 실행이 필요한 요청인데 실행 가능한 도구를 확정하지 못했어요. 변경·저장·삭제 작업은 도구 실행 결과 없이 완료됐다고 말하지 않도록 중단했어요. 도구 승인 설정과 대상 이름을 확인한 뒤 다시 시도해 주세요."
+              message: "MCP 도구 실행이 필요한 요청인데 실행 가능한 도구를 확정하지 못했어요. 일반 대화로 처리하면 거짓 답변이 될 수 있어서 중단했어요. connector가 켜져 있는지, 로그인이 유지되는지, 도구 승인 설정이 막혀 있지 않은지 확인해 주세요."
             ),
             speakResponse: speakResponse,
             terminalOutcome: AgentTurnStateMachineKt.agentTurnOutcomeGuardrailStopped()
@@ -1124,6 +1399,7 @@ struct GalleryChatView: View {
         modelFileName: model.modelFileName,
         prompt: modelPrompt,
         route: route,
+        thinkingMode: modelThinkingMode,
         activeAgentSkillIds: activeAgentSkillIds,
         activeConnectorIds: activeConnectorIds,
         supportsImage: supportsImageInput,
@@ -1140,7 +1416,7 @@ struct GalleryChatView: View {
         let finalText = result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
           ? streamingAssistantText
           : result.text
-        sessionState = sessionState.appendAssistantMessage(text: finalText)
+        sessionState = sessionState.appendAssistantMessage(text: assistantMessageText(content: finalText))
         streamingAssistantText = ""
         isGenerating = false
         agentActivityNotice = nil
@@ -1164,16 +1440,35 @@ struct GalleryChatView: View {
       .lowercased()
       .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
     let mutationTerms = [
-      "바꿔", "변경", "설정", "저장", "삭제", "지워", "선택", "등록", "해제",
-      "set", "change", "update", "save", "delete", "remove", "select", "clear", "default",
+      "바꿔", "바꿀", "바꾸", "변경", "변경할", "설정", "설정할", "지정",
+      "저장", "삭제", "지워", "선택", "등록", "해제",
+      "set", "change", "update", "save", "delete", "remove", "select", "clear", "default", "make",
     ]
     let toolStateTerms = [
-      "기본사용자", "기본프로필", "대표사용자", "저장사용자", "저장프로필",
-      "defaultuser", "defaultprofile", "saveduser", "savedprofile", "preference", "settings",
+      "기본사용자", "기본유저", "기본프로필", "기본타깃", "기본타겟", "기본대상",
+      "대표사용자", "대표유저", "대표타깃", "대표타겟", "대표대상", "저장사용자", "저장유저", "저장프로필",
+      "defaultuser", "defaultprofile", "defaulttarget", "saveduser", "savedprofile", "preference", "settings",
       "메일", "mail", "이메일", "email", "라벨", "label",
     ]
     return mutationTerms.contains { normalized.contains($0) } &&
       toolStateTerms.contains { normalized.contains($0) }
+  }
+
+  private static func isLikelyMCPToolCommand(_ prompt: String) -> Bool {
+    if isLikelyStateChangingToolCommand(prompt) {
+      return true
+    }
+    let normalized = prompt
+      .lowercased()
+      .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+    let connectorDomainTerms = [
+      "운세", "사주", "오늘운세", "띠별", "궁합", "관계", "저장목록", "저장사용자", "저장유저", "기본사용자", "기본유저",
+      "fortune", "saju", "horoscope", "compatibility", "savedprofile", "saveduser",
+      "메일", "이메일", "받은메일", "최근메일", "메일요약", "mail", "email", "inbox", "gmail",
+      "계정", "로그인", "인증", "연동", "연결됨", "연결됐", "연동됨", "연동됐",
+      "account", "identity", "login", "auth", "oauth", "connected", "connection", "linked",
+    ]
+    return connectorDomainTerms.contains { normalized.contains($0) }
   }
 
   private func schedulePersistSession(delayNanoseconds: UInt64 = 250_000_000) {
@@ -1199,6 +1494,18 @@ struct GalleryChatView: View {
     speakResponse: Bool = false,
     terminalOutcome: AgentTurnOutcome? = nil
   ) {
+    for observation in result.toolObservations {
+      appendAgentToolObservation(observation, userPrompt: nil)
+      applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventRunTool(
+        connectorTitle: observation.connectorTitle,
+        toolTitle: observation.toolTitle
+      ))
+      applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventObserveTool(
+        connectorTitle: observation.connectorTitle,
+        toolTitle: observation.toolTitle,
+        status: observation.status
+      ))
+    }
     if let approvalRequest = result.approvalRequest {
       applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventRequestApproval(
         connectorTitle: approvalRequest.connectorTitle,
@@ -1212,21 +1519,11 @@ struct GalleryChatView: View {
       schedulePersistSession(delayNanoseconds: 0)
       return
     }
-    if let observation = result.toolObservation {
-      appendAgentToolObservation(observation, userPrompt: nil)
-      applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventRunTool(
-        connectorTitle: observation.connectorTitle,
-        toolTitle: observation.toolTitle
-      ))
-      applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventObserveTool(
-        connectorTitle: observation.connectorTitle,
-        toolTitle: observation.toolTitle,
-        status: observation.status
-      ))
-    }
     if let snapshot = result.widgetSnapshot {
       sessionState = sessionState.activateWidget(snapshot: snapshot, fullscreen: false)
-      appendInlineEvent(.toolResult(title: snapshot.title))
+      if result.toolObservations.isEmpty {
+        appendInlineEvent(.toolResult(title: snapshot.title))
+      }
       activeWidgetAnchorMessageId = sessionState.messages.last?.id
       if let activeWidgetAnchorMessageId {
         widgetSnapshotsByMessageId[activeWidgetAnchorMessageId] = snapshot
@@ -1235,8 +1532,10 @@ struct GalleryChatView: View {
       activeWidgetRenderKey = UUID().uuidString
       applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventGenerateFinalAnswer(source: AgentTurnStateMachineKt.agentTurnFinalAnswerSourceWidget(toolTitle: snapshot.title)))
     } else {
-      appendInlineEvent(.actionCompleted)
-      sessionState = sessionState.appendAssistantMessage(text: result.message)
+      if result.toolObservations.isEmpty {
+        appendInlineEvent(.actionCompleted)
+      }
+      sessionState = sessionState.appendAssistantMessage(text: assistantMessageText(content: result.message))
     }
     refreshAgentWorkspaceStatus()
     streamingAssistantText = ""
@@ -1269,26 +1568,29 @@ struct GalleryChatView: View {
     activeConnectorIds: [String],
     speakResponse: Bool = false
   ) async {
-    guard result.approvalRequest == nil,
-          result.widgetSnapshot == nil,
-          let observation = result.toolObservation else {
+    let normalizedResult = Self.resultWithCanonicalObservationIfNeeded(result)
+    guard normalizedResult.approvalRequest == nil,
+          normalizedResult.widgetSnapshot == nil,
+          let observation = normalizedResult.toolObservation else {
       await MainActor.run {
-        completeActionResult(result, speakResponse: speakResponse)
+        completeActionResult(normalizedResult, speakResponse: speakResponse)
       }
       return
     }
 
     await MainActor.run {
-      appendAgentToolObservation(observation, userPrompt: userPrompt)
-      applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventRunTool(
-        connectorTitle: observation.connectorTitle,
-        toolTitle: observation.toolTitle
-      ))
-      applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventObserveTool(
-        connectorTitle: observation.connectorTitle,
-        toolTitle: observation.toolTitle,
-        status: observation.status
-      ))
+      for observation in normalizedResult.toolObservations {
+        appendAgentToolObservation(observation, userPrompt: userPrompt)
+        applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventRunTool(
+          connectorTitle: observation.connectorTitle,
+          toolTitle: observation.toolTitle
+        ))
+        applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventObserveTool(
+          connectorTitle: observation.connectorTitle,
+          toolTitle: observation.toolTitle,
+          status: observation.status
+        ))
+      }
       applyAgentTurnEvent(AgentTurnStateMachineKt.agentTurnEventGenerateFinalAnswer(source: AgentTurnStateMachineKt.agentTurnFinalAnswerSourceToolObservation(toolTitle: observation.toolTitle)))
       streamingAssistantText = ""
     }
@@ -1296,6 +1598,7 @@ struct GalleryChatView: View {
     let finalPrompt = Self.agenticToolFinalPrompt(
       userPrompt: userPrompt,
       observation: observation,
+      observations: normalizedResult.toolObservations,
       widgetContext: widgetContext
     )
     let request = GalleryInferenceRequest(
@@ -1304,6 +1607,7 @@ struct GalleryChatView: View {
       modelFileName: modelFileName,
       prompt: finalPrompt,
       route: "\(route)+agentic-tool-final",
+      thinkingMode: modelThinkingMode,
       activeAgentSkillIds: activeAgentSkillIds,
       activeConnectorIds: activeConnectorIds,
       supportsImage: false,
@@ -1311,19 +1615,22 @@ struct GalleryChatView: View {
       attachments: []
     )
 
-    let resultText = await runtime.generate(request: request) { token in
+    let resultText = await generateWithTimeout(
+      request: request,
+      timeoutNanoseconds: Self.mcpToolFinalAnswerTimeoutNanoseconds
+    ) { token in
       Task { @MainActor in
         streamingAssistantText.append(token)
       }
     }
 
     await MainActor.run {
-      let generated = resultText.text.trimmingCharacters(in: .whitespacesAndNewlines)
+      let generated = resultText?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
       let fallback = result.message.trimmingCharacters(in: .whitespacesAndNewlines)
       let finalText = generated.isEmpty
         ? (fallback.isEmpty ? "\(observation.toolTitle)을 실행했어요." : fallback)
         : generated
-      sessionState = sessionState.appendAssistantMessage(text: finalText)
+      sessionState = sessionState.appendAssistantMessage(text: assistantMessageText(content: finalText))
       streamingAssistantText = ""
       isGenerating = false
       agentActivityNotice = nil
@@ -1341,31 +1648,71 @@ struct GalleryChatView: View {
     }
   }
 
+  private static func resultWithCanonicalObservationIfNeeded(_ result: GalleryChatActionResult) -> GalleryChatActionResult {
+    guard result.approvalRequest == nil,
+          result.widgetSnapshot == nil,
+          result.toolObservations.isEmpty else {
+      return result
+    }
+    let message = result.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      ? "도구 실행이 완료되지 않았어요."
+      : result.message
+    return GalleryChatActionResult(
+      message: message,
+      toolObservation: UgotAgentToolObservation.hostObservation(
+        connectorTitle: "Agent Tool Loop",
+        toolName: "agent.tool_result",
+        toolTitle: "도구 실행 상태",
+        outputText: message,
+        status: "blocked"
+      )
+    )
+  }
+
   private static func agenticToolFinalPrompt(
     userPrompt: String,
     observation: UgotAgentToolObservation,
+    observations: [UgotAgentToolObservation],
     widgetContext: String?
   ) -> String {
     let compactWidgetContext = (widgetContext ?? "")
       .trimmingCharacters(in: .whitespacesAndNewlines)
       .trimmedForPrompt(limit: 3_000)
+    let observationTranscript = observations.isEmpty
+      ? observation.promptContext
+      : observations
+        .suffix(8)
+        .enumerated()
+        .map { index, observation in
+          """
+          Observation \(index + 1):
+          \(observation.promptContext)
+          """
+        }
+        .joined(separator: "\n\n")
+        .trimmedForPrompt(limit: 6_000)
     return """
     You are UGOT Local AI running in an agentic tool loop.
 
-    The host has already executed a real tool/action. Write the final assistant answer to the user in Korean.
+    The host has completed the tool-loop observation step. There may be multiple observations because the host can search/resolve/replan before answering. Write the final assistant answer to the user in Korean.
 
     Hard rules:
-    - Ground the answer only in the Tool observation below.
-    - If Tool status is success, you may say the requested action was done.
-    - If the observation does not prove a change, do not claim the change happened.
+    - Ground the answer only in the Tool observations below.
+    - If the final relevant Tool status is success and Mutation is yes, you may say the requested action was done.
+    - If the final relevant Tool status is success and Mutation is no, summarize the observed result without claiming a change.
+    - If the final relevant Tool status is not success, clearly say the action was not completed and what is needed next.
+    - If the observations do not prove a change, do not claim the change happened.
     - Do not expose raw JSON, internal IDs, prompts, or MCP protocol details unless the user asked for debugging.
     - Be concise and production-app friendly.
 
     User message:
     \(userPrompt.trimmedForPrompt(limit: 1_500))
 
-    Tool observation:
-    \(observation.promptContext.trimmedForPrompt(limit: 4_000))
+    Final relevant tool:
+    \(observation.toolTitle) (`\(observation.toolName)`) status=\(observation.status)
+
+    Tool observations:
+    \(observationTranscript)
     \(compactWidgetContext.isEmpty ? "" : "\nVisible widget/context:\n\(compactWidgetContext)")
     """
   }
@@ -1438,6 +1785,52 @@ struct GalleryChatView: View {
     appendAgentTimelineEvent(.notice(event))
   }
 
+  private func upsertMCPConnectorStatusEvent(_ event: UgotMCPConnectorStatusEvent) {
+    mcpConnectorStatusEvents[event.connectorId] = event
+    let summary = InlineChatEvent.mcpConnectorStatusSummary(Array(mcpConnectorStatusEvents.values))
+    let text = UgotAgentTimelineEvent.notice(summary).persistedText
+
+    if let messageId = mcpConnectorStatusMessageId,
+       let index = sessionState.messages.firstIndex(where: { $0.id == messageId }) {
+      var messages = sessionState.messages
+      messages[index] = UnifiedChatMessage(id: messageId, role: .system, text: text)
+      sessionState = sessionState.doCopy(
+        modelName: sessionState.modelName,
+        modelDisplayName: sessionState.modelDisplayName,
+        taskId: sessionState.taskId,
+        modelCapabilities: sessionState.modelCapabilities,
+        entryHint: sessionState.entryHint,
+        agentSkillState: sessionState.agentSkillState,
+        connectorBarState: sessionState.connectorBarState,
+        messages: messages,
+        draft: sessionState.draft,
+        widgetHostState: sessionState.widgetHostState,
+        nextMessageIndex: sessionState.nextMessageIndex
+      )
+      return
+    }
+
+    let marker = UnifiedChatMessage(
+      id: "m\(sessionState.nextMessageIndex)",
+      role: .system,
+      text: text
+    )
+    mcpConnectorStatusMessageId = marker.id
+    sessionState = sessionState.doCopy(
+      modelName: sessionState.modelName,
+      modelDisplayName: sessionState.modelDisplayName,
+      taskId: sessionState.taskId,
+      modelCapabilities: sessionState.modelCapabilities,
+      entryHint: sessionState.entryHint,
+      agentSkillState: sessionState.agentSkillState,
+      connectorBarState: sessionState.connectorBarState,
+      messages: sessionState.messages + [marker],
+      draft: sessionState.draft,
+      widgetHostState: sessionState.widgetHostState,
+      nextMessageIndex: sessionState.nextMessageIndex + 1
+    )
+  }
+
   private func appendAgentToolObservation(_ observation: UgotAgentToolObservation, userPrompt: String?) {
     appendAgentTimelineEvent(.toolObservation(observation, userPrompt: userPrompt))
   }
@@ -1480,10 +1873,124 @@ struct GalleryChatView: View {
     }.value
   }
 
-  private func userVisiblePrompt(prompt: String, attachments: [ChatInputAttachment]) -> String {
-    guard !attachments.isEmpty else { return prompt }
-    let names = attachments.map { "\($0.symbol) \($0.displayName)" }.joined(separator: ", ")
-    return "\(prompt)\n\nAttached: \(names)"
+  private func userVisiblePrompt(
+    prompt: String,
+    attachments: [ChatInputAttachment],
+    mcpContextAttachments: [UgotMCPContextAttachment]
+  ) -> String {
+    var lines: [String] = []
+    let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !trimmedPrompt.isEmpty {
+      lines.append(trimmedPrompt)
+    }
+    if !attachments.isEmpty {
+      let names = attachments.map { "\($0.symbol) \($0.displayName)" }.joined(separator: ", ")
+      lines.append("Attached files: \(names)")
+    }
+    if !mcpContextAttachments.isEmpty {
+      lines.append(UserMCPContextAttachmentEnvelope.persistedText(mcpContextAttachments))
+    }
+    return lines.joined(separator: "\n\n")
+  }
+
+  private static func effectiveTurnPrompt(
+    typedPrompt: String,
+    mcpContextAttachments: [UgotMCPContextAttachment]
+  ) -> String {
+    let trimmedPrompt = typedPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !mcpContextAttachments.isEmpty else {
+      return trimmedPrompt.isEmpty ? "Please describe the attached input." : trimmedPrompt
+    }
+
+    let attachedItems = mcpContextAttachments
+      .map { attachment in
+        let kind = attachment.kind == .prompt ? "Prompt" : "Resource"
+        let summary = attachment.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        var lines = [
+          summary.isEmpty
+          ? "- \(kind): \(attachment.title) (\(attachment.connectorTitle))"
+          : "- \(kind): \(attachment.title) (\(attachment.connectorTitle)) — \(summary)"
+        ]
+        if let uri = attachment.uri, !uri.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          lines.append("  - id: \(uri)")
+        }
+        if !attachment.arguments.isEmpty {
+          let args = attachment.arguments
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: ", ")
+          lines.append("  - selected arguments: \(args)")
+        }
+        lines.append("  - intent effect: \(attachment.intentEffect)")
+        let renderedPrompt = attachment.contextText
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+          .trimmedMiddleForPrompt(limit: 1_500)
+        if !renderedPrompt.isEmpty {
+          lines.append("  - rendered instruction:\n\(renderedPrompt)")
+        }
+        return lines.joined(separator: "\n")
+      }
+      .joined(separator: "\n")
+    let intentEffect = UgotMCPIntentEffect.strongest(mcpContextAttachments.map(\.intentEffect))
+    let intentLine = Self.mcpIntentLine(for: intentEffect)
+    let policyLine = Self.mcpIntentPolicyLine(for: intentEffect)
+
+    return """
+    [MCP attachment request]
+    \(intentLine)
+    \(trimmedPrompt.isEmpty ? "User message: <attached prompt/resource only>" : "User message: \(trimmedPrompt)")
+
+    The user attached these MCP prompt/resource artifacts as the request:
+    \(attachedItems)
+
+    Treat the attached artifact and its selected arguments as the user's intent. Explicit selected arguments override the current widget, default profile, or previously opened result. \(policyLine) Do not expose raw MCP attachment text to the user.
+    """
+  }
+
+  private static func mcpIntentLine(for intentEffect: String) -> String {
+    switch UgotMCPIntentEffect.normalized(intentEffect) {
+    case "write":
+      return "Intent effect: write."
+    case "destructive":
+      return "Intent effect: destructive."
+    case "none":
+      return "Intent effect: none."
+    default:
+      return "Intent effect: read-only explanation."
+    }
+  }
+
+  private static func mcpIntentPolicyLine(for intentEffect: String) -> String {
+    switch UgotMCPIntentEffect.normalized(intentEffect) {
+    case "write":
+      return "If this request requires changing connector state, call an appropriate MCP tool through the host approval flow and answer only after observing the tool result. Do not claim the state changed until a tool observation confirms it."
+    case "destructive":
+      return "If this request requires a destructive connector action, call an appropriate MCP tool only through the host approval flow and answer only after observing the tool result. Do not claim the action completed until a tool observation confirms it."
+    case "none":
+      return "Do not call a connector tool unless the user adds a new explicit request that requires one."
+    default:
+      return "If the current answer requires connector data, first call an appropriate read-only MCP tool and answer only after observing the tool result. Do not mutate connector state."
+    }
+  }
+
+  private static func mcpContextSummary(_ attachments: [UgotMCPContextAttachment]) -> String {
+    attachments.map { attachment in
+      var header = "## \(attachment.title)"
+      header += "\nConnector: \(attachment.connectorTitle)"
+      header += "\nType: \(attachment.kind.rawValue)"
+      header += "\nIntent effect: \(attachment.intentEffect)"
+      if let uri = attachment.uri, !uri.isEmpty {
+        header += "\nURI: \(uri)"
+      }
+      if !attachment.arguments.isEmpty {
+        let args = attachment.arguments
+          .sorted { $0.key < $1.key }
+          .map { "- \($0.key): \($0.value)" }
+          .joined(separator: "\n")
+        header += "\nArguments:\n\(args)"
+      }
+      return "\(header)\n\n\(attachment.contextText)"
+    }.joined(separator: "\n\n---\n\n")
   }
 
   private var currentWidgetModelContext: String? {
@@ -1512,10 +2019,12 @@ struct GalleryChatView: View {
 
   private static func mergedAgentContext(
     widgetContext: String?,
-    attachmentContext: String
+    attachmentContext: String,
+    mcpContext: String = ""
   ) -> String? {
     let trimmedWidgetContext = widgetContext?.trimmingCharacters(in: .whitespacesAndNewlines)
     let trimmedAttachmentContext = attachmentContext.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedMCPContext = mcpContext.trimmingCharacters(in: .whitespacesAndNewlines)
     let usableAttachmentContext =
       trimmedAttachmentContext.isEmpty || trimmedAttachmentContext == "Available agent files: none"
         ? nil
@@ -1530,6 +2039,13 @@ struct GalleryChatView: View {
       [Current user attachment files]
       These are virtual workspace paths for the attachments included in the current user turn. Use these paths when referring to files; the actual media is also passed to the local model runtime when supported.
       \(usableAttachmentContext)
+      """)
+    }
+    if !trimmedMCPContext.isEmpty {
+      sections.append("""
+      [Current MCP context attachments]
+      These prompts/resources were explicitly attached by the user from the MCP menu for this turn. Use them as supporting context; do not describe them as raw tool output.
+      \(trimmedMCPContext)
       """)
     }
     return sections.isEmpty ? nil : sections.joined(separator: "\n\n")
@@ -1586,6 +2102,7 @@ struct GalleryChatView: View {
       modelFileName: model.modelFileName,
       prompt: plan.compactPrompt,
       route: route,
+      thinkingMode: .off,
       activeAgentSkillIds: activeAgentSkillIds,
       activeConnectorIds: activeConnectorIds,
       supportsImage: false,
@@ -1754,7 +2271,40 @@ struct GalleryChatView: View {
     let currentlyActive = isActive(connectorId)
     guard currentlyActive != active else { return }
     sessionState = sessionState.toggleConnector(connectorId: connectorId)
+    GalleryConnectorSelectionStore.saveSelectedIds(Set(sessionState.connectorBarState.activeConnectorIds))
     schedulePersistSession(delayNanoseconds: 0)
+  }
+
+  private func applyConnectorSelection(_ selectedIds: Set<String>) {
+    let updatedConnectors = GalleryConnector.samples
+    connectors = updatedConnectors
+    let visibleIds = updatedConnectors.map(\.id)
+    let sanitizedSelectedIds = selectedIds.intersection(Set(visibleIds))
+    let connectorBarState = ConnectorBarState(
+      visibleConnectorIds: visibleIds,
+      activeConnectorIds: sanitizedSelectedIds
+    )
+    sessionState = sessionState.doCopy(
+      modelName: sessionState.modelName,
+      modelDisplayName: sessionState.modelDisplayName,
+      taskId: sessionState.taskId,
+      modelCapabilities: sessionState.modelCapabilities,
+      entryHint: sessionState.entryHint,
+      agentSkillState: sessionState.agentSkillState,
+      connectorBarState: connectorBarState,
+      messages: sessionState.messages,
+      draft: sessionState.draft,
+      widgetHostState: sessionState.widgetHostState,
+      nextMessageIndex: sessionState.nextMessageIndex
+    )
+    GalleryConnectorSelectionStore.saveSelectedIds(Set(sessionState.connectorBarState.activeConnectorIds))
+    schedulePersistSession(delayNanoseconds: 0)
+    reloadMCPPrompts()
+    prewarmMCPTools()
+  }
+
+  private func reloadConnectorRegistry() {
+    applyConnectorSelection(Set(sessionState.connectorBarState.activeConnectorIds))
   }
 
   private func connectorMenuTitle(_ connector: GalleryConnector) -> String {
@@ -1774,6 +2324,7 @@ struct GalleryChatView: View {
     let activeConnectors = connectors.filter { activeConnectorIds.contains($0.id) }
     guard !activeConnectors.isEmpty else {
       mcpPromptItems = []
+      mcpResourceItems = []
       isLoadingMCPPrompts = false
       return
     }
@@ -1782,34 +2333,44 @@ struct GalleryChatView: View {
     let locale = UgotMCPLocale.preferredLanguageTag
     Task {
       var loaded: [UgotMCPPromptDescriptor] = []
-      do {
-        guard let accessToken = try await UgotAuthStore.validAccessToken() else {
-          await MainActor.run {
-            mcpPromptItems = []
-            isLoadingMCPPrompts = false
-          }
-          return
-        }
-        for connector in activeConnectors {
-          guard let endpoint = URL(string: connector.endpoint) else { continue }
-          let client = UgotMCPRuntimeClient.make(
-            connectorId: connector.id,
-            endpoint: endpoint,
-            accessToken: accessToken
-          )
+      var loadedResources: [UgotMCPResourceDescriptor] = []
+      let accessToken = try? await UgotAuthStore.validAccessToken()
+      for connector in activeConnectors {
+        guard connector.authMode != .ugotBearer || accessToken != nil else { continue }
+        guard let endpoint = URL(string: connector.endpoint) else { continue }
+        let client = UgotMCPRuntimeClient.make(
+          connectorId: connector.id,
+          endpoint: endpoint,
+          accessToken: accessToken ?? ""
+        )
+        do {
+          try await client.initialize()
           do {
-            try await client.initialize()
             let prompts = try await client.listPrompts()
             loaded.append(contentsOf: prompts.map { UgotMCPPromptDescriptor(connector: connector, prompt: $0, locale: locale) })
           } catch {
-            continue
+            // Some generic MCP servers do not implement prompts; keep resources visible.
           }
+          do {
+            let resources = try await client.listResources()
+            loadedResources.append(
+              contentsOf: resources
+                .map { UgotMCPResourceDescriptor(connector: connector, resource: $0, locale: locale) }
+                .filter(\.isUserVisible)
+            )
+          } catch {
+            // Resources are optional MCP capability; ignore per-connector failures.
+          }
+        } catch {
+          continue
         }
-      } catch {
-        loaded = []
       }
       await MainActor.run {
         mcpPromptItems = loaded.sorted {
+          if $0.connectorTitle != $1.connectorTitle { return $0.connectorTitle < $1.connectorTitle }
+          return $0.title < $1.title
+        }
+        mcpResourceItems = loadedResources.sorted {
           if $0.connectorTitle != $1.connectorTitle { return $0.connectorTitle < $1.connectorTitle }
           return $0.title < $1.title
         }
@@ -1819,28 +2380,206 @@ struct GalleryChatView: View {
   }
 
   private func applyMCPPrompt(_ prompt: UgotMCPPromptDescriptor) {
+    pendingMCPPromptForArguments = PendingMCPPromptArgumentsPresentation(prompt: prompt)
+  }
+
+  private func automaticMCPPromptArguments(for prompt: UgotMCPPromptDescriptor) -> [String: String] {
+    var arguments: [String: String] = [:]
+    let argumentNames = Set(prompt.arguments.map(\.name))
+    if UgotMCPIntentEffect.normalized(prompt.intentEffect) == "read",
+       argumentNames.contains("target_name"),
+       let targetName = Self.currentTargetName(from: currentWidgetModelContext) {
+      arguments["target_name"] = targetName
+    }
+    return arguments
+  }
+
+  private static func currentTargetName(from widgetContext: String?) -> String? {
+    guard let widgetContext else { return nil }
+    let context = widgetContext.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !context.isEmpty else { return nil }
+
+    let patterns = [
+      #"(?i)["']targetName["']\s*:\s*["']([^"']{1,80})["']"#,
+      #"(?i)["']target_name["']\s*:\s*["']([^"']{1,80})["']"#,
+      #"(?im)^\s*[-*]?\s*(?:target|target name|selected target|current target|widget target|daily fortune target|name|대상|현재 대상|선택 대상|이름)\s*[:：]\s*([^\n,()]{1,80})"#,
+      #"(?im)^\s*(?:daily_fortune|fortune|saju|chart)\s+for\s+([^\n,()]{1,80})(?:\s+on|\s+for|$)"#,
+    ]
+
+    for pattern in patterns {
+      if let match = firstRegexCapture(pattern: pattern, in: context),
+         let normalized = normalizedPromptTargetName(match) {
+        return normalized
+      }
+    }
+    return nil
+  }
+
+  private static func firstRegexCapture(pattern: String, in text: String) -> String? {
+    guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+    let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+    guard let match = regex.firstMatch(in: text, range: nsRange),
+          match.numberOfRanges > 1,
+          let range = Range(match.range(at: 1), in: text) else {
+      return nil
+    }
+    return String(text[range])
+  }
+
+  private static func normalizedPromptTargetName(_ raw: String) -> String? {
+    let trimmed = raw
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .trimmingCharacters(in: CharacterSet(charactersIn: "\"'`[]{}"))
+    guard !trimmed.isEmpty else { return nil }
+    let lowercased = trimmed.lowercased()
+    let placeholders = [
+      "the current target",
+      "the current widget target",
+      "the current daily fortune target",
+      "current target",
+      "current widget target",
+      "unknown",
+      "none",
+      "null",
+      "n/a",
+    ]
+    if placeholders.contains(lowercased) { return nil }
+    if trimmed.count > 80 { return nil }
+    return trimmed
+  }
+
+  private func completeMCPPromptArgument(
+    _ prompt: UgotMCPPromptDescriptor,
+    argumentName: String,
+    partialValue: String,
+    arguments: [String: String]
+  ) async -> UgotMCPPromptCompletionResult {
+    do {
+      let accessToken = try? await UgotAuthStore.validAccessToken()
+      guard let connector = GalleryConnector.connector(for: prompt.connectorId),
+            let endpoint = URL(string: connector.endpoint) else {
+        return .empty
+      }
+      guard connector.authMode != .ugotBearer || accessToken != nil else {
+        return .empty
+      }
+      let client = UgotMCPRuntimeClient.make(
+        connectorId: connector.id,
+        endpoint: endpoint,
+        accessToken: accessToken ?? ""
+      )
+      try await client.initialize()
+      return try await client.completePromptArgument(
+        promptName: prompt.name,
+        argumentName: argumentName,
+        partialValue: partialValue,
+        arguments: arguments
+      )
+    } catch {
+      return .empty
+    }
+  }
+
+  private func attachMCPPrompt(_ prompt: UgotMCPPromptDescriptor, arguments: [String: String]) {
     Task {
-      var text = prompt.title
+      var contextText = prompt.summary.isEmpty ? prompt.title : prompt.summary
       do {
-        guard let accessToken = try await UgotAuthStore.validAccessToken(),
-              let connector = GalleryConnector.connector(for: prompt.connectorId),
+        let accessToken = try? await UgotAuthStore.validAccessToken()
+        guard let connector = GalleryConnector.connector(for: prompt.connectorId),
               let endpoint = URL(string: connector.endpoint) else {
+          throw NSError(domain: "UgotMCPPrompt", code: 401)
+        }
+        guard connector.authMode != .ugotBearer || accessToken != nil else {
           throw NSError(domain: "UgotMCPPrompt", code: 401)
         }
         let client = UgotMCPRuntimeClient.make(
           connectorId: connector.id,
           endpoint: endpoint,
-          accessToken: accessToken
+          accessToken: accessToken ?? ""
         )
         try await client.initialize()
-        let result = try await client.getPrompt(name: prompt.name)
-        text = UgotMCPPromptRenderer.renderPromptText(result, fallbackTitle: prompt.title)
+        let result = try await client.getPrompt(name: prompt.name, arguments: arguments)
+        contextText = UgotMCPPromptRenderer.renderPromptText(result, fallbackTitle: prompt.title)
       } catch {
-        text = prompt.title
+        contextText = prompt.summary.isEmpty ? prompt.title : prompt.summary
       }
+      let attachment = UgotMCPContextAttachment(
+        kind: .prompt,
+        connectorId: prompt.connectorId,
+        connectorTitle: prompt.connectorTitle,
+        title: prompt.title,
+        summary: prompt.summary,
+        contextText: contextText,
+        arguments: arguments,
+        uri: "mcp-prompt:\(prompt.name)",
+        intentEffect: prompt.intentEffect
+      )
       await MainActor.run {
-        composerDraftSeed = text
-        composerFocusToken += 1
+        mcpContextAttachments.append(attachment)
+      }
+    }
+  }
+
+  private func applyMCPResource(_ resource: UgotMCPResourceDescriptor) {
+    Task {
+      var contextText = "# \(resource.title)\n\nURI: \(resource.uri)"
+      var workspaceStatus: AgentWorkspaceStatus?
+      do {
+        let accessToken = try? await UgotAuthStore.validAccessToken()
+        guard let connector = GalleryConnector.connector(for: resource.connectorId),
+              let endpoint = URL(string: connector.endpoint) else {
+          throw NSError(domain: "UgotMCPResource", code: 401)
+        }
+        guard connector.authMode != .ugotBearer || accessToken != nil else {
+          throw NSError(domain: "UgotMCPResource", code: 401)
+        }
+        let client = UgotMCPRuntimeClient.make(
+          connectorId: connector.id,
+          endpoint: endpoint,
+          accessToken: accessToken ?? ""
+        )
+        try await client.initialize()
+        if let result = try await client.readResource(uri: resource.uri) {
+          contextText = UgotMCPResourceRenderer.renderResourceText(result, resource: resource)
+          let contents = result["contents"] as? [[String: Any]] ?? []
+          if !contents.isEmpty {
+            let vfsResult: [String: Any] = [
+              "content": contents.map { item in
+                [
+                  "type": "resource",
+                  "resource": item,
+                ]
+              },
+            ]
+            _ = UgotAgentVFS.shared.ingestMCPResult(
+              sessionId: sessionId,
+              connectorId: resource.connectorId,
+              toolName: "resources/read",
+              result: vfsResult,
+              persistTextBlocks: false
+            )
+            workspaceStatus = UgotAgentVFS.shared.workspaceStatus(sessionId: sessionId)
+          }
+        }
+      } catch {
+        // Keep the fallback URI context so users can still attach the selected resource.
+      }
+      let attachment = UgotMCPContextAttachment(
+        kind: .resource,
+        connectorId: resource.connectorId,
+        connectorTitle: resource.connectorTitle,
+        title: resource.title,
+        summary: resource.summary,
+        contextText: contextText,
+        arguments: [:],
+        uri: resource.uri,
+        intentEffect: "read"
+      )
+      await MainActor.run {
+        if let workspaceStatus {
+          agentWorkspaceStatus = workspaceStatus
+        }
+        mcpContextAttachments.append(attachment)
       }
     }
   }
@@ -2240,6 +2979,29 @@ private struct InlineChatEvent: Equatable {
     )
   }
 
+  static func mcpContextAttached(_ attachments: [UgotMCPContextAttachment]) -> InlineChatEvent {
+    let promptCount = attachments.filter { $0.kind == .prompt }.count
+    let resourceCount = attachments.filter { $0.kind == .resource }.count
+    let compactNames = attachments
+      .prefix(3)
+      .map(\.displayName)
+      .joined(separator: ", ")
+    let suffix = attachments.count > 3 ? " 외 \(attachments.count - 3)개" : ""
+    let title: String
+    if promptCount > 0 && resourceCount > 0 {
+      title = "Prompt와 Resource를 첨부했어요"
+    } else if promptCount > 0 {
+      title = "Prompt를 첨부했어요"
+    } else {
+      title = "Resource를 첨부했어요"
+    }
+    return InlineChatEvent(
+      symbol: promptCount > 0 ? "text.badge.star" : "doc.richtext",
+      title: title,
+      detail: "\(compactNames)\(suffix)을 이번 요청의 컨텍스트로 사용할게요."
+    )
+  }
+
   static var visibleCardRead: InlineChatEvent {
     InlineChatEvent(
       symbol: "rectangle.on.rectangle",
@@ -2253,6 +3015,58 @@ private struct InlineChatEvent: Equatable {
       symbol: "sparkle.magnifyingglass",
       title: "도구를 검색하고 있어요",
       detail: "\(connectorTitle)에서 실행 가능한 도구를 확인 중이에요."
+    )
+  }
+
+  static func mcpConnectorStatus(_ event: UgotMCPConnectorStatusEvent) -> InlineChatEvent {
+    let symbol: String
+    let title: String
+    switch event.status {
+    case .checking:
+      symbol = "network"
+      title = "\(event.connectorTitle) 연결 확인 중"
+    case .ready:
+      symbol = "checkmark.circle"
+      title = "\(event.connectorTitle) 연결됨"
+    case .failed:
+      symbol = "exclamationmark.triangle"
+      title = "\(event.connectorTitle) 연결 실패"
+    }
+    return InlineChatEvent(
+      symbol: symbol,
+      title: title,
+      detail: event.detail
+    )
+  }
+
+  static func mcpConnectorStatusSummary(_ events: [UgotMCPConnectorStatusEvent]) -> InlineChatEvent {
+    let ordered = events.sorted { lhs, rhs in
+      if lhs.connectorTitle != rhs.connectorTitle { return lhs.connectorTitle < rhs.connectorTitle }
+      return lhs.connectorId < rhs.connectorId
+    }
+    let symbol: String
+    if ordered.contains(where: { $0.status == .failed }) {
+      symbol = "exclamationmark.triangle"
+    } else if !ordered.isEmpty, ordered.allSatisfy({ $0.status == .ready }) {
+      symbol = "checkmark.circle"
+    } else {
+      symbol = "network"
+    }
+    let detail = ordered
+      .map { event -> String in
+        let state: String
+        switch event.status {
+        case .checking: state = "확인 중"
+        case .ready: state = "연결됨"
+        case .failed: state = "실패"
+        }
+        return "\(event.connectorTitle) \(state)"
+      }
+      .joined(separator: " · ")
+    return InlineChatEvent(
+      symbol: symbol,
+      title: "MCP 연결 상태",
+      detail: detail
     )
   }
 
@@ -2649,17 +3463,27 @@ private struct AgentVisibilityPanel: View {
   let workspaceStatus: AgentWorkspaceStatus
   let activeSkillTitles: [String]
   let activeConnectorTitles: [String]
+  let modelThinkingMode: GalleryModelThinkingMode
+  let thinkingText: String
 
   @State private var isExpanded = false
 
   var body: some View {
     DisclosureGroup(isExpanded: $isExpanded) {
-      VStack(alignment: .leading, spacing: 10) {
+      VStack(alignment: .leading, spacing: 8) {
+        if modelThinkingMode == .on, !thinkingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          AgentThinkingBlock(
+            text: thinkingText,
+            mode: .compact,
+            showsProgress: activity != nil
+          )
+        }
+
         if let activity {
           AgentStateDetailRow(
             symbol: activity.symbol,
             title: activity.title,
-            detail: activity.detail,
+            detail: "",
             showsProgress: activity.title.contains("중")
           )
         }
@@ -2667,62 +3491,25 @@ private struct AgentVisibilityPanel: View {
         if let compactionStatus {
           AgentStateDetailRow(
             symbol: "archivebox",
-            title: "Auto compact 활성",
-            detail: compactionDetailText(compactionStatus),
+            title: "Compact",
+            detail: compactionStatus.estimatedTokens.map { "\($0) tokens" } ?? "",
             showsProgress: false
           )
-          if let summary = compactionStatus.summary, !summary.isEmpty {
-            Text(summary)
-              .font(.caption2)
-              .foregroundStyle(.secondary)
-              .lineLimit(5)
-              .padding(8)
-              .frame(maxWidth: .infinity, alignment: .leading)
-              .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-          }
         }
 
         if !workspaceStatus.isEmpty {
           AgentStateDetailRow(
             symbol: "folder.badge.gearshape",
-            title: "Agent workspace",
-            detail: "\(workspaceStatus.fileCount)개 artifact가 가상 파일시스템에 있고, 모델 프롬프트에는 안정적인 VFS 경로로 전달돼요.",
+            title: "Workspace",
+            detail: "\(workspaceStatus.fileCount) files",
             showsProgress: false
           )
-          VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(workspaceStatus.files.prefix(6))) { file in
-              HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: fileIcon(for: file.mimeType))
-                  .foregroundStyle(Color.accentColor)
-                VStack(alignment: .leading, spacing: 2) {
-                  Text(file.path)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                  if let preview = file.preview?.trimmingCharacters(in: .whitespacesAndNewlines), !preview.isEmpty {
-                    Text(preview.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression))
-                      .font(.caption2)
-                      .foregroundStyle(.secondary)
-                      .lineLimit(1)
-                  }
-                }
-              }
-            }
-            if workspaceStatus.fileCount > 6 {
-              Text("+ \(workspaceStatus.fileCount - 6)개 더 있음")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-            }
-          }
-          .padding(8)
-          .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
 
         if !activeSkillTitles.isEmpty || !activeConnectorTitles.isEmpty {
           AgentStateDetailRow(
             symbol: "switch.2",
-            title: "활성 도구",
+            title: "Tools",
             detail: activeToolDetail,
             showsProgress: false
           )
@@ -2738,7 +3525,7 @@ private struct AgentVisibilityPanel: View {
           Image(systemName: "brain.head.profile")
             .foregroundStyle(Color.accentColor)
         }
-        Text("Agent 상태")
+        Text("Trace")
           .font(.caption.weight(.semibold))
         Spacer(minLength: 8)
         HStack(spacing: 6) {
@@ -2749,6 +3536,7 @@ private struct AgentVisibilityPanel: View {
             AgentStateChip(title: "\(workspaceStatus.fileCount) files", symbol: "folder")
           }
           let toolCount = activeSkillTitles.count + activeConnectorTitles.count
+          AgentStateChip(title: modelThinkingMode == .on ? "thinking" : "fast", symbol: modelThinkingMode == .on ? "brain.head.profile" : "bolt")
           if toolCount > 0 {
             AgentStateChip(title: "\(toolCount) tools", symbol: "switch.2")
           }
@@ -2757,34 +3545,19 @@ private struct AgentVisibilityPanel: View {
       .contentShape(Rectangle())
     }
     .font(.caption)
-    .padding(10)
+    .padding(8)
     .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
   }
 
   private var activeToolDetail: String {
     var parts: [String] = []
     if !activeSkillTitles.isEmpty {
-      parts.append("Skills: \(activeSkillTitles.joined(separator: ", "))")
+      parts.append(activeSkillTitles.joined(separator: ", "))
     }
     if !activeConnectorTitles.isEmpty {
-      parts.append("Connectors: \(activeConnectorTitles.joined(separator: ", "))")
+      parts.append(activeConnectorTitles.joined(separator: ", "))
     }
     return parts.joined(separator: "\n")
-  }
-
-  private func compactionDetailText(_ status: ChatCompactionStatus) -> String {
-    let tokenText = status.estimatedTokens.map { "약 \($0) tokens를 " } ?? ""
-    return "\(tokenText)요약 메모리로 체크포인트했고, 다음 답변부터 이 메모리가 자동으로 포함돼요."
-  }
-
-  private func fileIcon(for mimeType: String?) -> String {
-    let normalized = mimeType?.lowercased() ?? ""
-    if normalized.hasPrefix("image/") { return "photo" }
-    if normalized.hasPrefix("audio/") { return "waveform" }
-    if normalized.contains("json") { return "curlybraces.square" }
-    if normalized.contains("html") { return "safari" }
-    if normalized.contains("markdown") || normalized.hasPrefix("text/") { return "doc.text" }
-    return "doc"
   }
 }
 
@@ -2823,10 +3596,12 @@ private struct AgentStateDetailRow: View {
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
           .font(.caption.weight(.semibold))
-        Text(detail)
-          .font(.caption2)
-          .foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
+        if !detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          Text(detail)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
       }
     }
   }
@@ -2937,7 +3712,13 @@ private struct AutoCompactedChatPromptBuilder {
     if let transcript = UgotAgentToolTranscript(message: message) {
       return "Tool: \(transcript.promptText.trimmedMiddleForPrompt(limit: limit))"
     }
-    return "\(message.role.promptLabel): \(message.text.trimmedMiddleForPrompt(limit: limit))"
+    let displayText: String
+    if message.role == .user {
+      displayText = UserMCPContextAttachmentEnvelope.promptText(message.text)
+    } else {
+      displayText = AssistantThinkingEnvelope.displayContent(message.text)
+    }
+    return "\(message.role.promptLabel): \(displayText.trimmedMiddleForPrompt(limit: limit))"
   }
 }
 
@@ -3093,7 +3874,7 @@ private enum ChatAutoCompactor {
     let projection = project(messages: messages)
     let historyText = projection.recentMessages
       .filter(shouldIncludeInModelHistory)
-      .map { "\($0.role.promptLabel): \($0.text)" }
+      .map { "\($0.role.promptLabel): \(AssistantThinkingEnvelope.displayContent($0.text))" }
       .joined(separator: "\n\n")
     let summaryTokens = projection.summary.map(estimatedTokenCount) ?? 0
     let widgetTokens = widgetContext.map(estimatedTokenCount) ?? 0
@@ -3186,7 +3967,7 @@ private enum ChatAutoCompactor {
   }
 
   private static func shouldIncludeInModelHistory(_ message: UnifiedChatMessage) -> Bool {
-    let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+    let text = AssistantThinkingEnvelope.displayContent(message.text).trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty else { return false }
     if isCompactionMarker(message) { return false }
     if UgotAgentToolTranscript(message: message) != nil { return true }
@@ -3229,7 +4010,13 @@ private enum ChatAutoCompactor {
     if let transcript = UgotAgentToolTranscript(message: message) {
       return "Tool: \(transcript.promptText.oneLineForPrompt(limit: limit))"
     }
-    return "\(message.role.promptLabel): \(message.text.oneLineForPrompt(limit: limit))"
+    let displayText: String
+    if message.role == .user {
+      displayText = UserMCPContextAttachmentEnvelope.promptText(message.text)
+    } else {
+      displayText = AssistantThinkingEnvelope.displayContent(message.text)
+    }
+    return "\(message.role.promptLabel): \(displayText.oneLineForPrompt(limit: limit))"
   }
 
   private static func looksLikeRuntimeFailure(_ text: String) -> Bool {
@@ -3286,25 +4073,296 @@ private extension String {
   }
 }
 
+private struct AssistantMessageDisplayParts {
+  let thinking: String?
+  let content: String
+}
+
+private enum AssistantThinkingEnvelope {
+  private static let marker = "[UGOT_ASSISTANT_THINKING_V1]"
+  private static let contentMarker = "[UGOT_ASSISTANT_CONTENT]"
+
+  static func wrap(content: String, thinking: String) -> String {
+    let trimmedThinking = thinking.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedThinking.isEmpty else { return content }
+    let payload: [String: Any] = [
+      "schema": 1,
+      "type": "thinking",
+      "thinking": trimmedThinking,
+    ]
+    let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])) ?? Data()
+    let json = String(data: data, encoding: .utf8) ?? "{}"
+    return "\(marker)\n\(json)\n\(contentMarker)\n\(content)"
+  }
+
+  static func parse(_ text: String) -> AssistantMessageDisplayParts {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.hasPrefix(marker), let markerRange = text.range(of: contentMarker) else {
+      return AssistantMessageDisplayParts(thinking: nil, content: text)
+    }
+    let header = text[..<markerRange.lowerBound]
+    let jsonText = header
+      .replacingOccurrences(of: marker, with: "")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    let contentStart = markerRange.upperBound
+    let content = String(text[contentStart...])
+      .trimmingCharacters(in: CharacterSet.newlines)
+    guard let data = jsonText.data(using: .utf8),
+          let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let thinking = payload["thinking"] as? String,
+          !thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      return AssistantMessageDisplayParts(thinking: nil, content: content)
+    }
+    return AssistantMessageDisplayParts(thinking: thinking, content: content)
+  }
+
+  static func displayContent(_ text: String) -> String {
+    parse(text).content
+  }
+}
+
+private struct AgentThinkingBlock: View {
+  let text: String
+  let mode: ThinkingDisplayMode
+  let showsProgress: Bool
+  @State private var isExpanded = true
+
+  var body: some View {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    if mode == .compact {
+      HStack(alignment: .firstTextBaseline, spacing: 6) {
+        if showsProgress {
+          ProgressView().controlSize(.mini)
+        } else {
+          Image(systemName: "brain.head.profile")
+            .font(.caption2.weight(.semibold))
+          .foregroundStyle(Color.accentColor)
+        }
+        Text("Trace")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(Color.accentColor)
+        Text(trimmed.oneLineForPrompt(limit: 90))
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
+      .padding(8)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    } else {
+      DisclosureGroup(isExpanded: $isExpanded) {
+        Text(trimmed)
+          .font(.caption.monospaced())
+          .foregroundStyle(.secondary)
+          .textSelection(.enabled)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.top, 6)
+      } label: {
+        HStack(spacing: 6) {
+          if showsProgress {
+            ProgressView().controlSize(.mini)
+          } else {
+            Image(systemName: "brain.head.profile")
+              .foregroundStyle(Color.accentColor)
+          }
+          Text("Trace")
+            .font(.caption.weight(.semibold))
+          Spacer(minLength: 8)
+        }
+      }
+      .font(.caption)
+      .padding(9)
+      .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+  }
+}
+
+private struct UserMCPContextAttachmentEnvelope {
+  private static let marker = "[UGOT_USER_MCP_CONTEXT_V1]"
+
+  struct Item: Identifiable, Hashable {
+    let index: Int
+    let kind: String
+    let symbol: String
+    let title: String
+    let connectorTitle: String
+    let connectorId: String
+    let summary: String
+    let contextText: String
+    let arguments: [String: String]
+    let uri: String?
+    let intentEffect: String
+
+    var id: String { "\(index)::\(kind)::\(connectorTitle)::\(title)" }
+    var kindLabel: String { kind == "prompt" ? "Prompt" : "Resource" }
+
+    var contextAttachment: UgotMCPContextAttachment {
+      UgotMCPContextAttachment(
+        kind: kind == "prompt" ? .prompt : .resource,
+        connectorId: connectorId,
+        connectorTitle: connectorTitle,
+        title: title,
+        summary: summary,
+        contextText: contextText,
+        arguments: arguments,
+        uri: uri,
+        intentEffect: intentEffect
+      )
+    }
+  }
+
+  let text: String
+  let items: [Item]
+
+  static func persistedText(_ attachments: [UgotMCPContextAttachment]) -> String {
+    let items = attachments.enumerated().map { index, attachment in
+      [
+        "index": index,
+        "kind": attachment.kind.rawValue,
+        "symbol": attachment.symbol,
+        "title": attachment.displayName,
+        "connectorTitle": attachment.connectorTitle,
+        "connectorId": attachment.connectorId,
+        "summary": attachment.summary,
+        "contextText": attachment.contextText.trimmedMiddleForPrompt(limit: 8_000),
+        "arguments": attachment.arguments,
+        "uri": attachment.uri ?? "",
+        "intentEffect": attachment.intentEffect,
+      ] as [String: Any]
+    }
+    let payload: [String: Any] = [
+      "schema": 1,
+      "items": items,
+    ]
+    let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])) ?? Data()
+    let json = String(data: data, encoding: .utf8) ?? "{}"
+    return "\(marker)\n\(json)"
+  }
+
+  static func parse(_ rawText: String) -> UserMCPContextAttachmentEnvelope {
+    guard let markerRange = rawText.range(of: marker) else {
+      return UserMCPContextAttachmentEnvelope(
+        text: rawText.trimmingCharacters(in: .whitespacesAndNewlines),
+        items: []
+      )
+    }
+
+    let visibleText = String(rawText[..<markerRange.lowerBound])
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    let jsonText = String(rawText[markerRange.upperBound...])
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let data = jsonText.data(using: .utf8),
+          let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let rawItems = payload["items"] as? [[String: Any]] else {
+      return UserMCPContextAttachmentEnvelope(text: visibleText, items: [])
+    }
+    let items = rawItems.enumerated().compactMap { fallbackIndex, raw -> Item? in
+      guard let kind = raw["kind"] as? String,
+            let symbol = raw["symbol"] as? String,
+            let title = raw["title"] as? String,
+            let connectorTitle = raw["connectorTitle"] as? String else {
+        return nil
+      }
+      let arguments = raw["arguments"] as? [String: String] ?? [:]
+      let rawURI = (raw["uri"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      let rawIntentEffect = (raw["intentEffect"] as? String) ?? (raw["intent_effect"] as? String)
+      return Item(
+        index: (raw["index"] as? Int) ?? fallbackIndex,
+        kind: kind,
+        symbol: symbol,
+        title: title,
+        connectorTitle: connectorTitle,
+        connectorId: (raw["connectorId"] as? String) ?? "",
+        summary: (raw["summary"] as? String) ?? "",
+        contextText: (raw["contextText"] as? String) ?? "",
+        arguments: arguments,
+        uri: rawURI.isEmpty ? nil : rawURI,
+        intentEffect: UgotMCPIntentEffect.normalized(
+          rawIntentEffect,
+          default: "read"
+        )
+      )
+    }
+    return UserMCPContextAttachmentEnvelope(text: visibleText, items: items)
+  }
+
+  static func promptText(_ rawText: String) -> String {
+    let parsed = parse(rawText)
+    guard !parsed.items.isEmpty else { return parsed.text }
+    let attachmentSummary = parsed.items
+      .map { "\($0.kindLabel): \($0.title) (\($0.connectorTitle))" }
+      .joined(separator: ", ")
+    if parsed.text.isEmpty {
+      return "Attached MCP context: \(attachmentSummary)"
+    }
+    return "\(parsed.text)\nAttached MCP context: \(attachmentSummary)"
+  }
+}
+
+private struct SentMCPContextAttachmentChip: View {
+  let item: UserMCPContextAttachmentEnvelope.Item
+  let onPreview: () -> Void
+
+  var body: some View {
+    Button(action: onPreview) {
+      HStack(spacing: 6) {
+        Image(systemName: item.symbol)
+        Text(item.title)
+          .lineLimit(1)
+        Text(item.kindLabel)
+          .font(.caption2.weight(.bold))
+          .opacity(0.72)
+        Image(systemName: "chevron.up.forward")
+          .font(.caption2.weight(.bold))
+          .opacity(0.65)
+      }
+    }
+    .buttonStyle(.plain)
+    .font(.caption.weight(.semibold))
+    .padding(.horizontal, 10)
+    .padding(.vertical, 7)
+    .foregroundStyle(.white)
+    .background(Color.white.opacity(0.16), in: Capsule())
+    .overlay(Capsule().stroke(Color.white.opacity(0.24)))
+  }
+}
+
 private struct MessageBubble: View {
   let message: UnifiedChatMessage
+  @State private var previewedMCPContextAttachment: UgotMCPContextAttachment?
 
   @ViewBuilder
   var body: some View {
-    if let event = InlineChatEvent(message: message) {
+    if let transcript = UgotAgentToolTranscript(message: message) {
+      ToolObservationEventRow(transcript: transcript)
+    } else if let event = InlineChatEvent(message: message) {
       InlineChatEventRow(event: event)
     } else {
       HStack {
         if message.role == .user { Spacer(minLength: 40) }
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
           if message.role == .assistant {
-            AssistantMarkdownText(text: message.text)
+            AssistantMarkdownText(text: AssistantThinkingEnvelope.displayContent(message.text))
               .font(.body)
               .textSelection(.enabled)
           } else {
-            Text(message.text)
-              .font(.body)
-              .textSelection(.enabled)
+            let userInput = UserMCPContextAttachmentEnvelope.parse(message.text)
+            if !userInput.text.isEmpty {
+              Text(userInput.text)
+                .font(.body)
+                .textSelection(.enabled)
+            }
+            if !userInput.items.isEmpty {
+              HStack(spacing: 7) {
+                ForEach(userInput.items) { item in
+                  SentMCPContextAttachmentChip(
+                    item: item,
+                    onPreview: { previewedMCPContextAttachment = item.contextAttachment }
+                  )
+                }
+              }
+            }
           }
         }
         .padding(.horizontal, 14)
@@ -3316,6 +4374,132 @@ private struct MessageBubble: View {
         )
         if message.role != .user { Spacer(minLength: 40) }
       }
+      .sheet(item: $previewedMCPContextAttachment) { attachment in
+        MCPContextAttachmentPreviewSheet(attachment: attachment)
+          .presentationDetents([.medium, .large])
+      }
+    }
+  }
+}
+
+private struct ToolObservationEventRow: View {
+  let transcript: UgotAgentToolTranscript
+  @State private var isExpanded = false
+
+  var body: some View {
+    DisclosureGroup(isExpanded: $isExpanded) {
+      VStack(alignment: .leading, spacing: 8) {
+        metadataLine(title: "Connector", value: transcript.connectorTitle)
+        metadataLine(title: "Tool", value: transcript.toolName, monospaced: true)
+        if !cleanArguments.isEmpty {
+          metadataBlock(title: "Input", value: cleanArguments)
+        }
+        if !cleanOutput.isEmpty {
+          metadataBlock(title: "Output", value: cleanOutput)
+        }
+      }
+      .padding(.top, 6)
+    } label: {
+      HStack(spacing: 7) {
+        Image(systemName: iconName)
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(statusColor)
+        Text(displayTitle)
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+        Text(statusTitle)
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(statusColor)
+          .padding(.horizontal, 6)
+          .padding(.vertical, 2)
+          .background(statusColor.opacity(0.10), in: Capsule())
+        if !transcript.hasWidget {
+          Text("data-only")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.tertiary)
+        }
+        Spacer(minLength: 0)
+      }
+    }
+    .font(.caption)
+    .padding(.horizontal, 8)
+    .padding(.vertical, 6)
+    .background(Color(.secondarySystemGroupedBackground).opacity(0.55), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    .accessibilityElement(children: .combine)
+  }
+
+  private var displayTitle: String {
+    let title = transcript.toolTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !title.isEmpty,
+       !title.lowercased().contains("mcp"),
+       !title.lowercased().contains("tool") {
+      return title
+    }
+    return transcript.toolName
+      .replacingOccurrences(of: "_", with: " ")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var iconName: String {
+    if transcript.status != "success" { return "exclamationmark.triangle" }
+    if transcript.hasWidget { return "rectangle.on.rectangle" }
+    return transcript.didMutate ? "checkmark.shield" : "wrench.and.screwdriver"
+  }
+
+  private var statusTitle: String {
+    switch transcript.status {
+    case "success": return "완료"
+    case "blocked": return "중단"
+    default: return transcript.status
+    }
+  }
+
+  private var statusColor: Color {
+    switch transcript.status {
+    case "success": return .green
+    case "blocked": return .orange
+    default: return .orange
+    }
+  }
+
+  private var cleanArguments: String {
+    transcript.argumentsPreview
+      .trimmingCharacters(in: CharacterSet(charactersIn: "`").union(.whitespacesAndNewlines))
+  }
+
+  private var cleanOutput: String {
+    transcript.outputText
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .trimmedMiddleForPrompt(limit: 1_200)
+  }
+
+  @ViewBuilder
+  private func metadataLine(title: String, value: String, monospaced: Bool = false) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 6) {
+      Text(title)
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.tertiary)
+      Text(value)
+        .font(monospaced ? .caption2.monospaced() : .caption2)
+        .foregroundStyle(.secondary)
+        .textSelection(.enabled)
+      Spacer(minLength: 0)
+    }
+  }
+
+  @ViewBuilder
+  private func metadataBlock(title: String, value: String) -> some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Text(title)
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.tertiary)
+      Text(value)
+        .font(.caption2.monospaced())
+        .foregroundStyle(.secondary)
+        .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 }
@@ -3348,6 +4532,7 @@ private struct InlineChatEventRow: View {
 
 private struct StreamingBubble: View {
   let text: String
+  let modelThinkingMode: GalleryModelThinkingMode
 
   var body: some View {
     HStack(alignment: .bottom, spacing: 8) {
@@ -3355,7 +4540,7 @@ private struct StreamingBubble: View {
         if text.isEmpty {
           HStack(spacing: 8) {
             ProgressView().controlSize(.small)
-            Text("Thinking…")
+            Text(modelThinkingMode == .on ? "Thinking…" : "Working…")
               .font(.body)
               .foregroundStyle(.secondary)
           }
@@ -3400,6 +4585,635 @@ private struct AttachmentChip: View {
     .padding(.horizontal, 10)
     .padding(.vertical, 7)
     .background(Color(.secondarySystemBackground), in: Capsule())
+  }
+}
+
+private struct MCPContextAttachmentChip: View {
+  let attachment: UgotMCPContextAttachment
+  let onPreview: () -> Void
+  let onRemove: () -> Void
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Button(action: onPreview) {
+        HStack(spacing: 6) {
+          Image(systemName: attachment.symbol)
+          Text(attachment.displayName)
+            .lineLimit(1)
+          Text(attachment.kind == .prompt ? "Prompt" : "Resource")
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(.secondary)
+          Image(systemName: "chevron.up.forward")
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(.secondary)
+        }
+      }
+      .buttonStyle(.plain)
+      Button(action: onRemove) {
+        Image(systemName: "xmark.circle.fill")
+          .foregroundStyle(.secondary)
+      }
+      .buttonStyle(.plain)
+    }
+    .font(.caption.weight(.semibold))
+    .padding(.horizontal, 10)
+    .padding(.vertical, 7)
+    .background(Color.accentColor.opacity(0.10), in: Capsule())
+    .contentShape(Capsule())
+    .accessibilityLabel("Open MCP context attachment")
+  }
+}
+
+private struct MCPContextAttachmentPreviewSheet: View {
+  let attachment: UgotMCPContextAttachment
+  @Environment(\.dismiss) private var dismiss
+
+  var body: some View {
+    NavigationStack {
+      ScrollView {
+        VStack(alignment: .leading, spacing: 14) {
+          VStack(alignment: .leading, spacing: 6) {
+            Label(attachment.connectorTitle, systemImage: attachment.symbol)
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(.secondary)
+            Text(attachment.title)
+              .font(.headline)
+            if !attachment.summary.isEmpty {
+              Text(attachment.summary)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            }
+          }
+
+          VStack(alignment: .leading, spacing: 8) {
+            MCPPreviewMetaRow(title: "Type", value: attachment.kind == .prompt ? "Prompt" : "Resource")
+            if let uri = attachment.uri, !uri.isEmpty {
+              MCPPreviewMetaRow(title: "URI", value: uri)
+            }
+            if !attachment.arguments.isEmpty {
+              VStack(alignment: .leading, spacing: 6) {
+                Text("Arguments")
+                  .font(.caption.weight(.semibold))
+                  .foregroundStyle(.secondary)
+                ForEach(attachment.arguments.sorted(by: { $0.key < $1.key }), id: \.key) { key, value in
+                  MCPPreviewMetaRow(title: key, value: value)
+                }
+              }
+            }
+          }
+          .padding(12)
+          .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+          VStack(alignment: .leading, spacing: 8) {
+            Text("Context")
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(.secondary)
+            AssistantMarkdownText(text: attachment.contextText)
+              .font(.body)
+          }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+      }
+      .navigationTitle("MCP 첨부 내용")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .confirmationAction) {
+          Button("닫기") { dismiss() }
+        }
+      }
+    }
+  }
+}
+
+private struct MCPPreviewMetaRow: View {
+  let title: String
+  let value: String
+
+  var body: some View {
+    HStack(alignment: .firstTextBaseline, spacing: 8) {
+      Text(title)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .frame(width: 72, alignment: .leading)
+      Text(value)
+        .font(.caption)
+        .textSelection(.enabled)
+      Spacer(minLength: 0)
+    }
+  }
+}
+
+private struct PendingMCPPromptArgumentsPresentation: Identifiable, Hashable {
+  let id = UUID()
+  let prompt: UgotMCPPromptDescriptor
+}
+
+private struct MCPPromptArgumentsSheet: View {
+  private struct Choice: Hashable, Identifiable {
+    let label: String
+    let value: String
+    var id: String { value }
+  }
+
+  let prompt: UgotMCPPromptDescriptor
+  let automaticArguments: [String: String]
+  let onCancel: () -> Void
+  let onAttach: ([String: String]) -> Void
+  let onCompleteArgument: (UgotMCPPromptDescriptor, String, String, [String: String]) async -> UgotMCPPromptCompletionResult
+
+  @State private var values: [String: String]
+  @State private var completionChoices: [String: [Choice]] = [:]
+  @State private var completionResults: [String: UgotMCPPromptCompletionResult] = [:]
+  @State private var completionSearchText: [String: String] = [:]
+  @State private var loadingCompletionNames: Set<String> = []
+  @State private var completedCompletionNames: Set<String> = []
+
+  init(
+    prompt: UgotMCPPromptDescriptor,
+    automaticArguments: [String: String] = [:],
+    onCancel: @escaping () -> Void,
+    onAttach: @escaping ([String: String]) -> Void,
+    onCompleteArgument: @escaping (UgotMCPPromptDescriptor, String, String, [String: String]) async -> UgotMCPPromptCompletionResult
+  ) {
+    self.prompt = prompt
+    self.automaticArguments = automaticArguments
+    self.onCancel = onCancel
+    self.onAttach = onAttach
+    self.onCompleteArgument = onCompleteArgument
+    _values = State(initialValue: Self.defaultValues(for: prompt, automaticArguments: automaticArguments))
+  }
+
+  var body: some View {
+    NavigationStack {
+      Form {
+        Section {
+          VStack(alignment: .leading, spacing: 6) {
+            Label(prompt.connectorTitle, systemImage: prompt.connectorSymbol)
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(.secondary)
+            Text(prompt.title)
+              .font(.headline)
+            if !prompt.summary.isEmpty {
+              Text(prompt.summary)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            }
+          }
+          .padding(.vertical, 4)
+        }
+
+        if visibleArguments.isEmpty {
+          Section("옵션") {
+            Label("언어와 현재 위젯 대상은 자동으로 적용돼요", systemImage: "checkmark.circle")
+              .foregroundStyle(.secondary)
+          }
+        } else {
+          Section("옵션") {
+            ForEach(visibleArguments) { argument in
+              argumentInput(argument)
+            }
+          }
+        }
+      }
+      .navigationTitle("Prompt 첨부")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("취소", action: onCancel)
+        }
+        ToolbarItem(placement: .confirmationAction) {
+          Button("첨부") {
+            onAttach(cleanedValues)
+          }
+          .disabled(!canAttach)
+        }
+      }
+      .task(id: prompt.id) {
+        await loadCompletionChoices()
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func argumentInput(_ argument: UgotMCPPromptArgumentDescriptor) -> some View {
+    if shouldLoadCompletion(for: argument),
+       (loadingCompletionNames.contains(argument.name) ||
+         completedCompletionNames.contains(argument.name) ||
+         completionChoices[argument.name] != nil) {
+      completionArgumentInput(argument, choices: completionChoices[argument.name] ?? [])
+    } else if let choices = choices(for: argument.name) {
+      Picker(argumentTitle(argument), selection: binding(for: argument.name)) {
+        ForEach(choices) { choice in
+          Text(choice.label).tag(choice.value)
+        }
+      }
+    } else if isBooleanArgument(argument.name) {
+      Toggle(argumentTitle(argument), isOn: boolBinding(for: argument.name))
+    } else {
+      VStack(alignment: .leading, spacing: 6) {
+        HStack(spacing: 6) {
+          Text(argumentTitle(argument))
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+          if argument.isRequired {
+            Text("필수")
+              .font(.caption2.weight(.bold))
+              .foregroundStyle(.orange)
+          }
+        }
+        TextField(argumentTitle(argument), text: binding(for: argument.name), axis: .vertical)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+        if !argument.summary.isEmpty {
+          Text(argument.summary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+      .padding(.vertical, 4)
+    }
+  }
+
+  @ViewBuilder
+  private func completionArgumentInput(
+    _ argument: UgotMCPPromptArgumentDescriptor,
+    choices: [Choice]
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 6) {
+        Text(argumentTitle(argument))
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+        if argument.isRequired {
+          Text("필수")
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(.orange)
+        }
+        if loadingCompletionNames.contains(argument.name) {
+          ProgressView()
+            .controlSize(.small)
+        }
+      }
+
+      HStack(spacing: 8) {
+        TextField("대상 검색", text: completionSearchBinding(for: argument.name))
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+          .textFieldStyle(.roundedBorder)
+          .onSubmit {
+            Task { await reloadCompletionChoices(for: argument) }
+          }
+        Button("검색") {
+          Task { await reloadCompletionChoices(for: argument) }
+        }
+        .disabled(loadingCompletionNames.contains(argument.name))
+      }
+
+      if choices.isEmpty {
+        if loadingCompletionNames.contains(argument.name) {
+          loadingArgumentInput(argument)
+        } else {
+          TextField(argumentTitle(argument), text: binding(for: argument.name))
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+        }
+      } else if isMultiSelectArgument(argument.name) {
+        multiSelectInput(argument, choices: choices, showHeader: false)
+      } else {
+        singleSelectInput(argument, choices: choices)
+      }
+
+      if let result = completionResults[argument.name], result.hasMore {
+        Text("더 많은 대상이 있어요. 검색어를 입력해 목록을 좁혀보세요.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      } else if !argument.summary.isEmpty {
+        Text(argument.summary)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    }
+    .padding(.vertical, 4)
+  }
+
+  @ViewBuilder
+  private func singleSelectInput(
+    _ argument: UgotMCPPromptArgumentDescriptor,
+    choices: [Choice]
+  ) -> some View {
+    let selected = (values[argument.name] ?? "")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    VStack(alignment: .leading, spacing: 4) {
+      ForEach(choices) { choice in
+        Button {
+          values[argument.name] = choice.value
+        } label: {
+          HStack(spacing: 10) {
+            Text(choice.label)
+              .foregroundStyle(.primary)
+              .frame(maxWidth: .infinity, alignment: .leading)
+            if selected.caseInsensitiveCompare(choice.value) == .orderedSame {
+              Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(Color.accentColor)
+            } else {
+              Image(systemName: "circle")
+                .foregroundStyle(.tertiary)
+            }
+          }
+          .contentShape(Rectangle())
+          .padding(.vertical, 8)
+        }
+        .buttonStyle(.plain)
+        if choice.id != choices.last?.id {
+          Divider()
+        }
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func loadingArgumentInput(_ argument: UgotMCPPromptArgumentDescriptor) -> some View {
+    HStack(spacing: 10) {
+      ProgressView()
+      VStack(alignment: .leading, spacing: 2) {
+        Text(argumentTitle(argument))
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+        Text("선택 가능한 대상을 불러오는 중")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    }
+    .padding(.vertical, 6)
+  }
+
+  @ViewBuilder
+  private func multiSelectInput(
+    _ argument: UgotMCPPromptArgumentDescriptor,
+    choices: [Choice],
+    showHeader: Bool = true
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      if showHeader {
+        HStack(spacing: 6) {
+          Text(argumentTitle(argument))
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+          if argument.isRequired {
+            Text("필수")
+              .font(.caption2.weight(.bold))
+              .foregroundStyle(.orange)
+          }
+        }
+      }
+      ForEach(choices) { choice in
+        Toggle(choice.label, isOn: multiSelectBinding(for: argument.name, value: choice.value))
+      }
+      if !argument.summary.isEmpty {
+        Text(argument.summary)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    }
+    .padding(.vertical, 4)
+  }
+
+  private var visibleArguments: [UgotMCPPromptArgumentDescriptor] {
+    prompt.arguments.filter { !isSystemArgument($0) }
+  }
+
+  private var cleanedValues: [String: String] {
+    values.reduce(into: [String: String]()) { result, pair in
+      let value = pair.value.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !value.isEmpty {
+        result[pair.key] = value
+      }
+    }
+  }
+
+  private var canAttach: Bool {
+    visibleArguments.allSatisfy { argument in
+      !argument.isRequired || !(values[argument.name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+  }
+
+  private func binding(for name: String) -> Binding<String> {
+    Binding(
+      get: { values[name] ?? defaultValue(for: name) },
+      set: { values[name] = $0 }
+    )
+  }
+
+  private func completionSearchBinding(for name: String) -> Binding<String> {
+    Binding(
+      get: { completionSearchText[name] ?? "" },
+      set: { completionSearchText[name] = $0 }
+    )
+  }
+
+  private func boolBinding(for name: String) -> Binding<Bool> {
+    Binding(
+      get: { (values[name] ?? defaultValue(for: name)).lowercased() != "false" },
+      set: { values[name] = $0 ? "true" : "false" }
+    )
+  }
+
+  private func multiSelectBinding(for name: String, value: String) -> Binding<Bool> {
+    Binding(
+      get: { selectedValues(for: name).contains(value) },
+      set: { isOn in
+        var selected = selectedValues(for: name)
+        if isOn {
+          selected.append(value)
+        } else {
+          selected.removeAll { $0 == value }
+        }
+        let deduped = selected.reduce(into: [String]()) { result, item in
+          if !result.contains(item) { result.append(item) }
+        }
+        values[name] = deduped.joined(separator: ", ")
+      }
+    )
+  }
+
+  private func selectedValues(for name: String) -> [String] {
+    (values[name] ?? "")
+      .split(separator: ",")
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+  }
+
+  private func argumentTitle(_ argument: UgotMCPPromptArgumentDescriptor) -> String {
+    switch argument.name {
+    case "tone": return "톤"
+    case "focus": return "초점"
+    case "context": return "맥락"
+    case "members": return "대상"
+    case "target_name": return "대상"
+    case "include_examples": return "예시 포함"
+    default:
+      return argument.name.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+  }
+
+  private func isSystemArgument(_ argument: UgotMCPPromptArgumentDescriptor) -> Bool {
+    let name = argument.name.lowercased()
+    if ["language", "locale", "openai/locale"].contains(name) {
+      return true
+    }
+    if name == "target_name" {
+      return false
+    }
+    if name.contains("target") && argument.summary.localizedCaseInsensitiveContains("widget") && hasAutomaticArgument(for: argument.name) {
+      return true
+    }
+    return false
+  }
+
+  private func hasAutomaticArgument(for name: String) -> Bool {
+    !(automaticArguments[name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  private func isBooleanArgument(_ name: String) -> Bool {
+    ["include_examples"].contains(name.lowercased()) || name.lowercased().hasPrefix("include_")
+  }
+
+  private func isMultiSelectArgument(_ name: String) -> Bool {
+    let lowercased = name.lowercased()
+    return ["members", "member_names", "participants", "people", "targets"].contains(lowercased) ||
+      lowercased.hasSuffix("_members") ||
+      lowercased.hasSuffix("_names")
+  }
+
+  private func shouldLoadCompletion(for argument: UgotMCPPromptArgumentDescriptor) -> Bool {
+    if isBooleanArgument(argument.name) { return false }
+    if choices(for: argument.name) != nil { return false }
+    return true
+  }
+
+  @MainActor
+  private func loadCompletionChoices() async {
+    let arguments = visibleArguments.filter(shouldLoadCompletion(for:))
+    guard !arguments.isEmpty else { return }
+
+    for argument in arguments {
+      await reloadCompletionChoices(for: argument)
+    }
+  }
+
+  @MainActor
+  private func reloadCompletionChoices(for argument: UgotMCPPromptArgumentDescriptor) async {
+    let name = argument.name
+    loadingCompletionNames.insert(name)
+    let partialValue = completionSearchText[name]?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let result = await onCompleteArgument(
+      prompt,
+      name,
+      partialValue ?? "",
+      cleanedValues
+    )
+    let mappedChoices = stableCompletionChoices(
+      result.values,
+      selectedValue: values[name] ?? defaultValue(for: name)
+    )
+    completionResults[name] = result
+    completionChoices[name] = mappedChoices
+    completedCompletionNames.insert(name)
+    loadingCompletionNames.remove(name)
+  }
+
+  private func stableCompletionChoices(
+    _ values: [String],
+    selectedValue: String
+  ) -> [Choice] {
+    let selected = selectedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    var seen = Set<String>()
+    var choices = values.compactMap { raw -> Choice? in
+      let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !value.isEmpty else { return nil }
+      let key = value.lowercased()
+      guard seen.insert(key).inserted else { return nil }
+      return Choice(label: value, value: value)
+    }
+    if !selected.isEmpty {
+      let key = selected.lowercased()
+      if seen.insert(key).inserted {
+        choices.append(Choice(label: selected, value: selected))
+      }
+    }
+    return choices
+  }
+
+  private func choices(for name: String) -> [Choice]? {
+    switch name.lowercased() {
+    case "tone":
+      return [
+        Choice(label: "실용적", value: "practical"),
+        Choice(label: "따뜻하게", value: "warm"),
+        Choice(label: "간결하게", value: "concise"),
+        Choice(label: "자세히", value: "detailed"),
+      ]
+    case "focus":
+      return [
+        Choice(label: "전체", value: "overall"),
+        Choice(label: "직업", value: "career"),
+        Choice(label: "관계", value: "relationship"),
+        Choice(label: "건강", value: "health"),
+        Choice(label: "시기", value: "timing"),
+      ]
+    case "context":
+      return [
+        Choice(label: "관계", value: "relationship"),
+        Choice(label: "팀워크", value: "teamwork"),
+        Choice(label: "가족", value: "family"),
+      ]
+    default:
+      return nil
+    }
+  }
+
+  private func defaultValue(for name: String) -> String {
+    switch name.lowercased() {
+    case "language", "locale", "openai/locale":
+      return UgotMCPLocale.preferredLanguageTag.split(separator: "-").first.map(String.init) ?? UgotMCPLocale.preferredLanguageTag
+    case "tone": return "practical"
+    case "focus": return "overall"
+    case "context": return "relationship"
+    case "include_examples": return "true"
+    default: return ""
+    }
+  }
+
+  private static func defaultValues(
+    for prompt: UgotMCPPromptDescriptor,
+    automaticArguments: [String: String] = [:]
+  ) -> [String: String] {
+    var values: [String: String] = [:]
+    for argument in prompt.arguments {
+      let lowercased = argument.name.lowercased()
+      switch lowercased {
+      case "language", "locale", "openai/locale":
+        values[argument.name] = UgotMCPLocale.preferredLanguageTag.split(separator: "-").first.map(String.init) ?? UgotMCPLocale.preferredLanguageTag
+      case "tone":
+        values[argument.name] = "practical"
+      case "focus":
+        values[argument.name] = "overall"
+      case "context":
+        values[argument.name] = "relationship"
+      case "include_examples":
+        values[argument.name] = "true"
+      default:
+        values[argument.name] = ""
+      }
+    }
+    for (key, value) in automaticArguments {
+      let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !trimmed.isEmpty {
+        values[key] = trimmed
+      }
+    }
+    return values
   }
 }
 
@@ -3808,13 +5622,17 @@ private struct ChatComposerBar: View {
   let isVoiceSpeaking: Bool
   let voiceLevel: CGFloat
   let mcpPromptItems: [UgotMCPPromptDescriptor]
+  let mcpResourceItems: [UgotMCPResourceDescriptor]
+  @Binding var mcpContextAttachments: [UgotMCPContextAttachment]
   let isLoadingMCPPrompts: Bool
   let onRecordAudio: () -> Void
   let onVoiceInput: () -> Void
   let onSelectMCPPrompt: (UgotMCPPromptDescriptor) -> Void
+  let onSelectMCPResource: (UgotMCPResourceDescriptor) -> Void
   let onSend: (String) -> Void
 
   @State private var draft: String
+  @State private var previewedMCPContextAttachment: UgotMCPContextAttachment?
   @FocusState private var isFocused: Bool
 
   init(
@@ -3833,10 +5651,13 @@ private struct ChatComposerBar: View {
     isVoiceSpeaking: Bool,
     voiceLevel: CGFloat,
     mcpPromptItems: [UgotMCPPromptDescriptor],
+    mcpResourceItems: [UgotMCPResourceDescriptor],
+    mcpContextAttachments: Binding<[UgotMCPContextAttachment]>,
     isLoadingMCPPrompts: Bool,
     onRecordAudio: @escaping () -> Void,
     onVoiceInput: @escaping () -> Void,
     onSelectMCPPrompt: @escaping (UgotMCPPromptDescriptor) -> Void,
+    onSelectMCPResource: @escaping (UgotMCPResourceDescriptor) -> Void,
     onSend: @escaping (String) -> Void
   ) {
     self.draftSeed = draftSeed
@@ -3854,10 +5675,13 @@ private struct ChatComposerBar: View {
     self.isVoiceSpeaking = isVoiceSpeaking
     self.voiceLevel = voiceLevel
     self.mcpPromptItems = mcpPromptItems
+    self.mcpResourceItems = mcpResourceItems
+    _mcpContextAttachments = mcpContextAttachments
     self.isLoadingMCPPrompts = isLoadingMCPPrompts
     self.onRecordAudio = onRecordAudio
     self.onVoiceInput = onVoiceInput
     self.onSelectMCPPrompt = onSelectMCPPrompt
+    self.onSelectMCPResource = onSelectMCPResource
     self.onSend = onSend
     _draft = State(initialValue: draftSeed)
   }
@@ -3912,10 +5736,18 @@ private struct ChatComposerBar: View {
       draft = draftSeed
       isFocused = true
     }
+    .sheet(item: $previewedMCPContextAttachment) { attachment in
+      MCPContextAttachmentPreviewSheet(attachment: attachment)
+        .presentationDetents([.medium, .large])
+    }
   }
 
   private var canSend: Bool {
-    !isGenerating && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
+    !isGenerating && (
+      !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+        !attachments.isEmpty ||
+        !mcpContextAttachments.isEmpty
+    )
   }
 
   private var voiceButtonSymbol: String {
@@ -3962,13 +5794,20 @@ private struct ChatComposerBar: View {
 
   @ViewBuilder
   private var attachmentStrip: some View {
-    if !attachments.isEmpty {
+    if !attachments.isEmpty || !mcpContextAttachments.isEmpty {
       ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 8) {
           ForEach(attachments) { attachment in
             AttachmentChip(attachment: attachment) {
               attachments.removeAll { $0.id == attachment.id }
             }
+          }
+          ForEach(mcpContextAttachments) { attachment in
+            MCPContextAttachmentChip(
+              attachment: attachment,
+              onPreview: { previewedMCPContextAttachment = attachment },
+              onRemove: { mcpContextAttachments.removeAll { $0.id == attachment.id } }
+            )
           }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -4015,31 +5854,42 @@ private struct ChatComposerBar: View {
 
   private var mcpPromptMenu: some View {
     Menu {
-      if isLoadingMCPPrompts && mcpPromptItems.isEmpty {
-        Label("프롬프트 불러오는 중", systemImage: "hourglass")
-      } else if mcpPromptItems.isEmpty {
-        Label("사용 가능한 MCP 프롬프트 없음", systemImage: "text.badge.xmark")
+      if isLoadingMCPPrompts && mcpPromptItems.isEmpty && mcpResourceItems.isEmpty {
+        Label("MCP 항목 불러오는 중", systemImage: "hourglass")
+      } else if mcpPromptItems.isEmpty && mcpResourceItems.isEmpty {
+        Label("사용 가능한 MCP 항목 없음", systemImage: "text.badge.xmark")
       } else {
         ForEach(groupedPromptConnectors, id: \.connectorId) { group in
-          Section(group.connectorTitle) {
+          Section("\(group.connectorTitle) · 프롬프트") {
             ForEach(group.items) { item in
               Button {
                 onSelectMCPPrompt(item)
               } label: {
-                Label(item.title, systemImage: item.connectorSymbol)
+                Label(item.title, systemImage: "text.badge.star")
+              }
+            }
+          }
+        }
+        ForEach(groupedResourceConnectors, id: \.connectorId) { group in
+          Section("\(group.connectorTitle) · 리소스") {
+            ForEach(group.items) { item in
+              Button {
+                onSelectMCPResource(item)
+              } label: {
+                Label(item.title, systemImage: resourceSymbol(for: item))
               }
             }
           }
         }
       }
     } label: {
-      Image(systemName: isLoadingMCPPrompts ? "text.badge.clock" : "text.badge.star")
+      Image(systemName: isLoadingMCPPrompts ? "square.stack.3d.up.badge.clock" : "square.stack.3d.up")
         .font(.system(size: 17, weight: .semibold))
-        .foregroundStyle(mcpPromptItems.isEmpty && !isLoadingMCPPrompts ? Color.secondary : Color.accentColor)
+        .foregroundStyle(mcpPromptItems.isEmpty && mcpResourceItems.isEmpty && !isLoadingMCPPrompts ? Color.secondary : Color.accentColor)
         .frame(width: 32, height: 32)
         .background(Color(.tertiarySystemFill), in: Circle())
     }
-    .accessibilityLabel("MCP prompts")
+    .accessibilityLabel("MCP prompts and resources")
   }
 
   private var groupedPromptConnectors: [PromptConnectorGroup] {
@@ -4054,12 +5904,42 @@ private struct ChatComposerBar: View {
       }
       .sorted { $0.connectorTitle < $1.connectorTitle }
   }
+
+  private var groupedResourceConnectors: [ResourceConnectorGroup] {
+    Dictionary(grouping: mcpResourceItems, by: \.connectorId)
+      .compactMap { connectorId, items -> ResourceConnectorGroup? in
+        guard let first = items.first else { return nil }
+        return ResourceConnectorGroup(
+          connectorId: connectorId,
+          connectorTitle: first.connectorTitle,
+          items: items.sorted { $0.title < $1.title }
+        )
+      }
+      .sorted { $0.connectorTitle < $1.connectorTitle }
+  }
+
+  private func resourceSymbol(for item: UgotMCPResourceDescriptor) -> String {
+    let mimeType = (item.mimeType ?? "").lowercased()
+    if mimeType.contains("markdown") { return "doc.richtext" }
+    if mimeType.hasPrefix("text/") { return "doc.text" }
+    if mimeType.hasPrefix("image/") { return "photo" }
+    if mimeType.hasPrefix("audio/") { return "waveform" }
+    if mimeType.hasPrefix("video/") { return "film" }
+    return "doc"
+  }
 }
 
 private struct PromptConnectorGroup: Hashable {
   let connectorId: String
   let connectorTitle: String
   let items: [UgotMCPPromptDescriptor]
+}
+
+
+private struct ResourceConnectorGroup: Hashable {
+  let connectorId: String
+  let connectorTitle: String
+  let items: [UgotMCPResourceDescriptor]
 }
 
 private struct WidgetPreview: View, Equatable {

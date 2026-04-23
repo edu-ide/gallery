@@ -3,16 +3,22 @@ import GallerySharedCore
 
 struct GalleryHomeView: View {
   @ObservedObject var authViewModel: UgotAuthViewModel
-  @State private var selectedConnectorIds: Set<String> = Set(GalleryConnector.defaultSelectedIds)
+  @State private var selectedConnectorIds: Set<String> = GalleryConnectorSelectionStore.loadSelectedIds(defaults: GalleryConnector.defaultSelectedIds)
   @State private var recentSessions: [GallerySessionSummary] = []
   @State private var selectedModelId: String = GalleryModel.samples[0].id
   @State private var newChatSessionId: String?
   @State private var recentSessionsRefreshTask: Task<Void, Never>?
+  @State private var showConnectorSettings = false
+  @State private var connectorRegistryRevision = 0
 
   private let models = GalleryModel.samples
   private let agentSkills = GalleryAgentSkill.samples
-  private let connectors = GalleryConnector.samples
   private let sessionStore = GallerySessionStore()
+
+  private var connectors: [GalleryConnector] {
+    _ = connectorRegistryRevision
+    return GalleryConnector.samples
+  }
 
   private var selectedModel: GalleryModel {
     models.first { $0.id == selectedModelId } ?? models[0]
@@ -34,18 +40,38 @@ struct GalleryHomeView: View {
         VStack(alignment: .leading, spacing: 24) {
           heroCard
           startChatSection
+          controlsSection
           recentSessionsSection
         }
         .padding()
       }
       .background(Color(.systemGroupedBackground))
       .onAppear { refreshRecentSessions() }
-    .toolbar {
-      ToolbarItem(placement: .topBarTrailing) {
-        Button("Sign out") { authViewModel.signOut() }
-          .font(.caption.weight(.semibold))
+      .onChange(of: selectedConnectorIds) { _, value in
+        GalleryConnectorSelectionStore.saveSelectedIds(value)
       }
-    }
+      .sheet(isPresented: $showConnectorSettings) {
+        NavigationStack {
+          GalleryConnectorSettingsView(
+            selectedConnectorIds: $selectedConnectorIds,
+            onChanged: { connectorRegistryRevision += 1 }
+          )
+        }
+      }
+      .toolbar {
+        ToolbarItem(placement: .topBarLeading) {
+          Button {
+            showConnectorSettings = true
+          } label: {
+            Label("Connectors", systemImage: "externaldrive.connected.to.line.below")
+          }
+          .font(.caption.weight(.semibold))
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+          Button("Sign out") { authViewModel.signOut() }
+            .font(.caption.weight(.semibold))
+        }
+      }
     }
   }
 
@@ -208,6 +234,14 @@ struct GalleryHomeView: View {
     VStack(alignment: .leading, spacing: 10) {
       Text(UnifiedChatChromePolicyKt.buildConnectorLauncherLabel(activeConnectorCount: Int32(selectedConnectorIds.count)))
         .font(.subheadline.weight(.semibold))
+      HStack {
+        Text("켜진 connector만 도구 검색에 사용돼요.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        Spacer()
+        Button("설정") { showConnectorSettings = true }
+          .font(.caption.weight(.semibold))
+      }
       FlowLayout(spacing: 10) {
         ForEach(connectors) { connector in
           Button { toggle(connector.id) } label: {
@@ -318,6 +352,7 @@ struct GalleryHomeView: View {
     } else {
       selectedConnectorIds.insert(connectorId)
     }
+    GalleryConnectorSelectionStore.saveSelectedIds(selectedConnectorIds)
   }
 }
 
@@ -437,4 +472,223 @@ struct FlowLayout<Content: View>: View {
 
 #Preview {
   GalleryHomeView(authViewModel: UgotAuthViewModel())
+}
+
+struct GalleryConnectorSettingsView: View {
+  @Binding var selectedConnectorIds: Set<String>
+  let onChanged: () -> Void
+
+  @Environment(\.dismiss) private var dismiss
+  @State private var title = ""
+  @State private var endpoint = ""
+  @State private var summary = ""
+  @State private var authMode: GalleryConnector.AuthMode = .none
+  @State private var bearerToken = ""
+  @State private var errorMessage: String?
+  @State private var testingConnectorId: String?
+  @State private var connectionMessages: [String: String] = [:]
+
+  private var connectors: [GalleryConnector] { GalleryConnector.samples }
+
+  var body: some View {
+    Form {
+      Section {
+        ForEach(connectors) { connector in
+          HStack(alignment: .top, spacing: 10) {
+            Image(systemName: connector.symbol)
+              .foregroundStyle(.secondary)
+              .frame(width: 22)
+            VStack(alignment: .leading, spacing: 4) {
+              Text(connector.title)
+                .font(.subheadline.weight(.semibold))
+              Text(connector.endpoint)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+              if !connector.summary.isEmpty {
+                Text(connector.summary)
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+                  .lineLimit(2)
+              }
+              if let message = connectionMessages[connector.id] {
+                Text(message)
+                  .font(.caption2)
+                  .foregroundStyle(message.hasPrefix("OK") ? .green : .secondary)
+                  .lineLimit(2)
+              }
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 8) {
+              Toggle("", isOn: Binding(
+                get: { selectedConnectorIds.contains(connector.id) },
+                set: { active in
+                  if active {
+                    selectedConnectorIds.insert(connector.id)
+                  } else {
+                    selectedConnectorIds.remove(connector.id)
+                  }
+                  GalleryConnectorSelectionStore.saveSelectedIds(selectedConnectorIds)
+                }
+              ))
+              .labelsHidden()
+              Button {
+                test(connector)
+              } label: {
+                if testingConnectorId == connector.id {
+                  ProgressView()
+                } else {
+                  Text("Test")
+                }
+              }
+              .buttonStyle(.borderless)
+              .font(.caption.weight(.semibold))
+              .disabled(testingConnectorId != nil)
+            }
+          }
+          .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if !connector.isBuiltIn {
+              Button(role: .destructive) {
+                delete(connector)
+              } label: {
+                Label("Delete", systemImage: "trash")
+              }
+            }
+          }
+        }
+      } header: {
+        Text("Active connectors")
+      } footer: {
+        Text("외부 MCP connector는 표준 JSON-RPC HTTP/SSE MCP endpoint를 입력해 추가해요. Built-in connector는 삭제할 수 없어요.")
+      }
+
+      Section {
+        TextField("Name", text: $title)
+          .textInputAutocapitalization(.words)
+        TextField("https://example.com/mcp", text: $endpoint)
+          .keyboardType(.URL)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+        TextField("Search hint / description", text: $summary, axis: .vertical)
+          .lineLimit(2...4)
+        Picker("Auth", selection: $authMode) {
+          ForEach(GalleryConnector.AuthMode.allCases) { mode in
+            Text(mode.title).tag(mode)
+          }
+        }
+        if authMode == .bearer {
+          SecureField("Bearer token", text: $bearerToken)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+        }
+        if let errorMessage {
+          Text(errorMessage)
+            .font(.caption)
+            .foregroundStyle(.red)
+        }
+        Button {
+          addConnector()
+        } label: {
+          Label("Add connector", systemImage: "plus.circle.fill")
+        }
+        .disabled(!canAdd)
+      } header: {
+        Text("Add external MCP connector")
+      } footer: {
+        Text("가능하면 connector 서버가 localized title/description/searchKeywords를 제공해야 다국어 검색이 안정적이에요.")
+      }
+    }
+    .navigationTitle("Connectors")
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar {
+      ToolbarItem(placement: .topBarTrailing) {
+        Button("Done") { dismiss() }
+      }
+    }
+  }
+
+  private var canAdd: Bool {
+    !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+      validatedEndpointURL != nil &&
+      (authMode != .bearer || !bearerToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+  }
+
+  private var validatedEndpointURL: URL? {
+    let trimmed = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let url = URL(string: trimmed),
+          let scheme = url.scheme?.lowercased(),
+          ["https", "http"].contains(scheme),
+          url.host?.isEmpty == false else {
+      return nil
+    }
+    return url
+  }
+
+  private func addConnector() {
+    guard let url = validatedEndpointURL else {
+      errorMessage = "MCP endpoint URL을 확인해 주세요."
+      return
+    }
+    let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    let cleanSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+    let connector = GalleryConnector(
+      id: GalleryConnector.customId(for: url.absoluteString),
+      title: cleanTitle,
+      symbol: "externaldrive.connected.to.line.below",
+      summary: cleanSummary.isEmpty ? "External MCP connector" : cleanSummary,
+      endpoint: url.absoluteString,
+      authMode: authMode,
+      bearerToken: authMode == .bearer ? bearerToken : nil
+    )
+    GalleryConnectorStore.upsert(connector)
+    selectedConnectorIds.insert(connector.id)
+    GalleryConnectorSelectionStore.saveSelectedIds(selectedConnectorIds)
+    title = ""
+    endpoint = ""
+    summary = ""
+    authMode = .none
+    bearerToken = ""
+    errorMessage = nil
+    onChanged()
+  }
+
+  private func delete(_ connector: GalleryConnector) {
+    GalleryConnectorStore.delete(id: connector.id)
+    selectedConnectorIds.remove(connector.id)
+    GalleryConnectorSelectionStore.saveSelectedIds(selectedConnectorIds)
+    connectionMessages.removeValue(forKey: connector.id)
+    onChanged()
+  }
+
+  private func test(_ connector: GalleryConnector) {
+    testingConnectorId = connector.id
+    connectionMessages[connector.id] = "연결 확인 중..."
+    Task { await runConnectionTest(connector) }
+  }
+
+  @MainActor
+  private func runConnectionTest(_ connector: GalleryConnector) async {
+    defer { testingConnectorId = nil }
+    guard let endpoint = URL(string: connector.endpoint) else {
+      connectionMessages[connector.id] = "Invalid endpoint URL"
+      return
+    }
+    let ugotToken = try? await UgotAuthStore.validAccessToken()
+    if connector.authMode == .ugotBearer, ugotToken == nil {
+      connectionMessages[connector.id] = "UGOT login token이 필요해요."
+      return
+    }
+    do {
+      let client = UgotMCPRuntimeClient.make(
+        connectorId: connector.id,
+        endpoint: endpoint,
+        accessToken: ugotToken ?? ""
+      )
+      try await client.initialize()
+      let tools = try await client.listTools()
+      connectionMessages[connector.id] = "OK · \(tools.count) tools"
+    } catch {
+      connectionMessages[connector.id] = "Failed · \(error.localizedDescription)"
+    }
+  }
 }

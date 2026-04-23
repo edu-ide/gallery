@@ -1,5 +1,6 @@
 import Foundation
 import GallerySharedCore
+import Security
 import SwiftUI
 
 struct GalleryModel: Identifiable, Hashable {
@@ -185,12 +186,65 @@ extension GalleryTask {
   }
 }
 
-struct GalleryConnector: Identifiable, Hashable {
+struct GalleryConnector: Identifiable, Hashable, Codable {
+  enum AuthMode: String, Codable, CaseIterable, Identifiable {
+    case none
+    case ugotBearer
+    case bearer
+
+    var id: String { rawValue }
+
+    var title: String {
+      switch self {
+      case .none: return "No auth"
+      case .ugotBearer: return "UGOT login token"
+      case .bearer: return "Bearer token"
+      }
+    }
+  }
+
   let id: String
   let title: String
   let symbol: String
   let summary: String
   let endpoint: String
+  let authMode: AuthMode
+  let bearerToken: String?
+
+  init(
+    id: String,
+    title: String,
+    symbol: String,
+    summary: String,
+    endpoint: String,
+    authMode: AuthMode = .none,
+    bearerToken: String? = nil
+  ) {
+    self.id = id
+    self.title = title
+    self.symbol = symbol
+    self.summary = summary
+    self.endpoint = endpoint
+    self.authMode = authMode
+    self.bearerToken = bearerToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+      ? bearerToken
+      : nil
+  }
+
+  var isBuiltIn: Bool {
+    GalleryConnector.builtInConnectors.contains { $0.id == id }
+  }
+
+  func bearerTokenForRequest(ugotAccessToken: String) -> String? {
+    switch authMode {
+    case .none:
+      return nil
+    case .ugotBearer:
+      return ugotAccessToken
+    case .bearer:
+      return bearerToken
+    }
+  }
 }
 
 extension GalleryConnector {
@@ -201,22 +255,28 @@ extension GalleryConnector {
     ?? "embedded://mail-mcp-rs"
   static let defaultSelectedIds = [fortuneMcpId, mailMcpId]
 
-  static let samples: [GalleryConnector] = [
+  static let builtInConnectors: [GalleryConnector] = [
     GalleryConnector(
       id: fortuneMcpId,
       title: "UGOT Fortune",
       symbol: "sparkles",
       summary: "오늘의 운세, 사주, 궁합, 저장 프로필, 기본 사용자 변경을 도와줘요.",
-      endpoint: fortuneMcpEndpoint
+      endpoint: fortuneMcpEndpoint,
+      authMode: .ugotBearer
     ),
     GalleryConnector(
       id: mailMcpId,
       title: "UGOT Mail",
       symbol: "envelope",
-      summary: "최근 메일 검색, 요약, 라벨 정리, 답장 초안을 도와줘요.",
-      endpoint: mailMcpEndpoint
+      summary: "메일 계정 연결 상태, OAuth 연동, 최근 메일 검색, 요약, 라벨 정리, 답장 초안을 도와줘요.",
+      endpoint: mailMcpEndpoint,
+      authMode: .none
     ),
   ]
+
+  static var samples: [GalleryConnector] {
+    builtInConnectors + GalleryConnectorStore.loadCustomConnectors()
+  }
 
   static func connector(for id: String) -> GalleryConnector? {
     samples.first { $0.id == id }
@@ -225,7 +285,165 @@ extension GalleryConnector {
   static func endpoint(for id: String) -> String? {
     connector(for: id)?.endpoint
   }
+
+  static func customId(for endpoint: String) -> String {
+    let trimmed = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+    return "custom.mcp/" + Data(trimmed.utf8).base64EncodedString()
+      .replacingOccurrences(of: "+", with: "-")
+      .replacingOccurrences(of: "/", with: "_")
+      .replacingOccurrences(of: "=", with: "")
+  }
 }
+
+enum GalleryConnectorStore {
+  private static let key = "gallery.customMCPConnectors.v1"
+
+  static func loadCustomConnectors() -> [GalleryConnector] {
+    guard let data = UserDefaults.standard.data(forKey: key),
+          let decoded = try? JSONDecoder().decode([GalleryConnector].self, from: data) else {
+      return []
+    }
+    let builtInIds = Set(GalleryConnector.builtInConnectors.map(\.id))
+    let valid = decoded.filter { connector in
+      !builtInIds.contains(connector.id) && URL(string: connector.endpoint) != nil
+    }
+    var migratedLegacySecret = false
+    let hydrated = valid.map { connector in
+      guard connector.authMode == .bearer else { return connector.strippingSecret() }
+      if let legacyToken = connector.bearerToken?.galleryNilIfBlank {
+        GalleryConnectorSecretStore.saveBearerToken(legacyToken, connectorId: connector.id)
+        migratedLegacySecret = true
+      }
+      let token = GalleryConnectorSecretStore.loadBearerToken(connectorId: connector.id)
+      return connector.withBearerToken(token)
+    }
+    if migratedLegacySecret {
+      saveCustomConnectors(hydrated)
+    }
+    return hydrated
+  }
+
+  static func saveCustomConnectors(_ connectors: [GalleryConnector]) {
+    let builtInIds = Set(GalleryConnector.builtInConnectors.map(\.id))
+    let sanitized = connectors.filter { connector in
+      !builtInIds.contains(connector.id) && URL(string: connector.endpoint) != nil
+    }.map { $0.strippingSecret() }
+    guard let data = try? JSONEncoder().encode(sanitized) else { return }
+    UserDefaults.standard.set(data, forKey: key)
+  }
+
+  static func upsert(_ connector: GalleryConnector) {
+    if connector.authMode == .bearer, let bearerToken = connector.bearerToken?.galleryNilIfBlank {
+      GalleryConnectorSecretStore.saveBearerToken(bearerToken, connectorId: connector.id)
+    } else {
+      GalleryConnectorSecretStore.deleteBearerToken(connectorId: connector.id)
+    }
+    var connectors = loadCustomConnectors()
+    connectors.removeAll { $0.id == connector.id }
+    connectors.append(connector)
+    saveCustomConnectors(connectors.sorted { $0.title < $1.title })
+  }
+
+  static func delete(id: String) {
+    GalleryConnectorSecretStore.deleteBearerToken(connectorId: id)
+    var connectors = loadCustomConnectors()
+    connectors.removeAll { $0.id == id }
+    saveCustomConnectors(connectors)
+  }
+}
+
+private extension GalleryConnector {
+  func strippingSecret() -> GalleryConnector {
+    GalleryConnector(
+      id: id,
+      title: title,
+      symbol: symbol,
+      summary: summary,
+      endpoint: endpoint,
+      authMode: authMode,
+      bearerToken: nil
+    )
+  }
+
+  func withBearerToken(_ token: String?) -> GalleryConnector {
+    GalleryConnector(
+      id: id,
+      title: title,
+      symbol: symbol,
+      summary: summary,
+      endpoint: endpoint,
+      authMode: authMode,
+      bearerToken: token
+    )
+  }
+}
+
+enum GalleryConnectorSelectionStore {
+  private static let key = "gallery.selectedMCPConnectorIds.v1"
+
+  static func loadSelectedIds(defaults: [String]) -> Set<String> {
+    guard let values = UserDefaults.standard.array(forKey: key) as? [String] else {
+      return Set(defaults)
+    }
+    let availableIds = Set(GalleryConnector.samples.map(\.id))
+    let selected = Set(values).intersection(availableIds)
+    return selected.isEmpty ? Set(defaults) : selected
+  }
+
+  static func saveSelectedIds(_ ids: Set<String>) {
+    let availableIds = Set(GalleryConnector.samples.map(\.id))
+    let sanitized = ids.intersection(availableIds).sorted()
+    UserDefaults.standard.set(sanitized, forKey: key)
+  }
+}
+
+private enum GalleryConnectorSecretStore {
+  private static let service = "uk.ugot.galleryios.mcp-connectors"
+
+  static func saveBearerToken(_ token: String, connectorId: String) {
+    let data = Data(token.utf8)
+    deleteBearerToken(connectorId: connectorId)
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: service,
+      kSecAttrAccount as String: connectorId,
+      kSecValueData as String: data,
+      kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+    ]
+    SecItemAdd(query as CFDictionary, nil)
+  }
+
+  static func loadBearerToken(connectorId: String) -> String? {
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: service,
+      kSecAttrAccount as String: connectorId,
+      kSecReturnData as String: true,
+      kSecMatchLimit as String: kSecMatchLimitOne,
+    ]
+    var item: CFTypeRef?
+    let status = SecItemCopyMatching(query as CFDictionary, &item)
+    guard status == errSecSuccess, let data = item as? Data else { return nil }
+    return String(data: data, encoding: .utf8)?.galleryNilIfBlank
+  }
+
+  static func deleteBearerToken(connectorId: String) {
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: service,
+      kSecAttrAccount as String: connectorId,
+    ]
+    SecItemDelete(query as CFDictionary)
+  }
+}
+
+private extension String {
+  var galleryNilIfBlank: String? {
+    let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
+}
+
 
 struct GalleryAgentSkill: Identifiable, Hashable {
   let id: String
