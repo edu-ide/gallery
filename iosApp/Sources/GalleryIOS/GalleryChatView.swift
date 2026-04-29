@@ -1920,10 +1920,7 @@ struct GalleryChatView: View {
           lines.append("  - id: \(uri)")
         }
         if !attachment.arguments.isEmpty {
-          let args = attachment.arguments
-            .sorted { $0.key < $1.key }
-            .map { "\($0.key)=\($0.value)" }
-            .joined(separator: ", ")
+          let args = Self.mcpArgumentsJSONObjectString(attachment.arguments)
           lines.append("  - selected arguments: \(args)")
         }
         lines.append("  - intent effect: \(attachment.intentEffect)")
@@ -2005,6 +2002,19 @@ struct GalleryChatView: View {
       }
       return "\(header)\n\n\(attachment.contextText)"
     }.joined(separator: "\n\n---\n\n")
+  }
+
+  private static func mcpArgumentsJSONObjectString(_ arguments: [String: String]) -> String {
+    guard !arguments.isEmpty,
+          JSONSerialization.isValidJSONObject(arguments),
+          let data = try? JSONSerialization.data(withJSONObject: arguments, options: [.sortedKeys]),
+          let json = String(data: data, encoding: .utf8) else {
+      return arguments
+        .sorted { $0.key < $1.key }
+        .map { "\($0.key)=\($0.value)" }
+        .joined(separator: ", ")
+    }
+    return json
   }
 
   private var currentWidgetModelContext: String? {

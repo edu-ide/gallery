@@ -765,7 +765,7 @@ private enum UgotMCPToolMetadataCache {
   // descriptions/search keywords are part of the planner contract; keeping an
   // older persisted catalog can make the host route to a stale/wrong tool even
   // after the MCP server was fixed.
-  private static let persistentPrefix = "ugot.mcp.toolMetadataCache.v6"
+  private static let persistentPrefix = "ugot.mcp.toolMetadataCache.v7"
   private static let lock = NSLock()
   private static var values: [String: (timestamp: Date, tools: [[String: Any]])] = [:]
 
@@ -1389,7 +1389,7 @@ private enum UgotMCPToolPlanner {
       pattern: #"(?im)^\s*[-*]?\s*selected\s+arguments\s*[:：]\s*([^\n]{1,1600})"#,
       in: prompt
     ) {
-      pairs.append(contentsOf: commaSeparatedKeyValuePairs(from: selectedArguments))
+      pairs.append(contentsOf: jsonKeyValuePairs(from: selectedArguments) ?? commaSeparatedKeyValuePairs(from: selectedArguments))
     }
 
     pairs.append(
@@ -1409,20 +1409,42 @@ private enum UgotMCPToolPlanner {
   }
 
   private static func commaSeparatedKeyValuePairs(from text: String) -> [(key: String, value: String)] {
-    text
-      .split(separator: ",")
-      .compactMap { segment -> (key: String, value: String)? in
-        let raw = String(segment)
-        let separators = ["=", ":", "："]
-        guard let separator = separators
-          .compactMap({ raw.range(of: $0) })
-          .min(by: { $0.lowerBound < $1.lowerBound }) else {
-          return nil
-        }
+    var pairs: [(key: String, value: String)] = []
+    for segment in text.split(separator: ",", omittingEmptySubsequences: false) {
+      let raw = String(segment)
+      let separators = ["=", ":", "："]
+      if let separator = separators
+        .compactMap({ raw.range(of: $0) })
+        .min(by: { $0.lowerBound < $1.lowerBound }) {
         let key = String(raw[..<separator.lowerBound])
         let value = String(raw[separator.upperBound...])
-        return (key, value)
+        pairs.append((key, value))
+      } else if let last = pairs.popLast() {
+        pairs.append((last.key, "\(last.value),\(raw)"))
       }
+    }
+    return pairs
+  }
+
+  private static func jsonKeyValuePairs(from text: String) -> [(key: String, value: String)]? {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.hasPrefix("{"), trimmed.hasSuffix("}"),
+          let data = trimmed.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+      return nil
+    }
+    return object.compactMap { key, value -> (key: String, value: String)? in
+      if value is NSNull { return nil }
+      if let string = value as? String {
+        return (key, string)
+      }
+      if JSONSerialization.isValidJSONObject([value]),
+         let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
+         let json = String(data: data, encoding: .utf8) {
+        return (key, json)
+      }
+      return (key, "\(value)")
+    }
   }
 
   private static func regexCaptures(pattern: String, in text: String) -> [String] {
