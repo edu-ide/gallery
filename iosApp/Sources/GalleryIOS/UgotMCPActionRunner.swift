@@ -2800,11 +2800,28 @@ final class UgotMCPConnectorAction {
     }
     let cleanedTexts = texts.compactMap(cleanToolText)
     if !cleanedTexts.isEmpty {
-      return cleanedTexts.joined(separator: "\n\n")
+      var rendered = cleanedTexts.joined(separator: "\n\n")
+      if !containsHTTPURL(rendered),
+         let url = firstHTTPURLString(in: result) {
+        rendered += "\n\n- **Link**: \(url)"
+      }
+      return rendered
     }
     if let structured = result["structuredContent"],
        let markdown = markdownSummary(from: structured) {
       return markdown
+    }
+    if let structured = result["structured_content"],
+       let markdown = markdownSummary(from: structured) {
+      return markdown
+    }
+    if let meta = result["_meta"] as? [String: Any],
+       let structured = meta["structuredContent"] ?? meta["structured_content"],
+       let markdown = markdownSummary(from: structured) {
+      return markdown
+    }
+    if let url = firstHTTPURLString(in: result) {
+      return "- **Link**: \(url)"
     }
     return "MCP에서 \(toolName)을 실행했어요."
   }
@@ -3220,6 +3237,69 @@ final class UgotMCPConnectorAction {
         return "- **\(humanTitle(key))**: \(rendered)"
       }
     return scalarLines.isEmpty ? nil : scalarLines.joined(separator: "\n")
+  }
+
+  private func containsHTTPURL(_ text: String) -> Bool {
+    firstHTTPURLString(in: text) != nil
+  }
+
+  private func firstHTTPURLString(in value: Any, depth: Int = 0) -> String? {
+    guard depth <= 5 else { return nil }
+    if let string = value as? String {
+      return firstHTTPURLString(inText: string)
+    }
+    if let array = value as? [Any] {
+      for item in array {
+        if let found = firstHTTPURLString(in: item, depth: depth + 1) {
+          return found
+        }
+      }
+      return nil
+    }
+    if let dict = value as? [String: Any] {
+      let preferredKeys = [
+        "url", "uri", "href",
+        "authUrl", "auth_url",
+        "authorizationUrl", "authorization_url",
+        "link", "externalUrl", "external_url",
+      ]
+      for key in preferredKeys {
+        if let nested = dict[key],
+           let found = firstHTTPURLString(in: nested, depth: depth + 1) {
+          return found
+        }
+      }
+      for nested in dict.values {
+        if let found = firstHTTPURLString(in: nested, depth: depth + 1) {
+          return found
+        }
+      }
+    }
+    return nil
+  }
+
+  private func firstHTTPURLString(inText text: String) -> String? {
+    guard let regex = try? NSRegularExpression(pattern: #"https?://[^\s<>"'`]+"#) else {
+      return nil
+    }
+    let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+    for match in regex.matches(in: text, range: nsRange) {
+      guard let range = Range(match.range, in: text) else { continue }
+      var raw = String(text[range])
+      let trailingURLPunctuation: Set<Character> = [".", ",", ";", ")", "]", "}", ">", "…"]
+      while let last = raw.last,
+            trailingURLPunctuation.contains(last) {
+        raw.removeLast()
+      }
+      guard let url = URL(string: raw),
+            let scheme = url.scheme?.lowercased(),
+            ["http", "https"].contains(scheme),
+            url.host?.isEmpty == false else {
+        continue
+      }
+      return raw
+    }
+    return nil
   }
 
   private func humanTitle(_ key: String) -> String {

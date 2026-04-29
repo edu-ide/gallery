@@ -377,7 +377,7 @@ final class UgotEmbeddedMailMCPClient {
       "content": [
         [
           "type": "text",
-          "text": "Google OAuth URL generated.",
+          "text": "OAuth URL generated: \(authURL ?? "")",
         ],
       ],
       "structuredContent": structured,
@@ -434,6 +434,10 @@ final class UgotEmbeddedMailMCPClient {
         .kv { display:grid; grid-template-columns:72px 1fr; gap:5px 10px; font-size:13px; }
         .k { color:var(--muted); }
         .v { overflow-wrap:anywhere; }
+        .actions { display:grid; gap:8px; margin-top:10px; }
+        .primary { appearance:none; border:0; border-radius:12px; padding:11px 12px; background:var(--accent); color:white; font-weight:750; font-size:14px; width:100%; text-align:center; }
+        .primary:active { opacity:.78; }
+        .url-copy { font-size:11px; user-select:text; word-break:break-all; }
       </style>
     </head>
     <body>
@@ -449,6 +453,30 @@ final class UgotEmbeddedMailMCPClient {
         const esc = (v) => text(v).replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]));
         const first = (obj, keys) => keys.map(k => obj && obj[k]).find(v => v !== undefined && v !== null && String(v).trim() !== '') || '';
         const arr = (...keys) => keys.flatMap(k => Array.isArray(data[k]) ? data[k] : []);
+        function isHttpUrl(v) {
+          try {
+            const url = new URL(text(v));
+            return url.protocol === 'http:' || url.protocol === 'https:';
+          } catch (_) {
+            return false;
+          }
+        }
+        function openExternal(url) {
+          if (!isHttpUrl(url)) return;
+          try {
+            window.webkit?.messageHandlers?.mcpWidget?.postMessage({ type: 'openExternal', url });
+            return;
+          } catch (_) {}
+          try {
+            window.open(url, '_blank', 'noopener,noreferrer');
+          } catch (_) {
+            window.location.href = url;
+          }
+        }
+        function renderExternalAction(url, label) {
+          if (!isHttpUrl(url)) return '';
+          return `<div class=\"actions\"><button type=\"button\" class=\"primary\" data-open-url=\"${esc(url)}\">${esc(label || '계정 연결 열기')}</button><div class=\"meta url-copy\">${esc(url)}</div></div>`;
+        }
         function userNotice() {
           const raw = text(data.notice);
           if (!raw) return '';
@@ -491,11 +519,12 @@ final class UgotEmbeddedMailMCPClient {
           const rows = [
             ['Email', email],
             ['Provider', provider],
-            ['URL', first(data, ['url','authUrl','auth_url'])],
             ['Access', hasAccess ? '저장됨' : '확인 필요'],
             ['Refresh', hasRefresh ? '저장됨' : '확인 필요'],
           ].filter(([,v]) => text(v).trim() !== '');
-          return userNotice() + `<div class=\"status ${stateClass}\"><span class=\"dot\"></span><span>${esc(stateText)}</span></div><div class=\"item\"><div class=\"kv\">${rows.map(([k,v]) => `<div class=\"k\">${esc(k)}</div><div class=\"v\">${esc(v)}</div>`).join('')}</div></div>`;
+          const url = first(data, ['url','authUrl','auth_url','authorizationUrl','authorization_url']);
+          const providerName = provider || first(data, ['provider']) || '계정';
+          return userNotice() + `<div class=\"status ${stateClass}\"><span class=\"dot\"></span><span>${esc(stateText)}</span></div><div class=\"item\"><div class=\"kv\">${rows.map(([k,v]) => `<div class=\"k\">${esc(k)}</div><div class=\"v\">${esc(v)}</div>`).join('')}</div>${renderExternalAction(url, `${providerName} 연결 열기`)}</div>`;
         }
         function renderMailboxes(items) {
           if (!items.length) return userNotice() + '<div class=\"empty\">표시할 메일함이 없어요.</div>';
@@ -512,6 +541,9 @@ final class UgotEmbeddedMailMCPClient {
         else if (mode === 'mailboxes') root.innerHTML = renderMailboxes(arr('mailboxes','folders'));
         else if (mode === 'detail') root.innerHTML = renderDetail(data.email || data.message);
         else root.innerHTML = renderMessages(arr('emails','messages'));
+        root.querySelectorAll('[data-open-url]').forEach((element) => {
+          element.addEventListener('click', () => openExternal(element.getAttribute('data-open-url') || ''));
+        });
       </script>
     </body>
     </html>

@@ -4430,6 +4430,31 @@ private struct ToolObservationEventRow: View {
         if !cleanOutput.isEmpty {
           metadataBlock(title: "Output", value: cleanOutput)
         }
+        let links = outputLinks
+        if !links.isEmpty {
+          VStack(alignment: .leading, spacing: 6) {
+            Text("Links")
+              .font(.caption2.weight(.semibold))
+              .foregroundStyle(.tertiary)
+            ForEach(Array(links.prefix(3)), id: \.absoluteString) { url in
+              Link(destination: url) {
+                HStack(spacing: 6) {
+                  Image(systemName: "safari")
+                  Text("링크 열기")
+                    .fontWeight(.semibold)
+                  Text(url.host ?? url.absoluteString)
+                    .lineLimit(1)
+                    .foregroundStyle(.secondary)
+                  Spacer(minLength: 0)
+                }
+                .font(.caption2)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 7)
+                .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+              }
+            }
+          }
+        }
       }
       .padding(.top, 6)
     } label: {
@@ -4507,6 +4532,10 @@ private struct ToolObservationEventRow: View {
       .trimmedMiddleForPrompt(limit: 1_200)
   }
 
+  private var outputLinks: [URL] {
+    ExternalURLExtractor.urls(in: transcript.outputText)
+  }
+
   @ViewBuilder
   private func metadataLine(title: String, value: String, monospaced: Bool = false) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -4533,6 +4562,32 @@ private struct ToolObservationEventRow: View {
         .textSelection(.enabled)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+  }
+}
+
+private enum ExternalURLExtractor {
+  static func urls(in text: String) -> [URL] {
+    guard let regex = try? NSRegularExpression(pattern: #"https?://[^\s<>"'`]+"#) else {
+      return []
+    }
+    var seen = Set<String>()
+    let nsRange = NSRange(text.startIndex..<text.endIndex, in: text)
+    let trailingPunctuation: Set<Character> = [".", ",", ";", ")", "]", "}", ">", "…"]
+    return regex.matches(in: text, range: nsRange).compactMap { match -> URL? in
+      guard let range = Range(match.range, in: text) else { return nil }
+      var raw = String(text[range])
+      while let last = raw.last, trailingPunctuation.contains(last) {
+        raw.removeLast()
+      }
+      guard let url = URL(string: raw),
+            let scheme = url.scheme?.lowercased(),
+            ["http", "https"].contains(scheme),
+            url.host?.isEmpty == false,
+            seen.insert(url.absoluteString).inserted else {
+        return nil
+      }
+      return url
     }
   }
 }
