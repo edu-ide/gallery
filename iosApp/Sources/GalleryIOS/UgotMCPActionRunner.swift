@@ -24,6 +24,7 @@ enum UgotMCPActionRunner {
     activeConnectorIds: Set<String>,
     sessionId: String,
     requireToolObservation: Bool = false,
+    toolSelectionHintsByConnectorId: [String: UgotMCPToolSelectionHints] = [:],
     toolPlanningProvider: ToolPlanningProvider? = nil,
     connectorStatusHandler: ConnectorStatusHandler? = nil
   ) async -> GalleryChatActionResult? {
@@ -49,6 +50,7 @@ enum UgotMCPActionRunner {
           connector: connector,
           accessToken: accessToken,
           sessionId: sessionId,
+          toolSelectionHints: toolSelectionHintsByConnectorId[connector.id] ?? .empty,
           toolPlanningProvider: toolPlanningProvider,
           connectorStatusHandler: connectorStatusHandler
         )
@@ -763,7 +765,7 @@ private enum UgotMCPToolMetadataCache {
   // descriptions/search keywords are part of the planner contract; keeping an
   // older persisted catalog can make the host route to a stale/wrong tool even
   // after the MCP server was fixed.
-  private static let persistentPrefix = "ugot.mcp.toolMetadataCache.v5"
+  private static let persistentPrefix = "ugot.mcp.toolMetadataCache.v6"
   private static let lock = NSLock()
   private static var values: [String: (timestamp: Date, tools: [[String: Any]])] = [:]
 
@@ -1098,22 +1100,37 @@ private enum UgotMCPToolPlanner {
     prompt: String,
     tools: [[String: Any]],
     searchIndex: UgotMCPToolSearchIndex? = nil,
-    limit: Int = 18
+    limit: Int = 18,
+    trustToolSelectionHints: Bool = false
   ) -> [[String: Any]] {
     let intent = UgotMCPToolIntent(prompt: prompt)
-    let eligibleTools = (searchIndex?.eligibleTools(query: prompt) ?? tools)
-      .filter { !intent.isIncompatiblePrimaryTool(tool: $0) }
-      .filter { !intent.prefersReadOnlyTool || isReadOnly(tool: $0) }
-      .filter { !intent.requiresPlannerBeforeToolExecution || !isReadOnly(tool: $0) }
-    let searched = (searchIndex ?? UgotMCPToolSearchIndex(tools: tools)).search(query: prompt, limit: limit)
+    let eligibleTools: [[String: Any]]
+    if trustToolSelectionHints {
+      eligibleTools = searchIndex?.eligibleTools(query: prompt, allowIncompatiblePrimaryTools: true) ?? tools
+    } else {
+      eligibleTools = (searchIndex?.eligibleTools(query: prompt) ?? tools)
+        .filter { !intent.isIncompatiblePrimaryTool(tool: $0) }
+        .filter { !intent.prefersReadOnlyTool || isReadOnly(tool: $0) }
+        .filter { !intent.requiresPlannerBeforeToolExecution || !isReadOnly(tool: $0) }
+    }
+    let searched = (searchIndex ?? UgotMCPToolSearchIndex(tools: tools)).search(
+      query: prompt,
+      limit: limit,
+      allowIncompatiblePrimaryTools: trustToolSelectionHints
+    )
     guard !searched.isEmpty else {
       return Array(eligibleTools.prefix(limit))
     }
 
-    let selected = searched
-      .map(\.tool)
-      .filter { !intent.prefersReadOnlyTool || isReadOnly(tool: $0) }
-      .filter { !intent.requiresPlannerBeforeToolExecution || !isReadOnly(tool: $0) }
+    let selected: [[String: Any]]
+    if trustToolSelectionHints {
+      selected = searched.map(\.tool)
+    } else {
+      selected = searched
+        .map(\.tool)
+        .filter { !intent.prefersReadOnlyTool || isReadOnly(tool: $0) }
+        .filter { !intent.requiresPlannerBeforeToolExecution || !isReadOnly(tool: $0) }
+    }
     // The model planner is not the retrieval layer. Once metadata search has a
     // non-empty candidate set, expose only those candidates to the model;
     // appending "remaining eligible" tools lets a small local model switch to a
@@ -1124,20 +1141,32 @@ private enum UgotMCPToolPlanner {
   static func plan(
     prompt: String,
     tools: [[String: Any]],
-    decision: UgotMCPToolPlanningDecision?
+    decision: UgotMCPToolPlanningDecision?,
+    trustToolSelectionHints: Bool = false
   ) -> UgotMCPToolPlan? {
     let intent = UgotMCPToolIntent(prompt: prompt)
     guard let decision, decision.shouldUseTool else { return nil }
-    return planFromDecision(decision, tools: tools, intent: intent, prompt: prompt)
+    return planFromDecision(
+      decision,
+      tools: tools,
+      intent: intent,
+      prompt: prompt,
+      trustToolSelectionHints: trustToolSelectionHints
+    )
   }
 
   static func fallbackPlanFromSearch(
     prompt: String,
     tools: [[String: Any]],
-    searchIndex: UgotMCPToolSearchIndex
+    searchIndex: UgotMCPToolSearchIndex,
+    trustToolSelectionHints: Bool = false
   ) -> UgotMCPToolPlan? {
     let toolNames = Set(tools.compactMap { $0["name"] as? String })
-    let results = searchIndex.search(query: prompt, limit: 4)
+    let results = searchIndex.search(
+      query: prompt,
+      limit: 4,
+      allowIncompatiblePrimaryTools: trustToolSelectionHints
+    )
       .filter { result in
         guard let name = result.tool["name"] as? String else { return false }
         return toolNames.contains(name)
@@ -1154,11 +1183,13 @@ private enum UgotMCPToolPlanner {
 
     let intent = UgotMCPToolIntent(prompt: prompt)
     let tool = first.tool
-    guard !intent.isIncompatiblePrimaryTool(tool: tool),
-          !intent.requiresStateChangingTool || intent.isPreferredPrimaryTool(tool: tool),
-          !intent.prefersReadOnlyTool || isReadOnly(tool: tool),
-          !intent.requiresPlannerBeforeToolExecution || !isReadOnly(tool: tool) else {
-      return nil
+    if !trustToolSelectionHints {
+      guard !intent.isIncompatiblePrimaryTool(tool: tool),
+            !intent.requiresStateChangingTool || intent.isPreferredPrimaryTool(tool: tool),
+            !intent.prefersReadOnlyTool || isReadOnly(tool: tool),
+            !intent.requiresPlannerBeforeToolExecution || !isReadOnly(tool: tool) else {
+        return nil
+      }
     }
 
     let promptArguments = schemaArguments(from: prompt, for: tool)
@@ -1182,7 +1213,8 @@ private enum UgotMCPToolPlanner {
     _ decision: UgotMCPToolPlanningDecision,
     tools: [[String: Any]],
     intent: UgotMCPToolIntent,
-    prompt: String
+    prompt: String,
+    trustToolSelectionHints: Bool = false
   ) -> UgotMCPToolPlan? {
     guard let requestedName = decision.toolName?.trimmingCharacters(in: .whitespacesAndNewlines),
           !requestedName.isEmpty,
@@ -1190,15 +1222,17 @@ private enum UgotMCPToolPlanner {
           let name = tool["name"] as? String else {
       return nil
     }
-    guard !intent.isIncompatiblePrimaryTool(tool: tool),
-          !intent.requiresStateChangingTool || intent.isPreferredPrimaryTool(tool: tool) else {
-      return nil
-    }
-    guard !intent.prefersReadOnlyTool || isReadOnly(tool: tool) else {
-      return nil
-    }
-    guard !intent.requiresPlannerBeforeToolExecution || !isReadOnly(tool: tool) else {
-      return nil
+    if !trustToolSelectionHints {
+      guard !intent.isIncompatiblePrimaryTool(tool: tool),
+            !intent.requiresStateChangingTool || intent.isPreferredPrimaryTool(tool: tool) else {
+        return nil
+      }
+      guard !intent.prefersReadOnlyTool || isReadOnly(tool: tool) else {
+        return nil
+      }
+      guard !intent.requiresPlannerBeforeToolExecution || !isReadOnly(tool: tool) else {
+        return nil
+      }
     }
     guard isCompatibleWithDeclaredEffect(decision.intentEffect, tool: tool) else {
       return nil
@@ -1643,6 +1677,7 @@ final class UgotMCPConnectorAction {
   private let connector: GalleryConnector
   private let mcpClient: UgotMCPRuntimeClient
   private let sessionId: String
+  private let toolSelectionHints: UgotMCPToolSelectionHints
   private let toolPlanningProvider: UgotMCPActionRunner.ToolPlanningProvider?
   private let connectorStatusHandler: UgotMCPActionRunner.ConnectorStatusHandler?
   private let catalogStatusLock = NSLock()
@@ -1657,11 +1692,13 @@ final class UgotMCPConnectorAction {
     connector: GalleryConnector,
     accessToken: String,
     sessionId: String,
+    toolSelectionHints: UgotMCPToolSelectionHints = .empty,
     toolPlanningProvider: UgotMCPActionRunner.ToolPlanningProvider? = nil,
     connectorStatusHandler: UgotMCPActionRunner.ConnectorStatusHandler? = nil
   ) {
     self.connector = connector
     self.sessionId = sessionId
+    self.toolSelectionHints = toolSelectionHints
     self.toolPlanningProvider = toolPlanningProvider
     self.connectorStatusHandler = connectorStatusHandler
     self.mcpClient = UgotMCPRuntimeClient.make(
@@ -1727,20 +1764,28 @@ final class UgotMCPConnectorAction {
 
   func planningCandidate(prompt: String) async throws -> UgotMCPConnectorToolSearchCandidate? {
     let catalog = try await loadCatalog()
-    let planningTools = catalog.modelVisibleTools
+    let trustHints = hasEffectivePreferredToolMatch(in: catalog.modelVisibleTools)
+    let planningTools = toolsApplyingSelectionHints(catalog.modelVisibleTools)
     guard !planningTools.isEmpty else { return nil }
-    let searchResults = catalog.modelVisibleToolSearchIndex.search(query: prompt, limit: 6)
+    let searchIndex = UgotMCPToolSearchIndex(tools: planningTools)
+    let searchResults = searchIndex.search(
+      query: prompt,
+      limit: 6,
+      allowIncompatiblePrimaryTools: trustHints
+    )
     let toolSearchScore = searchResults.first?.score ?? 0
+    let hintSearchScore = hasEffectivePreferredToolMatch(in: planningTools) ? 80 : 0
     let sourceSearchScore = connectorSourceSearchScore(prompt: prompt)
-    let searchScore = max(toolSearchScore, sourceSearchScore)
+    let searchScore = max(toolSearchScore, sourceSearchScore, hintSearchScore)
     guard searchScore >= UgotMCPToolPlanner.minimumSearchScoreForPlanning else {
       return nil
     }
     let topTools = UgotMCPToolPlanner.toolsForModelPlanning(
       prompt: prompt,
       tools: planningTools,
-      searchIndex: catalog.modelVisibleToolSearchIndex,
-      limit: 8
+      searchIndex: searchIndex,
+      limit: 8,
+      trustToolSelectionHints: trustHints
     )
     return UgotMCPConnectorToolSearchCandidate(
       connectorId: connector.id,
@@ -1775,7 +1820,7 @@ final class UgotMCPConnectorAction {
       )
     }
 
-    let planningTools = catalog.modelVisibleTools
+    let planningTools = toolsApplyingSelectionHints(catalog.modelVisibleTools)
     guard !planningTools.isEmpty else {
       if emitNoToolFailure {
         let message = "이 connector에는 대화에서 직접 실행할 수 있는 MCP 도구가 없어요."
@@ -1810,7 +1855,8 @@ final class UgotMCPConnectorAction {
     emitNoToolFailure: Bool
   ) async throws -> UgotMCPActionResponse? {
     let allTools = catalog.allTools
-    let planningTools = catalog.modelVisibleTools
+    let trustHints = hasEffectivePreferredToolMatch(in: catalog.modelVisibleTools)
+    let planningTools = toolsApplyingSelectionHints(catalog.modelVisibleTools)
     var observations: [UgotAgentToolObservation] = []
     var loopState = AgentToolLoopStateMachineKt.createAgentToolLoopState(maxSteps: Int32(Self.maxAgentToolLoopSteps))
 
@@ -1828,12 +1874,14 @@ final class UgotMCPConnectorAction {
       let stepPlanningTools = UgotMCPToolPlanner.toolsForModelPlanning(
         prompt: prompt,
         tools: availablePlanningTools,
-        searchIndex: stepSearchIndex
+        searchIndex: stepSearchIndex,
+        trustToolSelectionHints: trustHints
       )
       let deterministicPlan = UgotMCPToolPlanner.fallbackPlanFromSearch(
         prompt: prompt,
         tools: stepPlanningTools,
-        searchIndex: stepSearchIndex
+        searchIndex: stepSearchIndex,
+        trustToolSelectionHints: trustHints
       )
       let decision: UgotMCPToolPlanningDecision?
       if deterministicPlan == nil {
@@ -1852,7 +1900,8 @@ final class UgotMCPConnectorAction {
       let planned = deterministicPlan ?? UgotMCPToolPlanner.plan(
         prompt: prompt,
         tools: stepPlanningTools,
-        decision: decision
+        decision: decision,
+        trustToolSelectionHints: trustHints
       )
 
       guard let planned else {
@@ -1964,6 +2013,51 @@ final class UgotMCPConnectorAction {
       return !attemptedToolNames.contains(name)
     }
     return alternativeTools.isEmpty ? tools : alternativeTools
+  }
+
+  private func toolsApplyingSelectionHints(_ tools: [[String: Any]]) -> [[String: Any]] {
+    guard !toolSelectionHints.isEmpty else { return tools }
+
+    let excluded = Set(toolSelectionHints.excludedToolNames.map(Self.toolHintLookupKey).filter { !$0.isEmpty })
+    let filtered = tools.filter { tool in
+      guard let name = tool["name"] as? String else { return false }
+      return !excluded.contains(Self.toolHintLookupKey(name))
+    }
+
+    let preferredKeys = toolSelectionHints.preferredToolNames.map(Self.toolHintLookupKey).filter { !$0.isEmpty }
+    guard !preferredKeys.isEmpty else { return filtered }
+
+    let preferredSet = Set(preferredKeys)
+    let preferredOrder = Dictionary(uniqueKeysWithValues: preferredKeys.enumerated().map { ($0.element, $0.offset) })
+    let preferredTools = filtered.filter { tool in
+      guard let name = tool["name"] as? String else { return false }
+      return preferredSet.contains(Self.toolHintLookupKey(name))
+    }
+    guard !preferredTools.isEmpty else { return filtered }
+    return preferredTools.sorted { lhs, rhs in
+      let lhsKey = Self.toolHintLookupKey(lhs["name"] as? String ?? "")
+      let rhsKey = Self.toolHintLookupKey(rhs["name"] as? String ?? "")
+      let lhsOrder = preferredOrder[lhsKey] ?? Int.max
+      let rhsOrder = preferredOrder[rhsKey] ?? Int.max
+      if lhsOrder != rhsOrder { return lhsOrder < rhsOrder }
+      return lhsKey < rhsKey
+    }
+  }
+
+  private func hasEffectivePreferredToolMatch(in tools: [[String: Any]]) -> Bool {
+    guard toolSelectionHints.hasPreferredToolNames else { return false }
+    let preferred = Set(toolSelectionHints.preferredToolNames.map(Self.toolHintLookupKey).filter { !$0.isEmpty })
+    guard !preferred.isEmpty else { return false }
+    return tools.contains { tool in
+      guard let name = tool["name"] as? String else { return false }
+      return preferred.contains(Self.toolHintLookupKey(name))
+    }
+  }
+
+  private static func toolHintLookupKey(_ value: String) -> String {
+    value
+      .lowercased()
+      .replacingOccurrences(of: "[^\\p{L}\\p{N}]+", with: "", options: .regularExpression)
   }
 
   private func shouldAvoidPreviouslyAttemptedTool(after observation: UgotAgentToolObservation) -> Bool {

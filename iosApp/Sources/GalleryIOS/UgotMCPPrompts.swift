@@ -108,6 +108,137 @@ struct UgotMCPPromptCompletionResult: Hashable {
   static let empty = UgotMCPPromptCompletionResult(values: [], total: 0, hasMore: false)
 }
 
+struct UgotMCPToolSelectionHints: Hashable, Sendable {
+  let preferredToolNames: [String]
+  let excludedToolNames: [String]
+
+  static let empty = UgotMCPToolSelectionHints(preferredToolNames: [], excludedToolNames: [])
+
+  var isEmpty: Bool {
+    preferredToolNames.isEmpty && excludedToolNames.isEmpty
+  }
+
+  var hasPreferredToolNames: Bool {
+    !preferredToolNames.isEmpty
+  }
+
+  var asJSONObject: [String: Any] {
+    [
+      "preferredToolNames": preferredToolNames,
+      "excludedToolNames": excludedToolNames,
+    ]
+  }
+
+  static func merged(_ hints: [UgotMCPToolSelectionHints]) -> UgotMCPToolSelectionHints {
+    UgotMCPToolSelectionHints(
+      preferredToolNames: unique(hints.flatMap(\.preferredToolNames)),
+      excludedToolNames: unique(hints.flatMap(\.excludedToolNames))
+    )
+  }
+
+  static func parse(from object: [String: Any]) -> UgotMCPToolSelectionHints {
+    let containers = candidateContainers(from: object)
+    let parsed = containers.map(parseHintContainer)
+    return merged(parsed)
+  }
+
+  private static func candidateContainers(from object: [String: Any]) -> [[String: Any]] {
+    var containers: [[String: Any]] = []
+    appendHintContainers(in: object, to: &containers)
+    for key in ["_meta", "meta", "annotations"] {
+      if let nested = object[key] as? [String: Any] {
+        appendHintContainers(in: nested, to: &containers)
+      }
+    }
+    return containers
+  }
+
+  private static func appendHintContainers(in object: [String: Any], to containers: inout [[String: Any]]) {
+    for key in ["mcp/toolHints", "prompt/toolHints", "toolHints", "tool_hints"] {
+      guard let raw = object[key] else { continue }
+      if let dict = raw as? [String: Any] {
+        containers.append(dict)
+      } else {
+        let values = stringValues(from: raw)
+        if !values.isEmpty {
+          containers.append(["preferredToolNames": values])
+        }
+      }
+    }
+  }
+
+  private static func parseHintContainer(_ container: [String: Any]) -> UgotMCPToolSelectionHints {
+    let preferredKeys = [
+      "preferredToolNames",
+      "preferredTools",
+      "preferred_tools",
+      "preferred_tool_names",
+      "preferred",
+      "allowedToolNames",
+      "allowedTools",
+      "allowed_tools",
+      "allowed",
+      "tools",
+    ]
+    let excludedKeys = [
+      "excludedToolNames",
+      "excludedTools",
+      "excluded_tools",
+      "excluded_tool_names",
+      "excluded",
+      "blockedToolNames",
+      "blockedTools",
+      "blocked_tools",
+      "blocked",
+    ]
+    return UgotMCPToolSelectionHints(
+      preferredToolNames: unique(preferredKeys.flatMap { stringValues(from: container[$0]) }),
+      excludedToolNames: unique(excludedKeys.flatMap { stringValues(from: container[$0]) })
+    )
+  }
+
+  private static func stringValues(from raw: Any?) -> [String] {
+    switch raw {
+    case let value as String:
+      return value
+        .split(separator: ",")
+        .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+    case let values as [String]:
+      return values
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+    case let values as [Any]:
+      return values.flatMap { value -> [String] in
+        if let string = value as? String {
+          return stringValues(from: string)
+        }
+        if let dict = value as? [String: Any] {
+          return ["name", "tool", "toolName", "tool_name"]
+            .compactMap { dict[$0] as? String }
+            .flatMap { stringValues(from: $0) }
+        }
+        return []
+      }
+    default:
+      return []
+    }
+  }
+
+  private static func unique(_ values: [String]) -> [String] {
+    var seen = Set<String>()
+    var out: [String] = []
+    for value in values {
+      let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty else { continue }
+      let key = trimmed.lowercased()
+      guard seen.insert(key).inserted else { continue }
+      out.append(trimmed)
+    }
+    return out
+  }
+}
+
 enum UgotMCPIntentEffect {
   static func normalized(_ raw: String?, default defaultValue: String = "read") -> String {
     let value = raw?
@@ -161,6 +292,7 @@ struct UgotMCPContextAttachment: Identifiable, Hashable {
   let arguments: [String: String]
   let uri: String?
   let intentEffect: String
+  let toolHints: UgotMCPToolSelectionHints
 
   init(
     kind: Kind,
@@ -171,7 +303,8 @@ struct UgotMCPContextAttachment: Identifiable, Hashable {
     contextText: String,
     arguments: [String: String],
     uri: String?,
-    intentEffect: String = "read"
+    intentEffect: String = "read",
+    toolHints: UgotMCPToolSelectionHints = .empty
   ) {
     self.kind = kind
     self.connectorId = connectorId
@@ -182,6 +315,7 @@ struct UgotMCPContextAttachment: Identifiable, Hashable {
     self.arguments = arguments
     self.uri = uri
     self.intentEffect = UgotMCPIntentEffect.normalized(intentEffect)
+    self.toolHints = toolHints
   }
 
   var symbol: String {
@@ -204,6 +338,7 @@ struct UgotMCPPromptDescriptor: Identifiable, Hashable {
   let arguments: [UgotMCPPromptArgumentDescriptor]
   let requiredArguments: [String]
   let intentEffect: String
+  let toolHints: UgotMCPToolSelectionHints
 
   var id: String { "\(connectorId)::\(name)" }
 
@@ -224,6 +359,7 @@ struct UgotMCPPromptDescriptor: Identifiable, Hashable {
       Self.intentEffectValue(in: prompt),
       default: "read"
     )
+    toolHints = UgotMCPToolSelectionHints.parse(from: prompt)
     if let rawArguments = prompt["arguments"] as? [[String: Any]] {
       arguments = rawArguments.compactMap { argument in
         guard let name = argument["name"] as? String else { return nil }

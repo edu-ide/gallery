@@ -21,7 +21,11 @@ final class UgotMCPRuntimeClient {
       return UgotMCPRuntimeClient(
         connectorId: connectorId,
         endpoint: endpoint,
-        backend: .embeddedMail(UgotEmbeddedMailMCPClient(connectorId: connectorId, endpoint: endpoint))
+        backend: .embeddedMail(UgotEmbeddedMailMCPClient(
+          connectorId: connectorId,
+          endpoint: endpoint,
+          ugotAccessToken: accessToken
+        ))
       )
     }
     let bearerToken: String?
@@ -136,14 +140,23 @@ final class UgotMCPRuntimeClient {
   }
 }
 
+private extension String {
+  var trimmedNonEmpty: String? {
+    let value = trimmingCharacters(in: .whitespacesAndNewlines)
+    return value.isEmpty ? nil : value
+  }
+}
+
 final class UgotEmbeddedMailMCPClient {
   let connectorId: String
   let endpoint: URL
+  private let ugotAccessToken: String
   private var didInitialize = false
 
-  init(connectorId: String, endpoint: URL) {
+  init(connectorId: String, endpoint: URL, ugotAccessToken: String = "") {
     self.connectorId = connectorId
     self.endpoint = endpoint
+    self.ugotAccessToken = ugotAccessToken
   }
 
   func initialize() async throws {
@@ -210,12 +223,12 @@ final class UgotEmbeddedMailMCPClient {
 
   func callTool(name: String, arguments: [String: Any]) async throws -> [String: Any] {
     try await initialize()
-    let argsJson = try Self.jsonString(arguments)
-    return try Self.invokeRust({ namePtr in
-      argsJson.withCString { argsPtr in
-        mail_mcp_rs_embedded_call_tool(namePtr, argsPtr)
-      }
-    }, stringArg: name)
+    if name == "get_oauth_url",
+       let result = try await embeddedOAuthURLResult(arguments: arguments) {
+      return result
+    }
+    let resolvedArguments = try await resolvedEmbeddedToolArguments(name: name, arguments: arguments)
+    return try callRustTool(name: name, arguments: resolvedArguments)
   }
 
   func readResource(uri: String) async throws -> [String: Any]? { nil }
@@ -230,6 +243,145 @@ final class UgotEmbeddedMailMCPClient {
 
   func widgetBaseURL(for uri: String) -> String {
     endpoint.absoluteString
+  }
+
+  private func callRustTool(name: String, arguments: [String: Any]) throws -> [String: Any] {
+    let argsJson = try Self.jsonString(arguments)
+    return try Self.invokeRust({ namePtr in
+      argsJson.withCString { argsPtr in
+        mail_mcp_rs_embedded_call_tool(namePtr, argsPtr)
+      }
+    }, stringArg: name)
+  }
+
+  private func resolvedEmbeddedToolArguments(
+    name: String,
+    arguments: [String: Any]
+  ) async throws -> [String: Any] {
+    let action = (arguments["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    guard name == "sync_oauth_account" || (name == "mail_account_ops" && action == "sync") else {
+      return arguments
+    }
+    return try await hydratedGoogleOAuthArguments(arguments)
+  }
+
+  private func hydratedGoogleOAuthArguments(_ arguments: [String: Any]) async throws -> [String: Any] {
+    let provider = ((arguments["provider"] as? String)?.trimmedNonEmpty ?? "google").lowercased()
+    guard provider == "google",
+          (arguments["email"] as? String)?.trimmedNonEmpty == nil ||
+          (arguments["access_token"] as? String)?.trimmedNonEmpty == nil else {
+      return arguments
+    }
+
+    guard let token = try await resolvedUgotAccessToken() else {
+      return arguments
+    }
+
+    let url = UgotAuthConfig.authServerBaseURL
+      .appendingPathComponent("api")
+      .appendingPathComponent("users")
+      .appendingPathComponent("tokens")
+      .appendingPathComponent("external")
+      .appendingPathComponent(provider)
+    var request = URLRequest(url: url)
+    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+    let (data, response) = try await URLSession.shared.data(for: request)
+    let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+    guard (200..<300).contains(statusCode),
+          let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+      return arguments
+    }
+
+    var resolved = arguments
+    resolved["provider"] = provider
+    if resolved["email"] == nil,
+       let email = (payload["email"] as? String)?.trimmedNonEmpty {
+      resolved["email"] = email
+    }
+    if resolved["access_token"] == nil,
+       let accessToken =
+        (payload["accessToken"] as? String)?.trimmedNonEmpty ??
+        (payload["access_token"] as? String)?.trimmedNonEmpty {
+      resolved["access_token"] = accessToken
+    }
+    if resolved["refresh_token"] == nil,
+       let refreshToken =
+        (payload["refreshToken"] as? String)?.trimmedNonEmpty ??
+        (payload["refresh_token"] as? String)?.trimmedNonEmpty {
+      resolved["refresh_token"] = refreshToken
+    }
+    return resolved
+  }
+
+  private func resolvedUgotAccessToken() async throws -> String? {
+    if let token = ugotAccessToken.trimmedNonEmpty {
+      return token
+    }
+    return try await UgotAuthStore.validAccessToken()
+  }
+
+  private func embeddedOAuthURLResult(arguments: [String: Any]) async throws -> [String: Any]? {
+    let provider = ((arguments["provider"] as? String)?.trimmedNonEmpty ?? "google").lowercased()
+    guard provider == "google" else { return nil }
+
+    let redirectURI = (arguments["redirect_uri"] as? String)?.trimmedNonEmpty ?? "https://ugot.uk"
+    var authURL: String?
+    var state: String?
+
+    if let token = try await resolvedUgotAccessToken() {
+      let url = UgotAuthConfig.authServerBaseURL
+        .appendingPathComponent("api")
+        .appendingPathComponent("connect")
+        .appendingPathComponent(provider)
+        .appendingPathComponent("initiate")
+      var request = URLRequest(url: url)
+      request.httpMethod = "POST"
+      request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+      request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+      request.httpBody = try JSONSerialization.data(withJSONObject: ["redirectUri": redirectURI])
+
+      let (data, response) = try await URLSession.shared.data(for: request)
+      let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+      if (200..<300).contains(statusCode),
+         let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+        authURL =
+          (payload["auth_url"] as? String)?.trimmedNonEmpty ??
+          (payload["url"] as? String)?.trimmedNonEmpty
+        state = (payload["state"] as? String)?.trimmedNonEmpty
+      }
+    }
+
+    if authURL == nil {
+      var components = URLComponents(
+        url: UgotAuthConfig.authServerBaseURL
+          .appendingPathComponent("api")
+          .appendingPathComponent("connect")
+          .appendingPathComponent(provider),
+        resolvingAgainstBaseURL: false
+      )
+      components?.queryItems = [URLQueryItem(name: "redirect_uri", value: redirectURI)]
+      authURL = components?.url?.absoluteString
+    }
+
+    let structured: [String: Any] = [
+      "viewMode": "auth",
+      "provider": provider,
+      "url": authURL ?? "",
+      "state": state ?? "",
+      "needsOAuth": true,
+      "notice": "Google 계정 연결 링크가 준비됐어요. 연결을 완료한 뒤 sync_oauth_account로 동기화할 수 있어요.",
+    ]
+    return [
+      "isError": false,
+      "content": [
+        [
+          "type": "text",
+          "text": "Google OAuth URL generated.",
+        ],
+      ],
+      "structuredContent": structured,
+    ]
   }
 
   private static func mailWidgetResource(toolName: String, result: [String: Any]) -> UgotMCPWidgetResource? {
@@ -339,6 +491,7 @@ final class UgotEmbeddedMailMCPClient {
           const rows = [
             ['Email', email],
             ['Provider', provider],
+            ['URL', first(data, ['url','authUrl','auth_url'])],
             ['Access', hasAccess ? '저장됨' : '확인 필요'],
             ['Refresh', hasRefresh ? '저장됨' : '확인 필요'],
           ].filter(([,v]) => text(v).trim() !== '');

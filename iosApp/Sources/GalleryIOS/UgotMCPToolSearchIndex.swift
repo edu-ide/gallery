@@ -189,7 +189,11 @@ struct UgotMCPToolSearchIndex {
       : max(1, Double(totalTokenCount) / Double(builtEntries.count))
   }
 
-  func search(query: String, limit: Int = 8) -> [UgotMCPToolSearchResult] {
+  func search(
+    query: String,
+    limit: Int = 8,
+    allowIncompatiblePrimaryTools: Bool = false
+  ) -> [UgotMCPToolSearchResult] {
     let scoringQuery = Self.userIntentText(from: query)
     let terms = Self.queryTerms(for: scoringQuery, expansionProvider: queryExpansionProvider)
     guard !terms.isEmpty else { return [] }
@@ -210,7 +214,7 @@ struct UgotMCPToolSearchIndex {
          ) {
         return nil
       }
-      guard !intent.isIncompatiblePrimaryTool(tool: entry.tool, document: entry.document) else {
+      guard allowIncompatiblePrimaryTools || !intent.isIncompatiblePrimaryTool(tool: entry.tool, document: entry.document) else {
         return nil
       }
 
@@ -273,7 +277,7 @@ struct UgotMCPToolSearchIndex {
     search(query: query, limit: 1).first?.score ?? 0
   }
 
-  func eligibleTools(query: String) -> [[String: Any]] {
+  func eligibleTools(query: String, allowIncompatiblePrimaryTools: Bool = false) -> [[String: Any]] {
     let scoringQuery = Self.userIntentText(from: query)
     let intent = UgotMCPToolIntent(prompt: scoringQuery)
     let queryCompact = Self.compact(scoringQuery)
@@ -287,7 +291,7 @@ struct UgotMCPToolSearchIndex {
             queryCompact: queryCompact,
             alternatives: entry.excludedRequestAlternatives
           )) &&
-        !intent.isIncompatiblePrimaryTool(tool: entry.tool, document: entry.document)
+        (allowIncompatiblePrimaryTools || !intent.isIncompatiblePrimaryTool(tool: entry.tool, document: entry.document))
         ? entry.tool
         : nil
     }
@@ -306,6 +310,11 @@ struct UgotMCPToolSearchIndex {
   }
 
   private static func userIntentText(from query: String) -> String {
+    if query.contains("[MCP attachment request]"),
+       let attachmentIntent = mcpAttachmentIntentText(from: query),
+       !attachmentIntent.isEmpty {
+      return attachmentIntent
+    }
     let markers = [
       "\nprevious mcp observations:",
       "\nprevious tool observations:",
@@ -321,6 +330,46 @@ struct UgotMCPToolSearchIndex {
       .min()
     guard let cut else { return query }
     return String(query[..<cut]).trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private static func mcpAttachmentIntentText(from query: String) -> String? {
+    let lines = query.components(separatedBy: .newlines)
+    var out: [String] = []
+    var capturingRenderedInstruction = false
+
+    for rawLine in lines {
+      let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+      let lower = line.lowercased()
+
+      if capturingRenderedInstruction {
+        if lower.hasPrefix("treat the attached artifact") ||
+            lower.hasPrefix("do not expose raw mcp") ||
+            lower.hasPrefix("the user attached these") {
+          capturingRenderedInstruction = false
+        } else if !line.isEmpty {
+          out.append(line)
+          continue
+        }
+      }
+
+      if lower.hasPrefix("user message:") {
+        let value = String(line.dropFirst("User message:".count))
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !value.isEmpty, value != "<attached prompt/resource only>" {
+          out.append(value)
+        }
+      } else if lower.hasPrefix("- prompt:") || lower.hasPrefix("- resource:") {
+        out.append(line)
+      } else if lower.hasPrefix("- selected arguments:") {
+        out.append(line)
+      } else if lower.hasPrefix("- rendered instruction:") {
+        capturingRenderedInstruction = true
+      }
+    }
+
+    let text = out.joined(separator: "\n")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return text.isEmpty ? nil : text
   }
 
   static func document(for tool: [String: Any]) -> String {

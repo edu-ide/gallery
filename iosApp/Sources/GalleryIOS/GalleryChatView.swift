@@ -1082,6 +1082,7 @@ struct GalleryChatView: View {
     plannerActiveAgentSkillIds: [String],
     plannerActiveConnectorIds: [String],
     requireToolObservation: Bool,
+    toolSelectionHintsByConnectorId: [String: UgotMCPToolSelectionHints] = [:],
     speakResponse: Bool
   ) async -> Bool {
     await MainActor.run {
@@ -1095,6 +1096,7 @@ struct GalleryChatView: View {
       activeConnectorIds: connectorIds,
       sessionId: sessionId,
       requireToolObservation: requireToolObservation,
+      toolSelectionHintsByConnectorId: toolSelectionHintsByConnectorId,
       toolPlanningProvider: { request in
         let planningPrompt = UgotMCPToolPlanningPromptBuilder.build(request: request)
         let planningRequest = GalleryInferenceRequest(
@@ -1167,6 +1169,7 @@ struct GalleryChatView: View {
     let activeConnectorIds = Array(turnConnectorSet).sorted()
     let hasMCPPromptAttachment = mcpContextAttachmentsToSend.contains { $0.kind == .prompt }
     let mcpContextRequiresToolObservation = hasMCPPromptAttachment || Self.isLikelyMCPToolCommand(effectivePrompt)
+    let mcpToolSelectionHintsByConnectorId = Self.mcpToolSelectionHintsByConnectorId(mcpContextAttachmentsToSend)
     let capabilityRoute: GalleryCapabilityRoute = {
       if let pendingConnectorId = UgotMCPToolApprovalStore.pendingConnectorId(
           sessionId: sessionId,
@@ -1317,6 +1320,7 @@ struct GalleryChatView: View {
             plannerActiveAgentSkillIds: plannerActiveAgentSkillIds,
             plannerActiveConnectorIds: plannerActiveConnectorIds,
             requireToolObservation: true,
+            toolSelectionHintsByConnectorId: mcpToolSelectionHintsByConnectorId,
             speakResponse: speakResponse
           ) {
             return
@@ -1336,6 +1340,7 @@ struct GalleryChatView: View {
             plannerActiveAgentSkillIds: plannerActiveAgentSkillIds,
             plannerActiveConnectorIds: plannerActiveConnectorIds,
             requireToolObservation: mcpContextRequiresToolObservation,
+            toolSelectionHintsByConnectorId: mcpToolSelectionHintsByConnectorId,
             speakResponse: speakResponse
           ) {
             return
@@ -1947,6 +1952,15 @@ struct GalleryChatView: View {
     """
   }
 
+  private static func mcpToolSelectionHintsByConnectorId(
+    _ attachments: [UgotMCPContextAttachment]
+  ) -> [String: UgotMCPToolSelectionHints] {
+    Dictionary(grouping: attachments, by: \.connectorId).compactMapValues { connectorAttachments in
+      let merged = UgotMCPToolSelectionHints.merged(connectorAttachments.map(\.toolHints))
+      return merged.isEmpty ? nil : merged
+    }
+  }
+
   private static func mcpIntentLine(for intentEffect: String) -> String {
     switch UgotMCPIntentEffect.normalized(intentEffect) {
     case "write":
@@ -2483,6 +2497,7 @@ struct GalleryChatView: View {
   private func attachMCPPrompt(_ prompt: UgotMCPPromptDescriptor, arguments: [String: String]) {
     Task {
       var contextText = prompt.summary.isEmpty ? prompt.title : prompt.summary
+      var toolHints = prompt.toolHints
       do {
         let accessToken = try? await UgotAuthStore.validAccessToken()
         guard let connector = GalleryConnector.connector(for: prompt.connectorId),
@@ -2500,6 +2515,8 @@ struct GalleryChatView: View {
         try await client.initialize()
         let result = try await client.getPrompt(name: prompt.name, arguments: arguments)
         contextText = UgotMCPPromptRenderer.renderPromptText(result, fallbackTitle: prompt.title)
+        let resultHints = UgotMCPToolSelectionHints.parse(from: result)
+        toolHints = UgotMCPToolSelectionHints.merged([prompt.toolHints, resultHints])
       } catch {
         contextText = prompt.summary.isEmpty ? prompt.title : prompt.summary
       }
@@ -2512,7 +2529,8 @@ struct GalleryChatView: View {
         contextText: contextText,
         arguments: arguments,
         uri: "mcp-prompt:\(prompt.name)",
-        intentEffect: prompt.intentEffect
+        intentEffect: prompt.intentEffect,
+        toolHints: toolHints
       )
       await MainActor.run {
         mcpContextAttachments.append(attachment)
@@ -4193,6 +4211,7 @@ private struct UserMCPContextAttachmentEnvelope {
     let arguments: [String: String]
     let uri: String?
     let intentEffect: String
+    let toolHints: UgotMCPToolSelectionHints
 
     var id: String { "\(index)::\(kind)::\(connectorTitle)::\(title)" }
     var kindLabel: String { kind == "prompt" ? "Prompt" : "Resource" }
@@ -4207,7 +4226,8 @@ private struct UserMCPContextAttachmentEnvelope {
         contextText: contextText,
         arguments: arguments,
         uri: uri,
-        intentEffect: intentEffect
+        intentEffect: intentEffect,
+        toolHints: toolHints
       )
     }
   }
@@ -4229,6 +4249,7 @@ private struct UserMCPContextAttachmentEnvelope {
         "arguments": attachment.arguments,
         "uri": attachment.uri ?? "",
         "intentEffect": attachment.intentEffect,
+        "toolHints": attachment.toolHints.asJSONObject,
       ] as [String: Any]
     }
     let payload: [String: Any] = [
@@ -4267,6 +4288,7 @@ private struct UserMCPContextAttachmentEnvelope {
       let arguments = raw["arguments"] as? [String: String] ?? [:]
       let rawURI = (raw["uri"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
       let rawIntentEffect = (raw["intentEffect"] as? String) ?? (raw["intent_effect"] as? String)
+      let toolHints = UgotMCPToolSelectionHints.parse(from: raw)
       return Item(
         index: (raw["index"] as? Int) ?? fallbackIndex,
         kind: kind,
@@ -4281,7 +4303,8 @@ private struct UserMCPContextAttachmentEnvelope {
         intentEffect: UgotMCPIntentEffect.normalized(
           rawIntentEffect,
           default: "read"
-        )
+        ),
+        toolHints: toolHints
       )
     }
     return UserMCPContextAttachmentEnvelope(text: visibleText, items: items)
@@ -5117,10 +5140,28 @@ private struct MCPPromptArgumentsSheet: View {
       result.values,
       selectedValue: values[name] ?? defaultValue(for: name)
     )
+    if shouldUseFirstCompletionAsInitialValue(argument, choices: mappedChoices) {
+      values[name] = mappedChoices[0].value
+    }
     completionResults[name] = result
     completionChoices[name] = mappedChoices
     completedCompletionNames.insert(name)
     loadingCompletionNames.remove(name)
+  }
+
+  private func shouldUseFirstCompletionAsInitialValue(
+    _ argument: UgotMCPPromptArgumentDescriptor,
+    choices: [Choice]
+  ) -> Bool {
+    guard !isMultiSelectArgument(argument.name),
+          !choices.isEmpty else {
+      return false
+    }
+    let current = (values[argument.name] ?? defaultValue(for: argument.name))
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    let searchText = (completionSearchText[argument.name] ?? "")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return current.isEmpty && searchText.isEmpty
   }
 
   private func stableCompletionChoices(
