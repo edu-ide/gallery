@@ -2683,12 +2683,24 @@ final class UgotMCPConnectorAction {
       toolName: toolName,
       result: result
     )
-    let widgetResource =
-      (try? await mcpClient.resolveWidgetResource(tools: tools, toolName: toolName, result: result)) ??
-      widgetResource(fromToolResult: result)
+    let resultIsError = isErrorToolResult(result)
+    let inlineWidgetResource = widgetResource(fromToolResult: result)
+    let widgetResource: UgotMCPWidgetResource?
+    if resultIsError {
+      // Generic MCP host rule: a failed tool call must not instantiate a
+      // declared outputTemplate fallback, because the template has no valid
+      // tool result to hydrate and can show an unrelated/default surface.
+      // If the server intentionally returns an inline HTML error widget, render
+      // that explicit result-owned resource.
+      widgetResource = inlineWidgetResource
+    } else {
+      widgetResource =
+        (try? await mcpClient.resolveWidgetResource(tools: tools, toolName: toolName, result: result)) ??
+        inlineWidgetResource
+    }
     let message = renderToolResult(result, toolName: toolName)
     let tool = tools.first(where: { ($0["name"] as? String) == toolName })
-    let toolDeclaresWidget = tool.flatMap { UgotMCPClient.widgetResourceURI(from: $0) } != nil
+    let toolDeclaresWidget = !resultIsError && tool.flatMap { UgotMCPClient.widgetResourceURI(from: $0) } != nil
     let observation = makeObservation(
       toolName: toolName,
       title: title,
@@ -2773,6 +2785,28 @@ final class UgotMCPConnectorAction {
       return markdown
     }
     return "MCP에서 \(toolName)을 실행했어요."
+  }
+
+  private func isErrorToolResult(_ result: [String: Any]) -> Bool {
+    if let value = result["isError"] as? Bool {
+      return value
+    }
+    if let value = result["isError"] as? NSNumber {
+      return value.boolValue
+    }
+    if let value = result["is_error"] as? Bool {
+      return value
+    }
+    if let value = result["is_error"] as? NSNumber {
+      return value.boolValue
+    }
+    if let value = result["isError"] as? String {
+      return ["true", "1", "yes"].contains(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+    if let value = result["is_error"] as? String {
+      return ["true", "1", "yes"].contains(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+    }
+    return false
   }
 
   private func makeSnapshot(
