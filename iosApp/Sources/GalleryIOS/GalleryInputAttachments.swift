@@ -189,6 +189,7 @@ struct AudioRecorderSheet: View {
         ToolbarItem(placement: .cancellationAction) {
           Button("Cancel") {
             recorder?.stop()
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
             onCancel()
           }
         }
@@ -214,6 +215,9 @@ struct AudioRecorderSheet: View {
             AVLinearPCMIsFloatKey: false,
             AVLinearPCMIsBigEndianKey: false,
           ]
+          let session = AVAudioSession.sharedInstance()
+          try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
+          try session.setActive(true, options: .notifyOthersOnDeactivation)
           let recorder = try AVAudioRecorder(url: url, settings: settings)
           recorder.record()
           self.recorder = recorder
@@ -229,6 +233,7 @@ struct AudioRecorderSheet: View {
 
   private func stopRecording() {
     recorder?.stop()
+    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     isRecording = false
     if let recordingURL {
       onComplete(recordingURL)

@@ -93,7 +93,7 @@ fun buildAgentToolPlanningPrompt(request: AgentToolPlanningRequest): String {
       "arguments": { "schema_parameter": "value" },
       "entity_reference": "visible user/profile/place/name to resolve later, or null",
       "intent_effect": "read | write | destructive | none",
-      "confidence": 0.0,
+      "confidence": 0.9,
       "requires_tool": false
     }
 
@@ -108,6 +108,7 @@ fun buildAgentToolPlanningPrompt(request: AgentToolPlanningRequest): String {
     - If the latest previous observation failed because of missing arguments, do not repeat the same tool. Choose a listed alternative whose schema can satisfy the user's request without fabricating data, or stop with tool_name null and requires_tool true.
     - Do not repeat a previous tool call with the same semantic purpose and arguments.
     - Always set intent_effect from the user's request, not from the tool you wish existed.
+    - Set confidence to your actual certainty between 0.0 and 1.0; use 0.6 or higher whenever you select a tool, and 0 when tool_name is null.
     - Use intent_effect "read" for list/show/view/search/summarize/explain questions.
     - Use intent_effect "write" only for explicit set/change/save/create/register/send/update actions.
     - Use intent_effect "destructive" only for explicit delete/remove/clear/reset actions.
@@ -148,10 +149,11 @@ fun parseAgentToolPlanningDecision(rawText: String): AgentToolPlanningDecision? 
   return null
 }
 
+private val NULL_WORDS = setOf("", "none", "null", "no_tool", "no tool", "model")
+
 private fun JsonObject.toPlanningDecision(): AgentToolPlanningDecision {
   val rawTool = firstString("tool_name", "toolName", "tool", "name")?.trim()
-  val nullToolNames = setOf("", "none", "null", "no_tool", "no tool", "model")
-  val toolName = rawTool?.takeIf { it.lowercase() !in nullToolNames }
+  val toolName = rawTool?.takeIf { it.lowercase() !in NULL_WORDS }
   val arguments = this["arguments"] ?: this["args"] ?: JsonObject(emptyMap())
   val argumentsJson = when (arguments) {
     is JsonObject -> arguments.toString()
@@ -168,14 +170,14 @@ private fun JsonObject.toPlanningDecision(): AgentToolPlanningDecision {
     "profileName",
     "name_reference",
     "nameReference",
-  )?.trim()?.takeIf { it.isNotEmpty() }
+  )?.trim()?.takeIf { it.isNotEmpty() && it.lowercase() !in NULL_WORDS }
   val intentEffect = firstString(
     "intent_effect",
     "intentEffect",
     "effect",
     "tool_effect",
     "toolEffect",
-  )?.trim()?.takeIf { it.isNotEmpty() }
+  )?.trim()?.takeIf { it.isNotEmpty() && it.lowercase() != "null" }
 
   return AgentToolPlanningDecision(
     toolName = toolName,

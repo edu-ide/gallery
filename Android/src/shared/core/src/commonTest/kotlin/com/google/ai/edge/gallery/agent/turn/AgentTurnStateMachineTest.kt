@@ -141,7 +141,7 @@ class AgentTurnStateMachineTest {
         nowEpochMs = 10,
       )
         .apply(agentTurnEventSearchTools("Gmail"), 11)
-        .apply(agentTurnEventSkipToolSearch("Gmail"), 12)
+        .apply(agentTurnEventSkipToolSearch(), 12)
 
     assertEquals(AgentTurnPhaseKind.ROUTE_PLANNED, state.phase.kind)
     assertEquals(AgentTurnRouteKind.MODEL, state.phase.route?.kind)
@@ -161,7 +161,7 @@ class AgentTurnStateMachineTest {
         nowEpochMs = 1,
       )
 
-    val rejected = start.transition(agentTurnEventSkipToolSearch("UGOT Fortune"), 2)
+    val rejected = start.transition(agentTurnEventSkipToolSearch(), 2)
 
     assertEquals(AgentTurnTransitionKind.REJECTED, rejected.kind)
     assertEquals(AgentTurnPhaseKind.PLANNING, rejected.state.phase.kind)

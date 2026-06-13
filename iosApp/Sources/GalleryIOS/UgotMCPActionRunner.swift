@@ -18,6 +18,8 @@ enum UgotMCPActionRunner {
   typealias ToolPlanningProvider = (UgotMCPToolPlanningRequest) async -> UgotMCPToolPlanningDecision?
   typealias ConnectorStatusHandler = (UgotMCPConnectorStatusEvent) async -> Void
 
+  private static let iso8601DateFormatter = ISO8601DateFormatter()
+
   static func runIfNeeded(
     prompt: String,
     activeSkillIds: Set<String>,
@@ -404,7 +406,6 @@ struct UgotMCPConnectorToolSearchCandidate {
   let connectorTitle: String
   let connectorSummary: String
   let searchScore: Int
-  let topTools: [[String: Any]]
 }
 
 struct UgotMCPToolPlanningDecision {
@@ -1618,7 +1619,8 @@ private enum UgotMCPToolPlanner {
     let name = rawName.lowercased()
     return name == "id" ||
       name.hasSuffix("_id") ||
-      name.hasSuffix("id") ||
+      name.hasSuffix("-id") ||
+      rawName.hasSuffix("Id") ||
       name.contains("uuid") ||
       name.contains("identifier")
   }
@@ -1736,18 +1738,11 @@ final class UgotMCPConnectorAction {
     guard searchScore >= UgotMCPToolPlanner.minimumSearchScoreForPlanning else {
       return nil
     }
-    let topTools = UgotMCPToolPlanner.toolsForModelPlanning(
-      prompt: prompt,
-      tools: planningTools,
-      searchIndex: catalog.modelVisibleToolSearchIndex,
-      limit: 8
-    )
     return UgotMCPConnectorToolSearchCandidate(
       connectorId: connector.id,
       connectorTitle: connector.title,
       connectorSummary: connector.summary,
-      searchScore: searchScore,
-      topTools: topTools
+      searchScore: searchScore
     )
   }
 
@@ -2453,7 +2448,8 @@ final class UgotMCPConnectorAction {
     let name = rawName.lowercased()
     return name == "id" ||
       name.hasSuffix("_id") ||
-      name.hasSuffix("id") ||
+      name.hasSuffix("-id") ||
+      rawName.hasSuffix("Id") ||
       name.contains("uuid") ||
       name.contains("identifier")
   }
@@ -2758,7 +2754,7 @@ final class UgotMCPConnectorAction {
   ) -> [String: Any] {
     var compact: [String: Any] = [
       "contentMarkdown": message,
-      "generatedAt": ISO8601DateFormatter().string(from: Date()),
+      "generatedAt": Self.iso8601DateFormatter.string(from: Date()),
     ]
     if !artifactContext.isEmpty {
       compact["agentVfsContext"] = artifactContext
