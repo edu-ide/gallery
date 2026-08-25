@@ -241,7 +241,8 @@ enum GalleryMobileActionRunner {
     guard let query, !query.isEmpty else {
       return URL(string: "https://map.naver.com/")!
     }
-    let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? query
+    let allowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/?#;"))
+    let encoded = query.addingPercentEncoding(withAllowedCharacters: allowed) ?? query
     return URL(string: "https://map.naver.com/p/search/\(encoded)") ?? URL(string: "https://map.naver.com/")!
   }
 

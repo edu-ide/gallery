@@ -320,9 +320,9 @@ data class AgentTurnEvent(
         AgentTurnEventKind.FINISH_COMPACTION -> AgentTurnStepKind.PLAN
         AgentTurnEventKind.SEARCH_TOOLS,
         AgentTurnEventKind.SKIP_TOOL_SEARCH -> AgentTurnStepKind.SEARCH_TOOLS
-        AgentTurnEventKind.REQUEST_APPROVAL,
-        AgentTurnEventKind.APPROVE_TOOL -> AgentTurnStepKind.REQUEST_APPROVAL
-        AgentTurnEventKind.RUN_TOOL -> AgentTurnStepKind.RUN_TOOL
+        AgentTurnEventKind.REQUEST_APPROVAL -> AgentTurnStepKind.REQUEST_APPROVAL
+        AgentTurnEventKind.RUN_TOOL,
+        AgentTurnEventKind.APPROVE_TOOL -> AgentTurnStepKind.RUN_TOOL
         AgentTurnEventKind.OBSERVE_TOOL -> AgentTurnStepKind.OBSERVE
         AgentTurnEventKind.GENERATE_FINAL_ANSWER -> AgentTurnStepKind.FINAL_ANSWER
         AgentTurnEventKind.COMPLETE -> AgentTurnStepKind.COMPLETE
@@ -512,8 +512,8 @@ fun agentTurnEventReadVisibleContext(): AgentTurnEvent =
 fun agentTurnEventSearchTools(connectorTitle: String): AgentTurnEvent =
   AgentTurnEvent(kind = AgentTurnEventKind.SEARCH_TOOLS, connectorTitle = connectorTitle)
 
-fun agentTurnEventSkipToolSearch(connectorTitle: String): AgentTurnEvent =
-  AgentTurnEvent(kind = AgentTurnEventKind.SKIP_TOOL_SEARCH, connectorTitle = connectorTitle)
+fun agentTurnEventSkipToolSearch(): AgentTurnEvent =
+  AgentTurnEvent(kind = AgentTurnEventKind.SKIP_TOOL_SEARCH)
 
 fun agentTurnEventRequestApproval(connectorTitle: String, toolTitle: String): AgentTurnEvent =
   AgentTurnEvent(
@@ -569,101 +569,71 @@ private fun AgentTurnPhaseKind.accepts(event: AgentTurnEventKind): Boolean {
   }
   return when (this) {
     AgentTurnPhaseKind.PLANNING ->
-      event in
-        setOf(
-          AgentTurnEventKind.INGEST_ATTACHMENTS,
-          AgentTurnEventKind.ROUTE_PLANNED,
-          AgentTurnEventKind.READ_VISIBLE_CONTEXT,
-          AgentTurnEventKind.SEARCH_TOOLS,
-          AgentTurnEventKind.COMPACT_CONTEXT,
-          AgentTurnEventKind.GENERATE_FINAL_ANSWER,
-          AgentTurnEventKind.COMPLETE,
-        )
+      event == AgentTurnEventKind.INGEST_ATTACHMENTS ||
+        event == AgentTurnEventKind.ROUTE_PLANNED ||
+        event == AgentTurnEventKind.READ_VISIBLE_CONTEXT ||
+        event == AgentTurnEventKind.SEARCH_TOOLS ||
+        event == AgentTurnEventKind.COMPACT_CONTEXT ||
+        event == AgentTurnEventKind.GENERATE_FINAL_ANSWER ||
+        event == AgentTurnEventKind.COMPLETE
     AgentTurnPhaseKind.INGESTING_ATTACHMENTS ->
-      event in
-        setOf(
-          AgentTurnEventKind.ROUTE_PLANNED,
-          AgentTurnEventKind.READ_VISIBLE_CONTEXT,
-          AgentTurnEventKind.SEARCH_TOOLS,
-          AgentTurnEventKind.COMPACT_CONTEXT,
-          AgentTurnEventKind.GENERATE_FINAL_ANSWER,
-          AgentTurnEventKind.COMPLETE,
-        )
+      event == AgentTurnEventKind.ROUTE_PLANNED ||
+        event == AgentTurnEventKind.READ_VISIBLE_CONTEXT ||
+        event == AgentTurnEventKind.SEARCH_TOOLS ||
+        event == AgentTurnEventKind.COMPACT_CONTEXT ||
+        event == AgentTurnEventKind.GENERATE_FINAL_ANSWER ||
+        event == AgentTurnEventKind.COMPLETE
     AgentTurnPhaseKind.ROUTE_PLANNED ->
-      event in
-        setOf(
-          AgentTurnEventKind.INGEST_ATTACHMENTS,
-          AgentTurnEventKind.READ_VISIBLE_CONTEXT,
-          AgentTurnEventKind.SEARCH_TOOLS,
-          AgentTurnEventKind.APPROVE_TOOL,
-          AgentTurnEventKind.RUN_TOOL,
-          AgentTurnEventKind.OBSERVE_TOOL,
-          AgentTurnEventKind.COMPACT_CONTEXT,
-          AgentTurnEventKind.GENERATE_FINAL_ANSWER,
-          AgentTurnEventKind.COMPLETE,
-        )
+      event == AgentTurnEventKind.INGEST_ATTACHMENTS ||
+        event == AgentTurnEventKind.READ_VISIBLE_CONTEXT ||
+        event == AgentTurnEventKind.SEARCH_TOOLS ||
+        event == AgentTurnEventKind.APPROVE_TOOL ||
+        event == AgentTurnEventKind.RUN_TOOL ||
+        event == AgentTurnEventKind.OBSERVE_TOOL ||
+        event == AgentTurnEventKind.COMPACT_CONTEXT ||
+        event == AgentTurnEventKind.GENERATE_FINAL_ANSWER ||
+        event == AgentTurnEventKind.COMPLETE
     AgentTurnPhaseKind.READING_VISIBLE_CONTEXT ->
-      event in
-        setOf(
-          AgentTurnEventKind.SEARCH_TOOLS,
-          AgentTurnEventKind.RUN_TOOL,
-          AgentTurnEventKind.OBSERVE_TOOL,
-          AgentTurnEventKind.COMPACT_CONTEXT,
-          AgentTurnEventKind.GENERATE_FINAL_ANSWER,
-          AgentTurnEventKind.COMPLETE,
-        )
+      event == AgentTurnEventKind.SEARCH_TOOLS ||
+        event == AgentTurnEventKind.RUN_TOOL ||
+        event == AgentTurnEventKind.OBSERVE_TOOL ||
+        event == AgentTurnEventKind.COMPACT_CONTEXT ||
+        event == AgentTurnEventKind.GENERATE_FINAL_ANSWER ||
+        event == AgentTurnEventKind.COMPLETE
     AgentTurnPhaseKind.SEARCHING_TOOLS ->
-      event in
-        setOf(
-          AgentTurnEventKind.SKIP_TOOL_SEARCH,
-          AgentTurnEventKind.REQUEST_APPROVAL,
-          AgentTurnEventKind.APPROVE_TOOL,
-          AgentTurnEventKind.RUN_TOOL,
-          AgentTurnEventKind.OBSERVE_TOOL,
-          AgentTurnEventKind.COMPACT_CONTEXT,
-          AgentTurnEventKind.GENERATE_FINAL_ANSWER,
-          AgentTurnEventKind.COMPLETE,
-        )
+      event == AgentTurnEventKind.SKIP_TOOL_SEARCH ||
+        event == AgentTurnEventKind.REQUEST_APPROVAL ||
+        event == AgentTurnEventKind.APPROVE_TOOL ||
+        event == AgentTurnEventKind.RUN_TOOL ||
+        event == AgentTurnEventKind.OBSERVE_TOOL ||
+        event == AgentTurnEventKind.COMPACT_CONTEXT ||
+        event == AgentTurnEventKind.GENERATE_FINAL_ANSWER ||
+        event == AgentTurnEventKind.COMPLETE
     AgentTurnPhaseKind.AWAITING_APPROVAL ->
-      event in
-        setOf(
-          AgentTurnEventKind.APPROVE_TOOL,
-          AgentTurnEventKind.RUN_TOOL,
-          AgentTurnEventKind.COMPLETE,
-        )
+      event == AgentTurnEventKind.APPROVE_TOOL ||
+        event == AgentTurnEventKind.RUN_TOOL ||
+        event == AgentTurnEventKind.COMPLETE
     AgentTurnPhaseKind.RUNNING_TOOL ->
-      event in
-        setOf(
-          AgentTurnEventKind.RUN_TOOL,
-          AgentTurnEventKind.OBSERVE_TOOL,
-          AgentTurnEventKind.REQUEST_APPROVAL,
-          AgentTurnEventKind.GENERATE_FINAL_ANSWER,
-          AgentTurnEventKind.COMPLETE,
-        )
+      event == AgentTurnEventKind.RUN_TOOL ||
+        event == AgentTurnEventKind.OBSERVE_TOOL ||
+        event == AgentTurnEventKind.REQUEST_APPROVAL ||
+        event == AgentTurnEventKind.GENERATE_FINAL_ANSWER ||
+        event == AgentTurnEventKind.COMPLETE
     AgentTurnPhaseKind.OBSERVING_TOOL ->
-      event in
-        setOf(
-          AgentTurnEventKind.REQUEST_APPROVAL,
-          AgentTurnEventKind.APPROVE_TOOL,
-          AgentTurnEventKind.RUN_TOOL,
-          AgentTurnEventKind.OBSERVE_TOOL,
-          AgentTurnEventKind.GENERATE_FINAL_ANSWER,
-          AgentTurnEventKind.COMPLETE,
-        )
+      event == AgentTurnEventKind.REQUEST_APPROVAL ||
+        event == AgentTurnEventKind.APPROVE_TOOL ||
+        event == AgentTurnEventKind.RUN_TOOL ||
+        event == AgentTurnEventKind.OBSERVE_TOOL ||
+        event == AgentTurnEventKind.GENERATE_FINAL_ANSWER ||
+        event == AgentTurnEventKind.COMPLETE
     AgentTurnPhaseKind.COMPACTING_CONTEXT ->
-      event in
-        setOf(
-          AgentTurnEventKind.FINISH_COMPACTION,
-          AgentTurnEventKind.GENERATE_FINAL_ANSWER,
-          AgentTurnEventKind.COMPLETE,
-        )
+      event == AgentTurnEventKind.FINISH_COMPACTION ||
+        event == AgentTurnEventKind.GENERATE_FINAL_ANSWER ||
+        event == AgentTurnEventKind.COMPLETE
     AgentTurnPhaseKind.GENERATING_FINAL_ANSWER ->
-      event in
-        setOf(
-          AgentTurnEventKind.RUN_TOOL,
-          AgentTurnEventKind.OBSERVE_TOOL,
-          AgentTurnEventKind.COMPLETE,
-        )
+      event == AgentTurnEventKind.RUN_TOOL ||
+        event == AgentTurnEventKind.OBSERVE_TOOL ||
+        event == AgentTurnEventKind.COMPLETE
     AgentTurnPhaseKind.COMPLETED,
     AgentTurnPhaseKind.FAILED,
     AgentTurnPhaseKind.CANCELLED -> false

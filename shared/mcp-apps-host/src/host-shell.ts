@@ -29,6 +29,7 @@ const pendingNative = new Map<string, NativePending>();
 let nextNativeId = 1;
 let activeBridge: AppBridge | null = null;
 let activeFrame: HTMLIFrameElement | null = null;
+let activeResizeObserver: ResizeObserver | null = null;
 
 function nativeBridge() {
   return (window as any).webkit?.messageHandlers?.mcpWidget;
@@ -161,9 +162,20 @@ function replaceFrame(root: HTMLElement) {
     try { activeBridge.close(); } catch {}
     activeBridge = null;
   }
+  if (activeResizeObserver) {
+    try { activeResizeObserver.disconnect(); } catch {}
+    activeResizeObserver = null;
+  }
   if (activeFrame) {
     activeFrame.remove();
     activeFrame = null;
+  }
+  if (pendingNative.size > 0) {
+    for (const pending of pendingNative.values()) {
+      window.clearTimeout(pending.timeout);
+      try { pending.reject(new Error('host frame replaced')); } catch {}
+    }
+    pendingNative.clear();
   }
 
   const frame = document.createElement('iframe');
@@ -264,9 +276,14 @@ async function mount(config: UgotHostConfig) {
     try {
       const doc = frame.contentDocument;
       if (doc && typeof ResizeObserver !== 'undefined') {
+        if (activeResizeObserver) {
+          try { activeResizeObserver.disconnect(); } catch {}
+          activeResizeObserver = null;
+        }
         const ro = new ResizeObserver(scheduleMeasureFrameSize);
         if (doc.documentElement) ro.observe(doc.documentElement);
         if (doc.body) ro.observe(doc.body);
+        activeResizeObserver = ro;
       }
     } catch (error) {
       debug('resize-observer-error', error instanceof Error ? error.message : String(error));
@@ -335,6 +352,11 @@ async function mount(config: UgotHostConfig) {
     };
   });
 
+  window.setTimeout(() => {
+    if (initialReplaySettled) return;
+    enableFrameInteraction('initialization-timeout');
+  }, 2500);
+
   await bridge.connect(new PostMessageTransport(frame.contentWindow!, frame.contentWindow!));
   frame.srcdoc = injectBase(config.widgetHtml, config.widgetBaseUrl);
   window.setTimeout(scheduleMeasureFrameSize, 100);
@@ -352,11 +374,6 @@ async function mount(config: UgotHostConfig) {
     initialReplaySettled = true;
     enableFrameInteraction('initial-replay-settled');
   });
-
-  window.setTimeout(() => {
-    if (initialReplaySettled) return;
-    enableFrameInteraction('initialization-timeout');
-  }, 2500);
 
   window.setTimeout(() => {
     try {

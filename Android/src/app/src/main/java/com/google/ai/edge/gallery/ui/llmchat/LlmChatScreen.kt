@@ -575,7 +575,7 @@ fun ChatViewWrapper(
               )
               viewModel.applyAgentTurnEvent(
                 model = model,
-                event = agentTurnEventSkipToolSearch(connectorTitle),
+                event = agentTurnEventSkipToolSearch(),
               )
             }
             viewModel.applyAgentTurnEvent(

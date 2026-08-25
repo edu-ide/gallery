@@ -148,15 +148,6 @@ data class UnifiedChatSessionState(
       nextIndex = nextMessageIndex + 1,
     )
 
-  private fun UnifiedChatSessionState.IndexedMessage.next(
-    role: UnifiedChatMessageRole,
-    text: String,
-  ): IndexedMessage =
-    IndexedMessage(
-      message = UnifiedChatMessage(id = "m$nextIndex", role = role, text = text),
-      nextIndex = nextIndex + 1,
-    )
-
   private data class IndexedMessage(
     val message: UnifiedChatMessage,
     val nextIndex: Int,
