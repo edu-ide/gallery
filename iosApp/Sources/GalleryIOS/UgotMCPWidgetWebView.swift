@@ -1,6 +1,7 @@
 import Foundation
 import GallerySharedCore
 import SwiftUI
+import UIKit
 import WebKit
 
 enum UgotMCPWidgetDebugLog {
@@ -52,6 +53,10 @@ struct UgotMCPWidgetWebView: UIViewRepresentable {
     webView.scrollView.backgroundColor = .clear
     webView.scrollView.isScrollEnabled = false
     webView.scrollView.bounces = false
+    webView.scrollView.minimumZoomScale = 1
+    webView.scrollView.maximumZoomScale = 1
+    webView.scrollView.zoomScale = 1
+    webView.scrollView.delegate = context.coordinator
     webView.navigationDelegate = context.coordinator
     load(snapshot: snapshot, into: webView, coordinator: context.coordinator)
     return webView
@@ -78,7 +83,7 @@ struct UgotMCPWidgetWebView: UIViewRepresentable {
     webView.loadHTMLString(payload.hostHTML, baseURL: payload.hostBaseURL)
   }
 
-  final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+  final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, UIScrollViewDelegate {
     var snapshot: McpWidgetSnapshot
     var onSizeChanged: ((CGFloat) -> Void)?
     var onModelContextChanged: ((String) -> Void)?
@@ -152,6 +157,16 @@ struct UgotMCPWidgetWebView: UIViewRepresentable {
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
       UgotMCPWidgetDebugLog.append("webview didFailProvisional=\(error.localizedDescription)")
+    }
+
+    func viewForZooming(in scrollView: UIScrollView) -> UIView? {
+      nil
+    }
+
+    func scrollViewDidZoom(_ scrollView: UIScrollView) {
+      if scrollView.zoomScale != 1 {
+        scrollView.setZoomScale(1, animated: false)
+      }
     }
 
     private func inspect(_ webView: WKWebView, label: String) {
@@ -379,7 +394,7 @@ struct UgotMCPWidgetWebView: UIViewRepresentable {
       UgotMCPClient.compactForWidget(result, maxStringLength: 120_000, maxArrayCount: 160)
     }
 
-    private func makeClient() async throws -> UgotMCPClient {
+    private func makeClient() async throws -> UgotMCPRuntimeClient {
       let connector = GalleryConnector.connector(for: snapshot.connectorId)
       let needsUGOTToken = connector?.authMode == .ugotBearer || connector == nil
       let accessToken: String?
@@ -398,11 +413,10 @@ struct UgotMCPWidgetWebView: UIViewRepresentable {
       guard let endpoint = URL(string: endpointString) else {
         throw WidgetBridgeError.invalidRequest("Invalid MCP endpoint")
       }
-      let bearerToken = connector?.bearerTokenForRequest(ugotAccessToken: accessToken ?? "") ?? accessToken
-      return UgotMCPClient(
+      return UgotMCPRuntimeClient.make(
         connectorId: snapshot.connectorId,
         endpoint: endpoint,
-        bearerToken: bearerToken
+        accessToken: accessToken ?? ""
       )
     }
 
@@ -410,14 +424,30 @@ struct UgotMCPWidgetWebView: UIViewRepresentable {
     private func resolveMCPRequest(id: String, result: Any) {
       let resultJson = UgotMCPWidgetHostPayload.jsonLiteral(result)
       let idJson = UgotMCPWidgetHostPayload.jsString(id)
-      evaluate("window.UgotMCPAppsHost && window.UgotMCPAppsHost.resolveNative(\(idJson), \(resultJson)); window.__ugotMcpResolveRequest && window.__ugotMcpResolveRequest(\(idJson), \(resultJson));")
+      evaluate("""
+      window.UgotMCPAppsHost && window.UgotMCPAppsHost.resolveNative(\(idJson), \(resultJson));
+      window.__ugotMcpResolveRequest && window.__ugotMcpResolveRequest(\(idJson), \(resultJson));
+      (() => {
+        const frame = document.getElementById('ugot-mcp-app-frame');
+        try { frame?.contentWindow?.__ugotMcpResolveRequest?.(\(idJson), \(resultJson)); } catch (_) {}
+        try { frame?.contentWindow?.__ugotMcpResolveCall?.(\(idJson), \(resultJson)); } catch (_) {}
+      })();
+      """)
     }
 
     @MainActor
     private func rejectMCPRequest(id: String, message: String) {
       let idJson = UgotMCPWidgetHostPayload.jsString(id)
       let messageJson = UgotMCPWidgetHostPayload.jsString(message)
-      evaluate("window.UgotMCPAppsHost && window.UgotMCPAppsHost.rejectNative(\(idJson), \(messageJson)); window.__ugotMcpRejectRequest && window.__ugotMcpRejectRequest(\(idJson), \(messageJson));")
+      evaluate("""
+      window.UgotMCPAppsHost && window.UgotMCPAppsHost.rejectNative(\(idJson), \(messageJson));
+      window.__ugotMcpRejectRequest && window.__ugotMcpRejectRequest(\(idJson), \(messageJson));
+      (() => {
+        const frame = document.getElementById('ugot-mcp-app-frame');
+        try { frame?.contentWindow?.__ugotMcpRejectRequest?.(\(idJson), \(messageJson)); } catch (_) {}
+        try { frame?.contentWindow?.__ugotMcpRejectCall?.(\(idJson), \(messageJson)); } catch (_) {}
+      })();
+      """)
     }
 
     @MainActor
@@ -501,7 +531,7 @@ private struct UgotMCPWidgetHostPayload {
     return """
     <!doctype html>
     <html>
-    <head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\"></head>
+    <head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover\"><style>html,body{-webkit-text-size-adjust:100%;}input,textarea,select{font-size:16px;}</style></head>
     <body style=\"margin:0;background:transparent;overflow:hidden;\">
       <div id=\"ugot-mcp-host-root\"></div>
       <script id=\"ugot-mcp-config\" type=\"application/json\">__UGOT_MCP_CONFIG__</script>

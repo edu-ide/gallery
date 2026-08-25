@@ -325,7 +325,10 @@ final class UgotEmbeddedMailMCPClient {
     let provider = ((arguments["provider"] as? String)?.trimmedNonEmpty ?? "google").lowercased()
     guard provider == "google" else { return nil }
 
-    let redirectURI = (arguments["redirect_uri"] as? String)?.trimmedNonEmpty ?? "https://ugot.uk"
+    // The embedded iOS mail connector owns its OAuth completion target.
+    // Do not trust model/tool-provided redirect_uri here; stale connector URLs
+    // can otherwise send the browser back to an MCP endpoint instead of UGOT.
+    let redirectURI = "https://ugot.uk"
     var authURL: String?
     var state: String?
 
@@ -370,7 +373,7 @@ final class UgotEmbeddedMailMCPClient {
       "url": authURL ?? "",
       "state": state ?? "",
       "needsOAuth": true,
-      "notice": "Google 계정 연결 링크가 준비됐어요. 연결을 완료한 뒤 sync_oauth_account로 동기화할 수 있어요.",
+      "notice": "브라우저에서 Google 계정 연결을 완료한 뒤 앱으로 돌아와 계정을 동기화하세요.",
     ]
     return [
       "isError": false,
@@ -390,7 +393,7 @@ final class UgotEmbeddedMailMCPClient {
     }
     let viewMode = (structured["viewMode"] as? String)?.lowercased()
       ?? inferredMailWidgetMode(toolName: toolName, structured: structured)
-    guard ["list", "search", "accounts", "mailboxes", "detail", "sync", "auth", "account"].contains(viewMode) else {
+    guard ["list", "search", "accounts", "mailboxes", "detail", "sync", "auth", "account", "account_connect"].contains(viewMode) else {
       return nil
     }
     structured["viewMode"] = viewMode
@@ -409,12 +412,12 @@ final class UgotEmbeddedMailMCPClient {
     <html>
     <head>
       <meta charset=\"utf-8\">
-      <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
+      <meta name=\"viewport\" content=\"width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover\">
       <style>
         :root { color-scheme: light dark; --bg:#fff; --fg:#111827; --muted:#6b7280; --card:#f9fafb; --border:#e5e7eb; --accent:#2563eb; }
         @media (prefers-color-scheme: dark) { :root { --bg:#111827; --fg:#f9fafb; --muted:#9ca3af; --card:#1f2937; --border:#374151; --accent:#60a5fa; } }
         * { box-sizing: border-box; }
-        html, body { margin:0; padding:0; background:transparent; color:var(--fg); font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif; }
+        html, body { margin:0; padding:0; background:transparent; color:var(--fg); font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif; -webkit-text-size-adjust:100%; }
         .wrap { padding:14px; border:1px solid var(--border); border-radius:18px; background:var(--bg); }
         .head { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:12px; }
         .title { font-weight:700; font-size:16px; letter-spacing:-0.01em; }
@@ -437,7 +440,20 @@ final class UgotEmbeddedMailMCPClient {
         .actions { display:grid; gap:8px; margin-top:10px; }
         .primary { appearance:none; border:0; border-radius:12px; padding:11px 12px; background:var(--accent); color:white; font-weight:750; font-size:14px; width:100%; text-align:center; }
         .primary:active { opacity:.78; }
+        .primary:disabled { opacity:.55; }
+        .secondary { appearance:none; border:1px solid var(--border); border-radius:12px; padding:9px 10px; background:var(--card); color:var(--fg); font-weight:650; font-size:13px; width:100%; text-align:center; }
         .url-copy { font-size:11px; user-select:text; word-break:break-all; }
+        .form { display:grid; gap:10px; }
+        .field { display:grid; gap:5px; }
+        .label { color:var(--muted); font-size:12px; font-weight:650; }
+        input, textarea, select { width:100%; border:1px solid var(--border); border-radius:12px; padding:11px 12px; background:var(--card); color:var(--fg); font-size:16px; line-height:1.25; outline:none; }
+        input:focus, textarea:focus, select:focus { border-color:var(--accent); }
+        details { border:1px solid var(--border); border-radius:12px; padding:9px 10px; background:var(--card); }
+        summary { cursor:pointer; color:var(--muted); font-size:12px; font-weight:700; }
+        .grid2 { display:grid; grid-template-columns:1fr 92px; gap:8px; margin-top:10px; }
+        .form-status { min-height:18px; color:var(--muted); font-size:12px; line-height:1.35; }
+        .form-status.ok { color:#059669; }
+        .form-status.bad { color:#dc2626; }
       </style>
     </head>
     <body>
@@ -476,6 +492,43 @@ final class UgotEmbeddedMailMCPClient {
         function renderExternalAction(url, label) {
           if (!isHttpUrl(url)) return '';
           return `<div class=\"actions\"><button type=\"button\" class=\"primary\" data-open-url=\"${esc(url)}\">${esc(label || '계정 연결 열기')}</button><div class=\"meta url-copy\">${esc(url)}</div></div>`;
+        }
+        function callTool(name, args) {
+          const id = `inline-mail-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          window.__ugotInlineToolCalls = window.__ugotInlineToolCalls || {};
+          return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+              delete window.__ugotInlineToolCalls[id];
+              reject(new Error('도구 응답 시간이 초과됐어요.'));
+            }, 30000);
+            window.__ugotInlineToolCalls[id] = { resolve, reject, timer };
+            window.__ugotMcpResolveRequest = window.__ugotMcpResolveCall = (requestId, result) => {
+              const pending = window.__ugotInlineToolCalls && window.__ugotInlineToolCalls[requestId];
+              if (!pending) return;
+              clearTimeout(pending.timer);
+              delete window.__ugotInlineToolCalls[requestId];
+              pending.resolve(result || {});
+            };
+            window.__ugotMcpRejectRequest = window.__ugotMcpRejectCall = (requestId, message) => {
+              const pending = window.__ugotInlineToolCalls && window.__ugotInlineToolCalls[requestId];
+              if (!pending) return;
+              clearTimeout(pending.timer);
+              delete window.__ugotInlineToolCalls[requestId];
+              pending.reject(new Error(message || '도구 호출에 실패했어요.'));
+            };
+            try {
+              window.webkit?.messageHandlers?.mcpWidget?.postMessage({
+                type: 'callTool',
+                id,
+                name,
+                arguments: args || {}
+              });
+            } catch (error) {
+              clearTimeout(timer);
+              delete window.__ugotInlineToolCalls[id];
+              reject(error);
+            }
+          });
         }
         function userNotice() {
           const raw = text(data.notice);
@@ -526,6 +579,35 @@ final class UgotEmbeddedMailMCPClient {
           const providerName = provider || first(data, ['provider']) || '계정';
           return userNotice() + `<div class=\"status ${stateClass}\"><span class=\"dot\"></span><span>${esc(stateText)}</span></div><div class=\"item\"><div class=\"kv\">${rows.map(([k,v]) => `<div class=\"k\">${esc(k)}</div><div class=\"v\">${esc(v)}</div>`).join('')}</div>${renderExternalAction(url, `${providerName} 연결 열기`)}</div>`;
         }
+        function renderAccountConnect() {
+          const provider = first(data, ['provider']) || 'imap';
+          const providerLabel = provider === 'imap' ? 'IMAP/SMTP' : provider;
+          return userNotice() + `<form id=\"imap-connect-form\" class=\"form\" autocomplete=\"off\">
+            <div class=\"item\">
+              <div class=\"item-title\">${esc(providerLabel)} 메일 계정 연결</div>
+              <div class=\"meta\">메일 주소와 앱 비밀번호를 입력하세요. Gmail/Naver/Kakao/Daum은 서버 설정을 자동 감지합니다.</div>
+            </div>
+            <div class=\"field\">
+              <div class=\"label\">메일 주소</div>
+              <input name=\"email\" type=\"email\" placeholder=\"user@example.com\" value=\"${esc(first(data, ['email','accountId','account_id']) || '')}\" autocomplete=\"username\" required>
+            </div>
+            <div class=\"field\">
+              <div class=\"label\">앱 비밀번호</div>
+              <input name=\"password\" type=\"password\" placeholder=\"앱 비밀번호\" autocomplete=\"current-password\" required>
+            </div>
+            <details>
+              <summary>고급 IMAP/SMTP 설정</summary>
+              <div class=\"grid2\">
+                <input name=\"host\" type=\"text\" placeholder=\"IMAP host\">
+                <input name=\"port\" type=\"number\" placeholder=\"993\">
+                <input name=\"smtpHost\" type=\"text\" placeholder=\"SMTP host\">
+                <input name=\"smtpPort\" type=\"number\" placeholder=\"465\">
+              </div>
+            </details>
+            <button id=\"imap-submit\" type=\"submit\" class=\"primary\">계정 연결</button>
+            <div id=\"imap-status\" class=\"form-status\"></div>
+          </form>`;
+        }
         function renderMailboxes(items) {
           if (!items.length) return userNotice() + '<div class=\"empty\">표시할 메일함이 없어요.</div>';
           return userNotice() + `<div class=\"list\">${items.map(f => `<div class=\"item\"><div class=\"item-title\">${esc(first(f,['name','folder','mailbox']) || 'Mailbox')}</div><div class=\"meta\">${esc(first(f,['count','unread','total']))}</div></div>`).join('')}</div>`;
@@ -537,6 +619,7 @@ final class UgotEmbeddedMailMCPClient {
         }
         const mode = data.viewMode || 'list';
         if (mode === 'accounts' || mode === 'account') root.innerHTML = renderAccounts(arr('accounts','identities'));
+        else if (mode === 'account_connect') root.innerHTML = renderAccountConnect();
         else if (mode === 'sync' || mode === 'auth') root.innerHTML = renderSync();
         else if (mode === 'mailboxes') root.innerHTML = renderMailboxes(arr('mailboxes','folders'));
         else if (mode === 'detail') root.innerHTML = renderDetail(data.email || data.message);
@@ -544,6 +627,47 @@ final class UgotEmbeddedMailMCPClient {
         root.querySelectorAll('[data-open-url]').forEach((element) => {
           element.addEventListener('click', () => openExternal(element.getAttribute('data-open-url') || ''));
         });
+        const imapForm = document.getElementById('imap-connect-form');
+        if (imapForm) {
+          imapForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const button = document.getElementById('imap-submit');
+            const status = document.getElementById('imap-status');
+            const form = new FormData(imapForm);
+            const args = {
+              email: text(form.get('email')).trim(),
+              password: text(form.get('password')),
+              provider: first(data, ['provider']) || undefined,
+              host: text(form.get('host')).trim() || undefined,
+              port: text(form.get('port')).trim() ? Number(text(form.get('port')).trim()) : undefined,
+              smtpHost: text(form.get('smtpHost')).trim() || undefined,
+              smtpPort: text(form.get('smtpPort')).trim() ? Number(text(form.get('smtpPort')).trim()) : undefined,
+            };
+            if (!args.email || !args.password) {
+              status.className = 'form-status bad';
+              status.textContent = '메일 주소와 앱 비밀번호가 필요해요.';
+              return;
+            }
+            button.disabled = true;
+            status.className = 'form-status';
+            status.textContent = '연결 중...';
+            try {
+              const result = await callTool('add_external_account', args);
+              if (result && result.isError === true) {
+                const message = result.content && result.content[0] && result.content[0].text;
+                throw new Error(message || '계정 연결에 실패했어요.');
+              }
+              imapForm.querySelector('input[name=\"password\"]').value = '';
+              status.className = 'form-status ok';
+              status.textContent = '계정이 연결됐어요.';
+            } catch (error) {
+              status.className = 'form-status bad';
+              status.textContent = error && error.message ? error.message : '계정 연결에 실패했어요.';
+            } finally {
+              button.disabled = false;
+            }
+          });
+        }
       </script>
     </body>
     </html>
@@ -560,6 +684,7 @@ final class UgotEmbeddedMailMCPClient {
   private static func mailWidgetTitle(toolName: String, viewMode: String) -> String {
     switch viewMode {
     case "accounts", "account": return "메일 계정"
+    case "account_connect": return "메일 계정 연결"
     case "sync", "auth": return "메일 계정 동기화"
     case "mailboxes": return "메일함"
     case "detail": return "메일 상세"
@@ -580,6 +705,13 @@ final class UgotEmbeddedMailMCPClient {
       compact.contains("동기화") ||
       compact.contains("연동") {
       return "sync"
+    }
+    if compact.contains("connect") ||
+      compact.contains("credential") ||
+      compact.contains("password") ||
+      compact.contains("연결") ||
+      compact.contains("비밀번호") {
+      return "account_connect"
     }
     if compact.contains("account") ||
       compact.contains("identity") ||

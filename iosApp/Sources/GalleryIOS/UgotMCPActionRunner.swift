@@ -766,7 +766,9 @@ private enum UgotMCPToolMetadataCache {
   // descriptions/search keywords are part of the planner contract; keeping an
   // older persisted catalog can make the host route to a stale/wrong tool even
   // after the MCP server was fixed.
-  private static let persistentPrefix = "ugot.mcp.toolMetadataCache.v7"
+  // v14 invalidates catalogs before Mail MCP separated account-status,
+  // account-connect, and email-list metadata. The host still treats this as opaque metadata.
+  private static let persistentPrefix = "ugot.mcp.toolMetadataCache.v14"
   private static let lock = NSLock()
   private static var values: [String: (timestamp: Date, tools: [[String: Any]])] = [:]
 

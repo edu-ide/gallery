@@ -123,6 +123,15 @@ internal fun createDownloadErrorDialogState(
     )
   }
 
+  if (usedUgotProxy && responseCode in 500..599) {
+    return DownloadErrorDialogState(
+      title = "Download service unavailable",
+      message =
+        "The UGOT model download proxy is currently unavailable. Please try again later.",
+      action = DownloadErrorDialogAction.DISMISS,
+    )
+  }
+
   return DownloadErrorDialogState(
     title = "Unknown network error",
     message = "Please check your internet connection.",
