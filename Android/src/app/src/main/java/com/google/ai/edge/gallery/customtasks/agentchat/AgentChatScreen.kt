@@ -98,6 +98,7 @@ import com.google.ai.edge.gallery.ui.llmchat.LlmChatViewModel
 import com.google.ai.edge.gallery.ui.modelmanager.ModelInitializationStatusType
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.gallery.ui.unifiedchat.UnifiedChatEntryHint
+import com.google.ai.edge.gallery.ui.unifiedchat.session.buildUnifiedChatSessionId
 import com.google.ai.edge.litertlm.tool
 import java.lang.Exception
 import kotlin.coroutines.resume
@@ -553,6 +554,12 @@ private fun resetSessionWithCurrentSkills(
   viewModel.resetSession(
     task = task,
     model = model,
+    sessionId =
+      buildUnifiedChatSessionId(
+        taskId = task.id,
+        modelName = model.name,
+        entryHint = UnifiedChatEntryHint(activateSkills = true),
+      ),
     systemInstruction =
       if (newSelectedSkills.isEmpty()) null
       else skillManagerViewModel.getSystemPrompt(curSystemPrompt),

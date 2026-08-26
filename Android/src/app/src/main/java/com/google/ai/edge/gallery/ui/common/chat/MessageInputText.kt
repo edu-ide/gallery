@@ -620,7 +620,9 @@ fun MessageInputText(
                     enabled =
                       !inProgress &&
                         !isResettingSession &&
-                        (curMessage.isNotEmpty() || pickedAudioClips.isNotEmpty()),
+                        (curMessage.isNotEmpty() ||
+                          pickedImages.isNotEmpty() ||
+                          pickedAudioClips.isNotEmpty()),
                     onClick = {
                       var message = curMessage.trim()
                       onSendMessage(

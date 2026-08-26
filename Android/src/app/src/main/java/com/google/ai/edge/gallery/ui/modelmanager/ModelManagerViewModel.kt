@@ -53,6 +53,10 @@ import com.google.ai.edge.gallery.data.UgotAuthStorage
 import com.google.ai.edge.gallery.data.UgotTokenStatusAndData
 import com.google.ai.edge.gallery.data.ValueType
 import com.google.ai.edge.gallery.data.createLlmChatConfigs
+import com.google.ai.edge.gallery.data.markInitializationFailed
+import com.google.ai.edge.gallery.data.markInitializationStarted
+import com.google.ai.edge.gallery.data.markInitialized
+import com.google.ai.edge.gallery.data.resetInitialization
 import com.google.ai.edge.gallery.proto.AccessTokenData
 import com.google.ai.edge.gallery.proto.ImportedModel
 import com.google.ai.edge.gallery.proto.Theme
@@ -472,15 +476,15 @@ constructor(
 
       // Start initialization.
       Log.d(TAG, "Initializing model '${model.name}'...")
-      model.initializing = true
+      model.markInitializationStarted()
       updateModelInitializationStatus(
         model = model,
         status = ModelInitializationStatusType.INITIALIZING,
       )
 
       val onDoneFn: (error: String) -> Unit = { error ->
-        model.initializing = false
         if (model.instance != null) {
+          model.markInitialized()
           Log.d(TAG, "Model '${model.name}' initialized successfully")
           updateModelInitializationStatus(
             model = model,
@@ -491,12 +495,14 @@ constructor(
             cleanupModel(context = context, task = task, model = model)
           }
           onDone()
-        } else if (error.isNotEmpty()) {
+        } else {
+          val failure = error.ifBlank { "Model initialization completed without an instance" }
+          model.markInitializationFailed(failure)
           Log.d(TAG, "Model '${model.name}' failed to initialize")
           updateModelInitializationStatus(
             model = model,
             status = ModelInitializationStatusType.ERROR,
-            error = error,
+            error = failure,
           )
         }
       }
@@ -529,8 +535,7 @@ constructor(
       model.cleanUpAfterInit = false
       Log.d(TAG, "Cleaning up model '${model.name}'...")
       val onDoneFn: () -> Unit = {
-        model.instance = null
-        model.initializing = false
+        model.resetInitialization()
         updateModelInitializationStatus(
           model = model,
           status = ModelInitializationStatusType.NOT_INITIALIZED,

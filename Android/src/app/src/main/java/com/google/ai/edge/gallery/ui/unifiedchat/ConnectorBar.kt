@@ -39,18 +39,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.google.ai.edge.gallery.R
 
-private fun defaultConnectorLabel(connectorId: String): String =
-  when (connectorId) {
-    "fortune.ugot.uk/mcp" -> "UGOT Fortune"
-    else ->
-      connectorId
-        .split('_', '-')
-        .filter { it.isNotBlank() }
-        .joinToString(" ") { token ->
-          token.lowercase().replaceFirstChar { firstChar -> firstChar.titlecase() }
-        }
-  }
-
 enum class ConnectorBarDisplayMode {
   InlineRow,
   ComposerLauncher,
@@ -62,7 +50,7 @@ fun ConnectorBar(
   onConnectorClicked: (String) -> Unit,
   onOpenConnectorSheet: () -> Unit,
   modifier: Modifier = Modifier,
-  connectorLabel: (String) -> String = ::defaultConnectorLabel,
+  connectorLabel: (String) -> String = ::formatConnectorDisplayLabel,
   displayMode: ConnectorBarDisplayMode = ConnectorBarDisplayMode.InlineRow,
 ) {
   if (displayMode == ConnectorBarDisplayMode.ComposerLauncher) {

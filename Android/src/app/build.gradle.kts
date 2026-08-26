@@ -68,6 +68,8 @@ android {
 
 dependencies {
   implementation(project(":shared:core"))
+  implementation(project(":shared:runtime"))
+  implementation(project(":shared:chat-ui"))
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.activity.compose)

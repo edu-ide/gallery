@@ -65,6 +65,7 @@ import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.RuntimeType
 import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.firebaseAnalytics
+import com.google.ai.edge.gallery.runtime.chat.GalleryChatSessionRepository
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageAudioClip
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageImage
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageText
@@ -79,6 +80,7 @@ import com.google.ai.edge.gallery.ui.unifiedchat.ConnectorBarDisplayMode
 import com.google.ai.edge.gallery.ui.unifiedchat.ConnectorBarState
 import com.google.ai.edge.gallery.ui.unifiedchat.UnifiedChatEntryHint
 import com.google.ai.edge.gallery.ui.unifiedchat.createUnifiedChatSessionState
+import com.google.ai.edge.gallery.ui.unifiedchat.formatConnectorDisplayLabel
 import com.google.ai.edge.gallery.ui.unifiedchat.toUnifiedChatModelCapabilities
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetFullscreenOverlay
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetHostState
@@ -101,6 +103,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.ugot.chatkit.runtime.UgotChatSessionRepository
 
 private const val TAG = "AGLlmChatScreen"
 private const val UNIFIED_CHAT_SESSION_SAVE_DEBOUNCE_MS = 300L
@@ -333,7 +336,9 @@ fun ChatViewWrapper(
   val currentMessages = chatUiState.messagesByModel[selectedModel.name]?.toList().orEmpty()
   val sessionFileStore =
     remember(appContext) {
-      UnifiedChatSessionFileStore(File(appContext.filesDir, "unified_chat_sessions"))
+      GalleryChatSessionRepository(
+        UnifiedChatSessionFileStore(File(appContext.filesDir, "unified_chat_sessions"))
+      )
     }
   val restoredSessionIds = remember { mutableStateMapOf<String, Boolean>() }
   val pendingSnapshotsBySession = remember { mutableStateMapOf<String, PendingUnifiedSessionSnapshot>() }
@@ -537,7 +542,7 @@ fun ChatViewWrapper(
         val activeSkillIdsForTurn = unifiedSessionState.agentSkillState.activeSkillIds.toList()
         val connectorIdsForTurn = activeConnectorIds.toList()
         val hasPreexistingAgentContext = mcpUiSession.hasAgentReadableContext()
-        viewModel.beginAgentTurn(
+        val agentTurn = viewModel.beginAgentTurn(
           model = model,
           userPrompt = effectiveInputText,
           attachmentCount = attachmentCount,
@@ -584,6 +589,8 @@ fun ChatViewWrapper(
             )
             viewModel.generateResponse(
               model = model,
+              sessionId = sessionId,
+              turnId = agentTurn.id,
               input = effectiveInputText.withAgentVfsContext(mcpUiSession, attachmentVfsContext),
               images = images,
               audioMessages = audioMessages,
@@ -620,6 +627,7 @@ fun ChatViewWrapper(
       if (message is ChatMessageText) {
         viewModel.runAgain(
           model = model,
+          sessionId = sessionId,
           message = message,
           onError = { errorMessage ->
             viewModel.handleError(
@@ -642,6 +650,7 @@ fun ChatViewWrapper(
         viewModel.resetSession(
           task = task,
           model = model,
+          sessionId = sessionId,
           supportImage = showImagePicker,
           supportAudio = showAudioPicker,
         )
@@ -695,16 +704,7 @@ private fun androidConnectorSearchTitle(connectorIds: List<String>): String =
   }
 
 private fun androidConnectorTitle(connectorId: String): String =
-  when (connectorId) {
-    "fortune.ugot.uk/mcp" -> "UGOT Fortune"
-    else ->
-      connectorId
-        .split('_', '-')
-        .filter { it.isNotBlank() }
-        .joinToString(" ") { token ->
-          token.lowercase().replaceFirstChar { firstChar -> firstChar.titlecase() }
-        }
-  }
+  formatConnectorDisplayLabel(connectorId)
 
 private fun McpWidgetSessionHost?.hasAgentReadableContext(): Boolean =
   ((this as? McpUiSession)?.getAgentVfsContextSummary())
@@ -786,8 +786,8 @@ internal fun shouldRestorePersistedUnifiedSession(
   currentMessages: List<ChatMessage>,
 ): Boolean = !hasHandledRestoreForSession && currentMessages.isEmpty()
 
-private fun persistUnifiedSessionSnapshot(
-  sessionFileStore: UnifiedChatSessionFileStore,
+private suspend fun persistUnifiedSessionSnapshot(
+  sessionFileStore: UgotChatSessionRepository,
   sessionId: String,
   messages: List<ChatMessage>,
   activeConnectorIds: List<String>,

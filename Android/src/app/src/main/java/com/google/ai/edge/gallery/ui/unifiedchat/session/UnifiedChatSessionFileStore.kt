@@ -175,6 +175,21 @@ class UnifiedChatSessionFileStore(private val baseDir: File) {
     sessionFile(id).delete()
   }
 
+  fun list(): List<UnifiedChatPersistedSession> {
+    if (!baseDir.exists()) return emptyList()
+    return baseDir
+      .listFiles { file -> file.isFile && file.extension == "json" }
+      .orEmpty()
+      .mapNotNull { file -> runCatching { decodeUnifiedChatPersistedSession(file.readText()) }.getOrNull() }
+      .sortedBy(UnifiedChatPersistedSession::title)
+  }
+
+  fun clear() {
+    baseDir.listFiles { file -> file.isFile && file.extension == "json" }.orEmpty().forEach {
+      it.delete()
+    }
+  }
+
   internal fun sessionFile(id: String): File =
     File(baseDir, unifiedChatSessionFileName(id))
 }

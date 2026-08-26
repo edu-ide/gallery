@@ -19,6 +19,8 @@ package com.google.ai.edge.gallery.data
 import android.content.Context
 import com.google.gson.annotations.SerializedName
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CompletableDeferred
 
 data class ModelDataFile(
   val name: String,
@@ -385,3 +387,47 @@ data class ModelDownloadStatus(
 
 val EMPTY_MODEL: Model =
   Model(name = "empty", downloadFileName = "empty.tflite", url = "", sizeInBytes = 0L)
+
+private val modelInitDeferreds = ConcurrentHashMap<String, CompletableDeferred<Any?>>()
+
+internal var Model.initDeferred: CompletableDeferred<Any?>?
+  get() = modelInitDeferreds[name]
+  set(value) {
+    if (value == null) {
+      modelInitDeferreds.remove(name)
+    } else {
+      modelInitDeferreds[name] = value
+    }
+  }
+
+fun Model.markInitializationStarted() {
+  initDeferred?.cancel()
+  initDeferred = CompletableDeferred()
+  initializing = true
+}
+
+fun Model.markInitialized(instance: Any? = this.instance) {
+  this.instance = instance
+  initializing = false
+  initDeferred?.complete(instance)
+}
+
+fun Model.markInitializationFailed(error: String) {
+  initializing = false
+  val current = initDeferred
+  initDeferred = null
+  current?.completeExceptionally(IllegalStateException(error))
+}
+
+fun Model.resetInitialization() {
+  instance = null
+  initializing = false
+  val current = initDeferred
+  initDeferred = null
+  current?.cancel()
+}
+
+suspend fun Model.awaitInitialization() {
+  if (instance != null) return
+  initDeferred?.await()
+}

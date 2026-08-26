@@ -23,8 +23,9 @@ import com.google.ai.edge.gallery.ui.llmchat.LlmChatModelHelper
 
 val Model.runtimeHelper: LlmModelHelper
   get() {
-    if (this.runtimeType == RuntimeType.AICORE) {
-      return AICoreModelHelper
+    return when (runtimeType) {
+      RuntimeType.AICORE -> AICoreModelHelper
+      RuntimeType.LITERT_LM -> LlmChatModelHelper
+      RuntimeType.UNKNOWN -> error("Model $name has no declared runtime")
     }
-    return LlmChatModelHelper
   }

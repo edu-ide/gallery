@@ -161,6 +161,7 @@ object LlmChatModelHelper : LlmModelHelper {
     systemInstruction: Contents?,
     tools: List<ToolProvider>,
     enableConversationConstrainedDecoding: Boolean,
+    initialMessages: List<Message>,
   ) {
     try {
       Log.d(TAG, "Resetting conversation for model '${model.name}'")
@@ -199,6 +200,7 @@ object LlmChatModelHelper : LlmModelHelper {
               },
             systemInstruction = systemInstruction,
             tools = tools,
+            initialMessages = initialMessages,
           )
         )
       ExperimentalFlags.enableConversationConstrainedDecoding = false
@@ -206,7 +208,8 @@ object LlmChatModelHelper : LlmModelHelper {
 
       Log.d(TAG, "Resetting done")
     } catch (e: Exception) {
-      Log.d(TAG, "Failed to reset conversation", e)
+      Log.e(TAG, "Failed to reset conversation", e)
+      throw e
     }
   }
 

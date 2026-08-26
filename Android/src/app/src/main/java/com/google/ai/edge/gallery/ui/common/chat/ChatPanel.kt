@@ -42,7 +42,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -50,7 +49,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
@@ -88,7 +86,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.google.ai.edge.gallery.agent.turn.AgentTurnActivity
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.data.BuiltInTaskId
 import com.google.ai.edge.gallery.data.Model
@@ -102,6 +99,10 @@ import com.google.ai.edge.gallery.ui.unifiedchat.messages.MessageBodyMcpWidgetCa
 import com.google.ai.edge.gallery.ui.modelmanager.ModelInitializationStatusType
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.gallery.ui.theme.customColors
+import com.ugot.chatkit.ui.ChatTurnActivity
+import com.ugot.chatkit.ui.ChatTurnActivityUiState
+import com.ugot.chatkit.ui.ChatSurfaceScaffold
+import com.ugot.chatkit.ui.ChatTimeline
 import kotlinx.coroutines.delay
 
 /** Composable function for the main chat panel, displaying messages and handling user input. */
@@ -275,20 +276,20 @@ fun ChatPanel(
       AudioAnimation(bgColor = MaterialTheme.colorScheme.surface, amplitude = curAmplitude)
     }
 
-    Column(
-      modifier = modifier.padding(innerPadding).consumeWindowInsets(innerPadding).imePadding()
-    ) {
-      Box(contentAlignment = Alignment.BottomCenter, modifier = Modifier.weight(1f)) {
+    ChatSurfaceScaffold(
+      modifier = modifier.padding(innerPadding).consumeWindowInsets(innerPadding).imePadding(),
+      transcript = {
+      Box(contentAlignment = Alignment.BottomCenter, modifier = Modifier.fillMaxSize()) {
         val cdChatPanel = stringResource(R.string.cd_chat_panel)
-        LazyColumn(
+        ChatTimeline(
+          items = messages,
           modifier =
             Modifier.fillMaxSize().nestedScroll(nestedScrollConnection).semantics {
               contentDescription = cdChatPanel
             },
           state = listState,
           verticalArrangement = Arrangement.Top,
-        ) {
-          itemsIndexed(messages) { index, message ->
+        ) { index, message ->
             val imageHistoryCurIndex = remember { mutableIntStateOf(0) }
             var hAlign: Alignment.Horizontal = Alignment.End
             var backgroundColor: Color = MaterialTheme.customColors.userBubbleBgColor
@@ -499,7 +500,6 @@ fun ChatPanel(
                 }
               }
             }
-          }
         }
 
         SnackbarHost(hostState = snackbarHostState, modifier = Modifier.padding(vertical = 4.dp))
@@ -555,19 +555,27 @@ fun ChatPanel(
         )
       }
 
+      },
+      activity = {
       AnimatedVisibility(
         visible = agentTurnActivity != null,
         enter = fadeIn(),
         exit = fadeOut(),
       ) {
         agentTurnActivity?.let { activity ->
-          AgentTurnActivityNotice(
-            activity = activity,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+          ChatTurnActivity(
+            activity =
+              ChatTurnActivityUiState(
+                title = activity.title,
+                detail = activity.detail,
+                showsProgress = activity.showsProgress,
+              ),
           )
         }
       }
 
+      },
+      composer = {
       MessageInputText(
         task = task,
         modelManagerViewModel = modelManagerViewModel,
@@ -618,7 +626,8 @@ fun ChatPanel(
         onImageLimitExceeded = { showImageLimitBanner = true },
         extraTopContent = connectorBarContent,
       )
-    }
+      },
+    )
   }
 
   // Error dialog.
@@ -641,55 +650,6 @@ fun ChatPanel(
   }
 }
 
-@Composable
-private fun AgentTurnActivityNotice(
-  activity: AgentTurnActivity,
-  modifier: Modifier = Modifier,
-) {
-  Surface(
-    modifier = modifier.fillMaxWidth(),
-    shape = RoundedCornerShape(16.dp),
-    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-    tonalElevation = 1.dp,
-  ) {
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-      if (activity.showsProgress) {
-        CircularProgressIndicator(
-          modifier = Modifier.size(16.dp),
-          strokeWidth = 2.dp,
-          color = MaterialTheme.colorScheme.primary,
-        )
-      } else {
-        Text(
-          text = "!",
-          style = MaterialTheme.typography.labelLarge,
-          color = MaterialTheme.colorScheme.primary,
-        )
-      }
-
-      Column(
-        modifier = Modifier.weight(1f),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-      ) {
-        Text(
-          text = activity.title,
-          style = MaterialTheme.typography.labelLarge,
-          color = MaterialTheme.colorScheme.onSurface,
-        )
-        Text(
-          text = activity.detail,
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          maxLines = 2,
-        )
-      }
-    }
-  }
-}
 
 private suspend fun scrollToBottom(listState: LazyListState, animate: Boolean = false) {
   val itemCount = listState.layoutInfo.totalItemsCount
