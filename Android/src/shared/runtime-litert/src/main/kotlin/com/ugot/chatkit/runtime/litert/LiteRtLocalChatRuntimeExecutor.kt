@@ -118,6 +118,7 @@ class LiteRtLocalChatRuntimeExecutor(
     listener.onEvent(ChatRuntimeEvent(executionKey, ChatRuntimeEventType.PREPARING))
     try {
       val activeConversation = ensureConversation()
+      check(!closed.get()) { "Runtime executor was closed during initialization" }
       val finished = AtomicBoolean(false)
       suspendCancellableCoroutine { continuation ->
         fun finish(type: ChatRuntimeEventType, text: String = "") {
@@ -177,13 +178,22 @@ class LiteRtLocalChatRuntimeExecutor(
       listener.onEvent(
         ChatRuntimeEvent(
           executionKey,
-          ChatRuntimeEventType.FAILED,
-          error.message ?: "Local model inference failed",
+          if (closed.get() || interruptedExecution.get() == executionKey) {
+            ChatRuntimeEventType.INTERRUPTED
+          } else {
+            ChatRuntimeEventType.FAILED
+          },
+          if (closed.get() || interruptedExecution.get() == executionKey) {
+            ""
+          } else {
+            error.message ?: "Local model inference failed"
+          },
         )
       )
     } finally {
       activeExecution.compareAndSet(executionKey, null)
       interruptedExecution.compareAndSet(executionKey, null)
+      if (closed.get()) releaseResources()
     }
   }
 
@@ -199,7 +209,8 @@ class LiteRtLocalChatRuntimeExecutor(
       try {
         check(!closed.get()) { "Runtime executor is closed" }
         conversation?.close()
-        conversation = createConversation(checkNotNull(engine ?: createEngine()), config)
+        val initializedEngine = engine ?: createEngine().also { engine = it }
+        conversation = createConversation(initializedEngine, config)
         ChatRuntimeResetResult(succeeded = true)
       } catch (error: Throwable) {
         ChatRuntimeResetResult(
@@ -211,10 +222,13 @@ class LiteRtLocalChatRuntimeExecutor(
 
   override fun close() {
     if (!closed.compareAndSet(false, true)) return
-    conversation?.close()
-    conversation = null
-    engine?.close()
-    engine = null
+    val key = activeExecution.get()
+    if (key != null) {
+      interruptedExecution.set(key)
+      conversation?.cancelProcess()
+    } else {
+      releaseResources()
+    }
   }
 
   private fun ensureConversation(): Conversation {
@@ -260,6 +274,13 @@ class LiteRtLocalChatRuntimeExecutor(
           },
       )
     )
+
+  private fun releaseResources() {
+    conversation?.close()
+    conversation = null
+    engine?.close()
+    engine = null
+  }
 }
 
 fun LiteRtLocalModelConfig.toDescriptor(): ChatRuntimeDescriptor {

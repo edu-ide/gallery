@@ -42,6 +42,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -150,9 +151,17 @@ fun ChatTranscript(
   modifier: Modifier = Modifier,
   extensionRenderer: @Composable (ChatBlockUi.Extension) -> Unit = {},
 ) {
+  val listState = rememberLazyListState()
+  val lastMessage = messages.lastOrNull()
+  LaunchedEffect(messages.size, lastMessage?.blocks, lastMessage?.inProgress) {
+    if (messages.isNotEmpty()) {
+      listState.scrollToItem(messages.lastIndex)
+    }
+  }
   ChatTimeline(
     items = messages,
     itemKey = { _, message -> message.id },
+    state = listState,
     modifier = modifier.padding(horizontal = if (capabilities.layout == ChatLayout.COMPACT) 8.dp else 12.dp),
     verticalArrangement = Arrangement.spacedBy(8.dp),
   ) { _, message ->
