@@ -1,0 +1,175 @@
+/*
+ * Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.google.ai.edge.gallery.ui.unifiedchat
+
+import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetHostState
+import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSnapshot
+
+/** Platform-neutral role for a unified chat message. */
+enum class UnifiedChatMessageRole {
+  USER,
+  ASSISTANT,
+  SYSTEM,
+}
+
+/** Platform-neutral chat message model used by Android and iOS shells. */
+data class UnifiedChatMessage(
+  val id: String,
+  val role: UnifiedChatMessageRole,
+  val text: String,
+)
+
+/** Platform-neutral session state for the unified chat shell. */
+data class UnifiedChatSessionState(
+  val modelName: String,
+  val modelDisplayName: String,
+  val taskId: String,
+  val modelCapabilities: UnifiedChatModelCapabilities,
+  val entryHint: UnifiedChatEntryHint,
+  val agentSkillState: AgentSkillState,
+  val connectorBarState: ConnectorBarState,
+  val messages: List<UnifiedChatMessage>,
+  val draft: String,
+  val widgetHostState: McpWidgetHostState,
+  val nextMessageIndex: Int,
+) {
+  fun updateDraft(draft: String): UnifiedChatSessionState = copy(draft = draft)
+
+  fun withAgentSkill(skillId: String, active: Boolean): UnifiedChatSessionState =
+    copy(agentSkillState = agentSkillState.withSkill(skillId = skillId, active = active))
+
+  fun toggleAgentSkill(skillId: String): UnifiedChatSessionState =
+    copy(agentSkillState = agentSkillState.toggle(skillId))
+
+  fun toggleConnector(connectorId: String): UnifiedChatSessionState =
+    copy(connectorBarState = connectorBarState.toggle(connectorId))
+
+  fun withConnectors(
+    visibleConnectorIds: List<String>,
+    activeConnectorIds: Set<String>,
+  ): UnifiedChatSessionState {
+    val visible = visibleConnectorIds.distinct()
+    val visibleSet = visible.toSet()
+    val active = activeConnectorIds.filter { visibleSet.contains(it) }.toSet()
+    return copy(
+      connectorBarState =
+        ConnectorBarState(
+          visibleConnectorIds = visible,
+          activeConnectorIds = active,
+        )
+    )
+  }
+
+  fun appendUserMessage(text: String): UnifiedChatSessionState {
+    val trimmedText = text.trim()
+    if (trimmedText.isEmpty()) {
+      return this
+    }
+    val appended = nextMessage(role = UnifiedChatMessageRole.USER, text = trimmedText)
+    return copy(messages = messages + appended.message, draft = "", nextMessageIndex = appended.nextIndex)
+  }
+
+  fun appendAssistantMessage(text: String): UnifiedChatSessionState =
+    appendMessage(role = UnifiedChatMessageRole.ASSISTANT, text = text)
+
+  fun appendSystemMessage(text: String): UnifiedChatSessionState =
+    appendMessage(role = UnifiedChatMessageRole.SYSTEM, text = text)
+
+  /** Moves the current draft into the transcript. Runtime adapters append the real response. */
+  fun consumeDraftAsUserMessage(): UnifiedChatSessionState = appendUserMessage(draft)
+
+  fun activateWidget(snapshot: McpWidgetSnapshot, fullscreen: Boolean): UnifiedChatSessionState =
+    copy(widgetHostState = widgetHostState.activate(snapshot = snapshot, fullscreen = fullscreen))
+
+  fun closeWidget(): UnifiedChatSessionState = copy(widgetHostState = widgetHostState.close())
+
+  fun currentEntryHint(): UnifiedChatEntryHint =
+    entryHint.copy(
+      activateSkills = agentSkillState.activeSkillIds.isNotEmpty(),
+      activateAgentSkillIds = agentSkillState.activeSkillIds.sorted(),
+      activateMcpConnectorIds = connectorBarState.activeConnectorIds.sorted(),
+    )
+
+  fun route(): String = buildUnifiedChatRoute(taskId = taskId, modelName = modelName, entryHint = currentEntryHint())
+
+  fun connectorLauncherLabel(): String =
+    buildConnectorLauncherLabel(activeConnectorCount = connectorBarState.activeConnectorIds.size)
+
+  fun chromePolicy(): UnifiedChatChromePolicy =
+    resolveUnifiedChatChromePolicy(
+      hasVisibleConnectors = connectorBarState.visibleConnectorIds.isNotEmpty(),
+      supportsAudioInput = modelCapabilities.supportsUnifiedChatCapability(UnifiedChatCapability.AUDIO),
+    )
+
+  private fun appendMessage(role: UnifiedChatMessageRole, text: String): UnifiedChatSessionState {
+    val appended = nextMessage(role = role, text = text)
+    return copy(messages = messages + appended.message, nextMessageIndex = appended.nextIndex)
+  }
+
+  private fun nextMessage(role: UnifiedChatMessageRole, text: String): IndexedMessage =
+    IndexedMessage(
+      message = UnifiedChatMessage(id = "m$nextMessageIndex", role = role, text = text),
+      nextIndex = nextMessageIndex + 1,
+    )
+
+  private data class IndexedMessage(
+    val message: UnifiedChatMessage,
+    val nextIndex: Int,
+  )
+}
+
+fun createUnifiedChatSessionState(
+  modelName: String,
+  modelDisplayName: String,
+  taskId: String,
+  modelCapabilities: UnifiedChatModelCapabilities,
+  entryHint: UnifiedChatEntryHint,
+  visibleAgentSkillIds: List<String> = emptyList(),
+  visibleConnectorIds: List<String>,
+  initialDraft: String = "",
+): UnifiedChatSessionState {
+  val activeAgentSkillIds =
+    if (entryHint.activateAgentSkillIds.isNotEmpty()) {
+      entryHint.activateAgentSkillIds.filter { visibleAgentSkillIds.contains(it) }
+    } else if (entryHint.activateSkills) {
+      visibleAgentSkillIds
+    } else {
+      emptyList()
+    }
+  val activeConnectorIds = entryHint.activateMcpConnectorIds.filter { visibleConnectorIds.contains(it) }
+  return UnifiedChatSessionState(
+    modelName = modelName,
+    modelDisplayName = modelDisplayName,
+    taskId = taskId,
+    modelCapabilities = modelCapabilities,
+    entryHint = entryHint,
+    agentSkillState =
+      AgentSkillState(
+        visibleSkillIds = visibleAgentSkillIds,
+        activeSkillIds = activeAgentSkillIds.toSet(),
+      ),
+    connectorBarState =
+      ConnectorBarState(
+        visibleConnectorIds = visibleConnectorIds,
+        activeConnectorIds = activeConnectorIds.toSet(),
+      ),
+    messages = emptyList(),
+    draft = initialDraft,
+    widgetHostState = McpWidgetHostState(),
+    nextMessageIndex = 0,
+  )
+}
