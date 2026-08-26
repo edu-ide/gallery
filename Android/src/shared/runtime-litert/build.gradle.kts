@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 /*
  * Copyright 2026 Google LLC
  *
@@ -23,7 +25,7 @@ android {
     sourceCompatibility = JavaVersion.VERSION_11
     targetCompatibility = JavaVersion.VERSION_11
   }
-  kotlinOptions { jvmTarget = "11" }
+  kotlin { compilerOptions { jvmTarget.set(JvmTarget.JVM_11) } }
 }
 
 dependencies {
