@@ -23,8 +23,8 @@ class LiteRtLocalModelConfigTest {
         id = "q-local",
         displayName = "Q local model",
         modelPath = "/missing/model.litertlm",
-        backend = LiteRtLocalBackend.CPU,
       )
+    assertEquals(LiteRtLocalBackend.GPU, missing.backend)
     assertEquals(ChatRuntimeAvailability.REQUIRES_DOWNLOAD, missing.toDescriptor().availability)
 
     val file = Files.createTempFile("q-local", ".litertlm").toFile()

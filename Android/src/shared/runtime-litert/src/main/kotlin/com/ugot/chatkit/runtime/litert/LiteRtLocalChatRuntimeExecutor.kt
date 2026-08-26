@@ -38,20 +38,25 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 enum class LiteRtLocalBackend {
   CPU,
   GPU,
+  NPU,
 }
 
 data class LiteRtLocalModelConfig(
   val id: String,
   val displayName: String,
   val modelPath: String,
-  val backend: LiteRtLocalBackend,
+  val backend: LiteRtLocalBackend = LiteRtLocalBackend.GPU,
+  val cacheDir: String? = null,
+  val npuNativeLibraryDir: String? = null,
   val maxTokens: Int = 1024,
   val topK: Int = 40,
   val topP: Double = 0.95,
@@ -117,7 +122,7 @@ class LiteRtLocalChatRuntimeExecutor(
     activeExecution.set(executionKey)
     listener.onEvent(ChatRuntimeEvent(executionKey, ChatRuntimeEventType.PREPARING))
     try {
-      val activeConversation = ensureConversation()
+      val activeConversation = withContext(Dispatchers.IO) { ensureConversation() }
       check(!closed.get()) { "Runtime executor was closed during initialization" }
       val finished = AtomicBoolean(false)
       suspendCancellableCoroutine { continuation ->
@@ -208,9 +213,11 @@ class LiteRtLocalChatRuntimeExecutor(
     lifecycleMutex.withLock {
       try {
         check(!closed.get()) { "Runtime executor is closed" }
-        conversation?.close()
-        val initializedEngine = engine ?: createEngine().also { engine = it }
-        conversation = createConversation(initializedEngine, config)
+        withContext(Dispatchers.IO) {
+          conversation?.close()
+          val initializedEngine = engine ?: createEngine().also { engine = it }
+          conversation = createConversation(initializedEngine, config)
+        }
         ChatRuntimeResetResult(succeeded = true)
       } catch (error: Throwable) {
         ChatRuntimeResetResult(
@@ -246,8 +253,11 @@ class LiteRtLocalChatRuntimeExecutor(
             when (config.backend) {
               LiteRtLocalBackend.CPU -> Backend.CPU()
               LiteRtLocalBackend.GPU -> Backend.GPU()
+              LiteRtLocalBackend.NPU ->
+                Backend.NPU(nativeLibraryDir = config.npuNativeLibraryDir.orEmpty())
             },
           maxNumTokens = config.maxTokens,
+          cacheDir = config.cacheDir,
         )
       )
       .also(Engine::initialize)
@@ -259,11 +269,15 @@ class LiteRtLocalChatRuntimeExecutor(
     engine.createConversation(
       ConversationConfig(
         samplerConfig =
-          SamplerConfig(
-            topK = config.topK,
-            topP = config.topP,
-            temperature = config.temperature,
-          ),
+          if (config.backend == LiteRtLocalBackend.NPU) {
+            null
+          } else {
+            SamplerConfig(
+              topK = config.topK,
+              topP = config.topP,
+              temperature = config.temperature,
+            )
+          },
         initialMessages =
           sessionConfig.history.map { message ->
             when (message.role) {
