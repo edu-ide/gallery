@@ -123,6 +123,7 @@ data class ChatModelUi(
   val selected: Boolean,
   val enabled: Boolean = true,
   val statusLabel: String? = null,
+  val setupActionLabel: String? = null,
 )
 
 @Immutable
@@ -199,6 +200,8 @@ sealed interface ChatUiIntent {
   data class RemoveAttachment(val id: String) : ChatUiIntent
 
   data class ModelSelected(val id: String) : ChatUiIntent
+
+  data class ModelSetupClicked(val id: String) : ChatUiIntent
 
   data class ConnectorToggled(val id: String) : ChatUiIntent
 

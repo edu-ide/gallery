@@ -82,7 +82,17 @@ fun ChatSurface(
         CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
       }
     },
-    activity = { state.turnActivity?.let { activity -> ChatTurnActivity(activity) } },
+    activity = {
+      state.error?.let { error ->
+        Text(
+          text = error,
+          color = MaterialTheme.colorScheme.error,
+          style = MaterialTheme.typography.bodySmall,
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
+        )
+      }
+      state.turnActivity?.let { activity -> ChatTurnActivity(activity) }
+    },
     composer = {
       ChatComposer(
         state = state.composer,
@@ -315,12 +325,19 @@ private fun ChatModelPicker(models: List<ChatModelUi>, onIntent: (ChatUiIntent) 
     horizontalArrangement = Arrangement.spacedBy(8.dp),
   ) {
     models.forEach { model ->
-      FilterChip(
-        selected = model.selected,
-        enabled = model.enabled,
-        onClick = { onIntent(ChatUiIntent.ModelSelected(model.id)) },
-        label = { Text(model.statusLabel?.let { "${model.label} · $it" } ?: model.label) },
-      )
+      Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        FilterChip(
+          selected = model.selected,
+          enabled = model.enabled,
+          onClick = { onIntent(ChatUiIntent.ModelSelected(model.id)) },
+          label = { Text(model.statusLabel?.let { "${model.label} · $it" } ?: model.label) },
+        )
+        model.setupActionLabel?.let { actionLabel ->
+          TextButton(onClick = { onIntent(ChatUiIntent.ModelSetupClicked(model.id)) }) {
+            Text(actionLabel)
+          }
+        }
+      }
     }
   }
 }
