@@ -48,3 +48,5 @@ rootProject.name = "AI Edge Gallery"
 
 include(":app")
 include(":shared:core")
+include(":shared:runtime")
+include(":shared:chat-ui")

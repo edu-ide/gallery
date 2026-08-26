@@ -33,12 +33,7 @@ data class UnifiedChatMessage(
   val text: String,
 )
 
-/**
- * Platform-neutral session state for the unified chat shell.
- *
- * This class intentionally keeps the model execution result as plain text for now. Runtime adapters
- * can later replace [submitDraft] with real inference while keeping the state transitions stable.
- */
+/** Platform-neutral session state for the unified chat shell. */
 data class UnifiedChatSessionState(
   val modelName: String,
   val modelDisplayName: String,
@@ -94,25 +89,8 @@ data class UnifiedChatSessionState(
   fun appendSystemMessage(text: String): UnifiedChatSessionState =
     appendMessage(role = UnifiedChatMessageRole.SYSTEM, text = text)
 
-  fun submitDraft(responsePrefix: String = "Stub response"): UnifiedChatSessionState {
-    val trimmedDraft = draft.trim()
-    if (trimmedDraft.isEmpty()) {
-      return this
-    }
-
-    val withUserMessage = appendUserMessage(trimmedDraft)
-    val activeConnectors = connectorBarState.activeConnectorIds.sorted()
-    val connectorSummary =
-      if (activeConnectors.isEmpty()) {
-        "none"
-      } else {
-        activeConnectors.joinToString(", ")
-      }
-
-    return withUserMessage.appendAssistantMessage(
-      "$responsePrefix from $modelDisplayName. Active connectors: $connectorSummary."
-    )
-  }
+  /** Moves the current draft into the transcript. Runtime adapters append the real response. */
+  fun consumeDraftAsUserMessage(): UnifiedChatSessionState = appendUserMessage(draft)
 
   fun activateWidget(snapshot: McpWidgetSnapshot, fullscreen: Boolean): UnifiedChatSessionState =
     copy(widgetHostState = widgetHostState.activate(snapshot = snapshot, fullscreen = fullscreen))
@@ -189,21 +167,9 @@ fun createUnifiedChatSessionState(
         visibleConnectorIds = visibleConnectorIds,
         activeConnectorIds = activeConnectorIds.toSet(),
       ),
-    messages =
-      listOf(
-        UnifiedChatMessage(
-          id = "m0",
-          role = UnifiedChatMessageRole.ASSISTANT,
-          text = "Loaded $modelDisplayName. This is the shared KMP chat session shell.",
-        ),
-        UnifiedChatMessage(
-          id = "m1",
-          role = UnifiedChatMessageRole.SYSTEM,
-          text = "Shared core owns draft, messages, connectors, route hints, and widget host state.",
-        ),
-      ),
+    messages = emptyList(),
     draft = initialDraft,
     widgetHostState = McpWidgetHostState(),
-    nextMessageIndex = 2,
+    nextMessageIndex = 0,
   )
 }

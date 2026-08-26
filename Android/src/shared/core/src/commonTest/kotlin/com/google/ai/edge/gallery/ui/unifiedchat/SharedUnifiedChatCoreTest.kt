@@ -36,6 +36,12 @@ import kotlin.test.assertTrue
 
 class SharedUnifiedChatCoreTest {
   @Test
+  fun connectorDisplayLabel_isProductNeutral() {
+    assertEquals("Fortune", formatConnectorDisplayLabel("https://fortune.ugot.uk/mcp"))
+    assertEquals("Local Files", formatConnectorDisplayLabel("local_files"))
+  }
+
+  @Test
   fun entryHint_roundTripsThroughRouteSafeEncoding() {
     val hint =
       UnifiedChatEntryHint(
@@ -100,7 +106,7 @@ class SharedUnifiedChatCoreTest {
     assertEquals(McpWidgetDisplayMode.FULLSCREEN, state.displayMode)
   }
   @Test
-  fun unifiedChatSessionState_submitsDraftAndTracksConnectors() {
+  fun unifiedChatSessionState_consumesDraftAndTracksConnectors() {
     val state =
       createUnifiedChatSessionState(
         modelName = "Gemma-4-E2B-it",
@@ -115,14 +121,13 @@ class SharedUnifiedChatCoreTest {
 
     assertEquals(setOf("github"), state.connectorBarState.activeConnectorIds)
 
-    val updated = state.toggleConnector("gmail").submitDraft(responsePrefix = "Reply")
+    val updated = state.toggleConnector("gmail").consumeDraftAsUserMessage()
 
     assertEquals("", updated.draft)
-    assertEquals(4, updated.messages.size)
-    assertEquals(UnifiedChatMessageRole.USER, updated.messages[2].role)
-    assertEquals("Hello from shared state", updated.messages[2].text)
-    assertEquals(UnifiedChatMessageRole.ASSISTANT, updated.messages[3].role)
-    assertTrue(updated.messages[3].text.contains("github, gmail"))
+    assertEquals(1, updated.messages.size)
+    assertEquals(UnifiedChatMessageRole.USER, updated.messages.single().role)
+    assertEquals("Hello from shared state", updated.messages.single().text)
+    assertEquals(setOf("github", "gmail"), updated.connectorBarState.activeConnectorIds)
     assertTrue(updated.route().contains("Gemma-4-E2B-it"))
     assertEquals("Connectors (2)", updated.connectorLauncherLabel())
   }
@@ -277,10 +282,10 @@ class SharedUnifiedChatCoreTest {
     val updated = state.appendUserMessage(state.draft).appendAssistantMessage("runtime response")
 
     assertEquals("", updated.draft)
-    assertEquals(UnifiedChatMessageRole.USER, updated.messages[2].role)
-    assertEquals("hello runtime", updated.messages[2].text)
-    assertEquals(UnifiedChatMessageRole.ASSISTANT, updated.messages[3].role)
-    assertEquals("runtime response", updated.messages[3].text)
+    assertEquals(UnifiedChatMessageRole.USER, updated.messages[0].role)
+    assertEquals("hello runtime", updated.messages[0].text)
+    assertEquals(UnifiedChatMessageRole.ASSISTANT, updated.messages[1].role)
+    assertEquals("runtime response", updated.messages[1].text)
   }
 
 }
