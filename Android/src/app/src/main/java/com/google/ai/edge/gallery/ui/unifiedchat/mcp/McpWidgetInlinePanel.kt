@@ -16,6 +16,7 @@
 
 package com.google.ai.edge.gallery.ui.unifiedchat.mcp
 
+import android.annotation.SuppressLint
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -43,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import com.google.ai.edge.gallery.ui.common.GalleryWebView
 import org.json.JSONObject
 
+@SuppressLint("JavascriptInterface")
 @Composable
 fun McpWidgetInlinePanel(
   snapshot: McpWidgetSnapshot,

@@ -122,8 +122,7 @@ private fun PersistedSessionSchema?.toValidatedSession(): UnifiedChatPersistedSe
   if (
     agentSkillIds.size != activeAgentSkillIds.orEmpty().size ||
       connectorIds.size != activeConnectorIds.size ||
-      messages.size != messagesJson.size ||
-      snapshots.size != widgetSnapshots.orEmpty().count { it != null }
+      messages.size != messagesJson.size
   ) {
     return null
   }

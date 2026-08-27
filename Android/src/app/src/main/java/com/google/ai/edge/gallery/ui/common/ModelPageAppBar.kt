@@ -25,11 +25,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.MapsUgc
 import androidx.compose.material.icons.rounded.Tune
-import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -60,6 +57,8 @@ import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.data.convertValueToTargetType
 import com.google.ai.edge.gallery.ui.modelmanager.ModelInitializationStatusType
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
+import com.ugot.chatkit.ui.ChatNavigationMode
+import com.ugot.chatkit.ui.UgotChatTopBar
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -96,7 +95,23 @@ fun ModelPageAppBar(
   val isModelInitialized =
     modelInitializationStatus?.status == ModelInitializationStatusType.INITIALIZED
 
-  CenterAlignedTopAppBar(
+  val navigationMode =
+    if (showHistoryButton) ChatNavigationMode.HISTORY else ChatNavigationMode.BACK
+  val navigationContentDescription =
+    stringResource(
+      if (showHistoryButton) R.string.cd_show_history else R.string.cd_navigate_back_icon
+    )
+  UgotChatTopBar(
+    navigationMode = navigationMode,
+    navigationEnabled = !isModelInitializing && !inProgress,
+    navigationContentDescription = navigationContentDescription,
+    onNavigationClicked = {
+      if (showHistoryButton) {
+        onHistoryClicked()
+      } else {
+        onBackClicked()
+      }
+    },
     title = {
       Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -133,29 +148,6 @@ fun ModelPageAppBar(
       }
     },
     modifier = modifier,
-    // The back button.
-    navigationIcon = {
-      val enableBackButton = !isModelInitializing && !inProgress
-      IconButton(
-        onClick = {
-          if (showHistoryButton) {
-            onHistoryClicked()
-          } else {
-            onBackClicked()
-          }
-        },
-        enabled = enableBackButton,
-      ) {
-        Icon(
-          imageVector =
-            if (showHistoryButton) Icons.Rounded.History else Icons.AutoMirrored.Rounded.ArrowBack,
-          contentDescription =
-            stringResource(
-              if (showHistoryButton) R.string.cd_show_history else R.string.cd_navigate_back_icon
-            ),
-        )
-      }
-    },
     // The config button for the model (if existed).
     actions = {
       val downloadSucceeded = curDownloadStatus?.status == ModelDownloadStatusType.SUCCEEDED

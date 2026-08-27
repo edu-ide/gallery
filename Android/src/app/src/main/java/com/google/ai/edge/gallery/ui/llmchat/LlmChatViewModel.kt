@@ -44,6 +44,9 @@ import com.ugot.chatkit.runtime.ChatRuntimeEventType
 import com.ugot.chatkit.runtime.ChatRuntimeExecutionKey
 import com.ugot.chatkit.runtime.ChatRuntimeRequest
 import com.ugot.chatkit.runtime.ChatRuntimeSessionConfig
+import com.ugot.chatkit.controller.ChatControllerConfig
+import com.ugot.chatkit.controller.DefaultChatController
+import com.ugot.chatkit.ui.ChatEmptyStateUi
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.io.ByteArrayOutputStream
 import java.util.UUID
@@ -60,6 +63,37 @@ private const val TAG = "AGLlmChatViewModel"
 open class LlmChatViewModelBase() : ChatViewModel() {
   private val runtimeExecutors = ConcurrentHashMap<String, GalleryChatRuntimeExecutor>()
   private val activeExecutions = ConcurrentHashMap<String, ChatRuntimeExecutionKey>()
+  private val sharedControllers = ConcurrentHashMap<String, DefaultChatController>()
+
+  fun sharedChatController(
+    task: Task,
+    model: Model,
+    sessionId: String,
+  ): DefaultChatController {
+    val key = "$sessionId:${model.name}"
+    return sharedControllers.getOrPut(key) {
+      val executor =
+        runtimeExecutors.getOrPut(model.name) {
+          GalleryChatRuntimeExecutor(model = model, coroutineScope = viewModelScope)
+        }
+      DefaultChatController(
+        scope = viewModelScope,
+        config =
+          ChatControllerConfig(
+            sessionId = sessionId,
+            taskId = task.id,
+            title = "UGOT Chat",
+            initialRuntimeId = executor.descriptor.id,
+            emptyState =
+              ChatEmptyStateUi(
+                title = "Chat with ${model.displayName.ifBlank { model.name }}",
+                description = "Run the selected model on your device with the shared UGOT Chat experience.",
+              ),
+          ),
+        executors = listOf(executor),
+      )
+    }
+  }
 
   fun generateResponse(
     model: Model,
@@ -185,6 +219,14 @@ open class LlmChatViewModelBase() : ChatViewModel() {
       runtimeExecutors[model.name]?.interrupt(execution)
     }
     Log.d(TAG, "Done stopping response")
+  }
+
+  override fun onCleared() {
+    sharedControllers.values.forEach(DefaultChatController::close)
+    sharedControllers.clear()
+    runtimeExecutors.values.forEach(GalleryChatRuntimeExecutor::close)
+    runtimeExecutors.clear()
+    super.onCleared()
   }
 
   fun resetSession(

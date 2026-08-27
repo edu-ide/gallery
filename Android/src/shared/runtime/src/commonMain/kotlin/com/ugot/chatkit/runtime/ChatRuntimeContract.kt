@@ -150,6 +150,46 @@ interface ChatRuntimeExecutor {
   fun close()
 }
 
+/**
+ * Provider-neutral placeholder for a runtime which is visible in the shared model picker but
+ * cannot execute yet. Hosts use this for setup-required and unsupported providers instead of
+ * declaring parallel no-op executors.
+ */
+class UnavailableChatRuntimeExecutor(
+  override val descriptor: ChatRuntimeDescriptor,
+) : ChatRuntimeExecutor {
+  init {
+    require(descriptor.availability != ChatRuntimeAvailability.READY) {
+      "A ready runtime requires a real executor"
+    }
+  }
+
+  override val activeExecutionKey: ChatRuntimeExecutionKey? = null
+
+  override suspend fun execute(
+    request: ChatRuntimeRequest,
+    listener: ChatRuntimeEventListener,
+  ) {
+    listener.onEvent(
+      ChatRuntimeEvent(
+        executionKey = ChatRuntimeExecutionKey(request.sessionId, request.turnId),
+        type = ChatRuntimeEventType.FAILED,
+        text = requireNotNull(descriptor.unavailableReason),
+      )
+    )
+  }
+
+  override fun interrupt(key: ChatRuntimeExecutionKey): Boolean = false
+
+  override suspend fun resetSession(config: ChatRuntimeSessionConfig): ChatRuntimeResetResult =
+    ChatRuntimeResetResult(
+      succeeded = false,
+      message = requireNotNull(descriptor.unavailableReason),
+    )
+
+  override fun close() = Unit
+}
+
 data class ChatRuntimeExecutionKey(
   val sessionId: String,
   val turnId: String,

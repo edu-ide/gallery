@@ -48,7 +48,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -62,11 +61,9 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.rounded.AudioFile
 import androidx.compose.material.icons.rounded.Close
@@ -74,7 +71,6 @@ import androidx.compose.material.icons.rounded.FlipCameraAndroid
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Photo
 import androidx.compose.material.icons.rounded.PhotoCamera
-import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -86,8 +82,6 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -129,9 +123,9 @@ import com.google.ai.edge.gallery.data.MAX_IMAGE_COUNT_AI_CORE
 import com.google.ai.edge.gallery.data.RuntimeType
 import com.google.ai.edge.gallery.data.SAMPLE_RATE
 import com.google.ai.edge.gallery.data.Task
-import com.google.ai.edge.gallery.ui.common.getTaskIconColor
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
-import com.google.ai.edge.gallery.ui.theme.bodyLargeNarrow
+import com.ugot.chatkit.ui.UgotChatAttachmentStrip
+import com.ugot.chatkit.ui.UgotChatComposerFrame
 import java.io.FileInputStream
 import java.util.concurrent.Executors
 import kotlinx.coroutines.Dispatchers
@@ -307,10 +301,7 @@ fun MessageInputText(
   Column {
     // A preview panel for the selected images and audio clips.
     if (pickedImages.isNotEmpty() || pickedAudioClips.isNotEmpty()) {
-      Row(
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-      ) {
+      UgotChatAttachmentStrip {
         Spacer(modifier = Modifier.width(16.dp))
 
         for (image in pickedImages) {
@@ -360,51 +351,42 @@ fun MessageInputText(
       AnimatedContent(targetState = showAudioRecorder) { curShowAudioRecorder ->
         when (curShowAudioRecorder) {
           // Input
-          false ->
-            Column(
-              modifier =
-                Modifier.padding(horizontal = 12.dp)
-                  .padding(vertical = 8.dp)
-                  .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))
-            ) {
-              // First row: text field for input.
-              Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                // Text field.
-                val cdPromptInput = stringResource(R.string.cd_prompt_input_text_field)
-                TextField(
-                  value = curMessage,
-                  minLines = 1,
-                  maxLines = 3,
-                  onValueChange = onValueChanged,
-                  colors =
-                    TextFieldDefaults.colors(
-                      unfocusedContainerColor = Color.Transparent,
-                      focusedContainerColor = Color.Transparent,
-                      focusedIndicatorColor = Color.Transparent,
-                      unfocusedIndicatorColor = Color.Transparent,
-                      disabledIndicatorColor = Color.Transparent,
-                      disabledContainerColor = Color.Transparent,
-                    ),
-                  textStyle = bodyLargeNarrow,
-                  modifier = Modifier.weight(1f).semantics { contentDescription = cdPromptInput },
-                  placeholder = { Text(stringResource(textFieldPlaceHolderRes)) },
+          false -> {
+            val composerEnabled = !isResettingSession && !modelInitializing
+            val cdPromptInput = stringResource(R.string.cd_prompt_input_text_field)
+            UgotChatComposerFrame(
+              draft = curMessage,
+              enabled = composerEnabled,
+              inProgress = inProgress,
+              canSend =
+                composerEnabled &&
+                  !inProgress &&
+                  (curMessage.isNotEmpty() ||
+                    pickedImages.isNotEmpty() ||
+                    pickedAudioClips.isNotEmpty()),
+              showStopButton =
+                showStopButtonWhenInProgress && !modelInitializing && !modelPreparing,
+              placeholder = stringResource(textFieldPlaceHolderRes),
+              maxLines = 3,
+              sendContentDescription = stringResource(R.string.cd_send_prompt_icon),
+              stopContentDescription = stringResource(R.string.cd_stop_icon),
+              onDraftChanged = onValueChanged,
+              onStopClicked = onStopButtonClicked,
+              onSendClicked = {
+                val message = curMessage.trim()
+                onSendMessage(
+                  createMessagesToSend(
+                    pickedImages = pickedImages,
+                    audioClips = pickedAudioClips,
+                    text = message,
+                  )
                 )
-                Spacer(modifier = Modifier.width(4.dp))
-              }
-
-              // Second row: buttons to add extra content, and the action button.
-              Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).offset(y = (-8).dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-              ) {
-                Row(
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
+                pickedImages = listOf()
+                pickedAudioClips = listOf()
+              },
+              modifier = Modifier.fillMaxWidth(),
+              draftModifier = Modifier.semantics { contentDescription = cdPromptInput },
+              leadingActions = {
                   // A plus button to show a popup menu to add stuff to the chat.
                   Box() {
                     val enableAddButton = !inProgress && !isResettingSession && !modelInitializing
@@ -594,63 +576,9 @@ fun MessageInputText(
                   }
 
                   extraTopContent?.invoke()
-                }
-
-                // Stop button.
-                if (inProgress && showStopButtonWhenInProgress) {
-                  if (!modelInitializing && !modelPreparing) {
-                    IconButton(
-                      onClick = onStopButtonClicked,
-                      colors =
-                        IconButtonDefaults.iconButtonColors(
-                          containerColor = MaterialTheme.colorScheme.secondaryContainer
-                        ),
-                    ) {
-                      Icon(
-                        Icons.Rounded.Stop,
-                        contentDescription = stringResource(R.string.cd_stop_icon),
-                        tint = MaterialTheme.colorScheme.primary,
-                      )
-                    }
-                  }
-                }
-                // Send button.
-                else {
-                  IconButton(
-                    enabled =
-                      !inProgress &&
-                        !isResettingSession &&
-                        (curMessage.isNotEmpty() ||
-                          pickedImages.isNotEmpty() ||
-                          pickedAudioClips.isNotEmpty()),
-                    onClick = {
-                      var message = curMessage.trim()
-                      onSendMessage(
-                        createMessagesToSend(
-                          pickedImages = pickedImages,
-                          audioClips = pickedAudioClips,
-                          text = message,
-                        )
-                      )
-                      pickedImages = listOf()
-                      pickedAudioClips = listOf()
-                    },
-                    colors =
-                      IconButtonDefaults.iconButtonColors(
-                        containerColor = getTaskIconColor(task = task),
-                        disabledContainerColor = getTaskIconColor(task = task).copy(alpha = 0.3f),
-                      ),
-                  ) {
-                    Icon(
-                      Icons.AutoMirrored.Rounded.Send,
-                      contentDescription = stringResource(R.string.cd_send_prompt_icon),
-                      modifier = Modifier.offset(x = 2.dp),
-                      tint = Color.White,
-                    )
-                  }
-                }
-              }
-            }
+              },
+            )
+          }
 
           // Audio recorder.
           true ->

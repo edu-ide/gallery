@@ -16,6 +16,7 @@
 
 package com.google.ai.edge.gallery.ui.unifiedchat.mcp
 
+import android.annotation.SuppressLint
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -43,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.ui.common.GalleryWebView
 
+@SuppressLint("JavascriptInterface")
 @Composable
 fun McpWidgetFullscreenOverlay(
   session: McpWidgetSessionHost,

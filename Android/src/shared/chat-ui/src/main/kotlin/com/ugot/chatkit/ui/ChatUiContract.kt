@@ -21,6 +21,10 @@ enum class ChatLayout {
 data class ChatUiCapabilities(
   val layout: ChatLayout = ChatLayout.FULL,
   val showTopBar: Boolean = true,
+  val navigationMode: ChatNavigationMode = ChatNavigationMode.NONE,
+  val showHistoryAction: Boolean = false,
+  val showSettingsAction: Boolean = false,
+  val showResetAction: Boolean = false,
   val showModelPicker: Boolean = true,
   val showProvider: Boolean = true,
   val showSenderLabels: Boolean = true,
@@ -40,6 +44,12 @@ data class ChatUiCapabilities(
   }
 }
 
+enum class ChatNavigationMode {
+  NONE,
+  BACK,
+  HISTORY,
+}
+
 @Immutable
 data class ChatSurfaceState(
   val conversationId: String,
@@ -49,11 +59,35 @@ data class ChatSurfaceState(
   val composer: ChatComposerUiState = ChatComposerUiState(),
   val models: List<ChatModelUi> = emptyList(),
   val connectors: List<ChatConnectorUi> = emptyList(),
+  val emptyState: ChatEmptyStateUi? = null,
+  val history: ChatHistoryUiState? = null,
   val activeWidget: ChatWidgetUiState? = null,
+  val attachmentViewer: ChatAttachmentViewerUiState? = null,
   val pendingPermission: ChatPermissionUiState? = null,
   val turnActivity: ChatTurnActivityUiState? = null,
   val restoring: Boolean = false,
   val error: String? = null,
+)
+
+@Immutable
+data class ChatEmptyStateUi(
+  val title: String,
+  val description: String,
+  val suggestions: List<String> = emptyList(),
+)
+
+@Immutable
+data class ChatHistoryUiState(
+  val visible: Boolean = false,
+  val conversations: List<ChatHistoryItemUi> = emptyList(),
+)
+
+@Immutable
+data class ChatHistoryItemUi(
+  val id: String,
+  val title: String,
+  val detail: String? = null,
+  val selected: Boolean = false,
 )
 
 enum class ChatRole {
@@ -69,7 +103,16 @@ data class ChatMessageUi(
   val blocks: List<ChatBlockUi>,
   val senderLabel: String? = null,
   val timestampLabel: String? = null,
+  val metadataLabel: String? = null,
+  val actions: List<ChatMessageActionUi> = emptyList(),
   val inProgress: Boolean = false,
+)
+
+@Immutable
+data class ChatMessageActionUi(
+  val id: String,
+  val label: String,
+  val enabled: Boolean = true,
 )
 
 sealed interface ChatBlockUi {
@@ -98,12 +141,29 @@ enum class ChatAttachmentType {
   FILE,
 }
 
+enum class ChatAttachmentSource {
+  CAMERA,
+  PHOTO_LIBRARY,
+  AUDIO_RECORDER,
+  AUDIO_FILE,
+  FILE,
+}
+
 @Immutable
 data class ChatAttachmentUi(
   val id: String,
   val type: ChatAttachmentType,
   val displayName: String,
   val contentRef: String,
+  val mimeType: String? = null,
+  val durationLabel: String? = null,
+  val previewRef: String? = null,
+)
+
+@Immutable
+data class ChatAttachmentViewerUiState(
+  val attachmentId: String,
+  val title: String,
 )
 
 @Immutable
@@ -122,9 +182,20 @@ data class ChatModelUi(
   val label: String,
   val selected: Boolean,
   val enabled: Boolean = true,
+  val state: ChatModelState = ChatModelState.READY,
+  val progress: Float? = null,
   val statusLabel: String? = null,
   val setupActionLabel: String? = null,
 )
+
+enum class ChatModelState {
+  READY,
+  DOWNLOADING,
+  INITIALIZING,
+  REQUIRES_SETUP,
+  UNAVAILABLE,
+  ERROR,
+}
 
 @Immutable
 data class ChatConnectorUi(
@@ -186,6 +257,11 @@ data class ChatUiLabels(
   val expand: String,
   val close: String,
   val inputPlaceholder: String,
+  val navigateBack: String = "Back",
+  val openHistory: String = "History",
+  val openSettings: String = "Settings",
+  val resetConversation: String = "New conversation",
+  val addContent: String = "Add content",
 )
 
 sealed interface ChatUiIntent {
@@ -195,13 +271,37 @@ sealed interface ChatUiIntent {
 
   data object StopClicked : ChatUiIntent
 
+  data object NavigateBackClicked : ChatUiIntent
+
+  data object HistoryClicked : ChatUiIntent
+
+  data object SettingsClicked : ChatUiIntent
+
+  data object ResetConversationClicked : ChatUiIntent
+
   data class AddAttachmentClicked(val type: ChatAttachmentType) : ChatUiIntent
 
+  data class AddAttachmentSourceClicked(val source: ChatAttachmentSource) : ChatUiIntent
+
   data class RemoveAttachment(val id: String) : ChatUiIntent
+
+  data class OpenAttachment(val id: String) : ChatUiIntent
+
+  data object CloseAttachmentViewer : ChatUiIntent
 
   data class ModelSelected(val id: String) : ChatUiIntent
 
   data class ModelSetupClicked(val id: String) : ChatUiIntent
+
+  data class MessageActionClicked(val messageId: String, val actionId: String) : ChatUiIntent
+
+  data class SuggestionClicked(val value: String) : ChatUiIntent
+
+  data class HistoryConversationSelected(val id: String) : ChatUiIntent
+
+  data class HistoryConversationDeleted(val id: String) : ChatUiIntent
+
+  data object HistoryDismissed : ChatUiIntent
 
   data class ConnectorToggled(val id: String) : ChatUiIntent
 

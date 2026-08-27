@@ -18,6 +18,7 @@ package com.google.ai.edge.gallery.ui.llmchat
 
 import android.graphics.Bitmap
 import android.util.Base64
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -62,6 +63,7 @@ import com.google.ai.edge.gallery.GalleryEvent
 import com.google.ai.edge.gallery.R
 import com.google.ai.edge.gallery.data.BuiltInTaskId
 import com.google.ai.edge.gallery.data.Model
+import com.google.ai.edge.gallery.data.ModelDownloadStatusType
 import com.google.ai.edge.gallery.data.RuntimeType
 import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.firebaseAnalytics
@@ -104,9 +106,34 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.ugot.chatkit.runtime.UgotChatSessionRepository
+import com.ugot.chatkit.ui.ChatLayout
+import com.ugot.chatkit.ui.ChatNavigationMode
+import com.ugot.chatkit.ui.ChatUiCapabilities
+import com.ugot.chatkit.ui.ChatUiIntent
+import com.ugot.chatkit.ui.ChatUiLabels
+import com.ugot.chatkit.ui.UgotChatExperience
 
 private const val TAG = "AGLlmChatScreen"
 private const val UNIFIED_CHAT_SESSION_SAVE_DEBOUNCE_MS = 300L
+
+private fun galleryChatUiLabels() =
+  ChatUiLabels(
+    send = "Send",
+    stop = "Stop",
+    addImage = "Image",
+    addAudio = "Audio",
+    removeAttachment = "Remove attachment",
+    allowOnce = "Allow once",
+    deny = "Deny",
+    expand = "Expand",
+    close = "Close",
+    inputPlaceholder = "Message UGOT Chat",
+    navigateBack = "Back",
+    openHistory = "History",
+    openSettings = "Settings",
+    resetConversation = "New conversation",
+    addContent = "Add content",
+  )
 
 private data class PendingUnifiedSessionSnapshot(
   val messages: List<ChatMessage> = emptyList(),
@@ -150,7 +177,85 @@ fun LlmChatScreen(
         )
       },
 ) {
-  ChatViewWrapper(
+  val context = LocalContext.current
+  val task = modelManagerViewModel.getTaskById(id = taskId)!!
+  val modelManagerUiState by modelManagerViewModel.uiState.collectAsState()
+  val selectedModel = selectedModelOverride ?: modelManagerUiState.selectedModel
+  val downloadSucceeded =
+    modelManagerUiState.modelDownloadStatus[selectedModel.name]?.status ==
+      ModelDownloadStatusType.SUCCEEDED
+  val isGeneralSharedChat =
+    taskId == BuiltInTaskId.LLM_CHAT &&
+      !showImagePicker &&
+      !showAudioPicker &&
+      !entryHint.activateImage &&
+      !entryHint.activateAudio &&
+      !entryHint.activateSkills &&
+      entryHint.activateAgentSkillIds.isEmpty() &&
+      entryHint.activateMcpConnectorIds.isEmpty() &&
+      mcpWidgetHostState == null &&
+      mcpUiSession == null &&
+      downloadSucceeded
+
+  if (isGeneralSharedChat) {
+    val sessionId =
+      buildUnifiedChatSessionId(
+        taskId = taskId,
+        modelName = selectedModel.name,
+        entryHint = entryHint,
+      )
+    val controller =
+      remember(viewModel, task.id, selectedModel.name, sessionId) {
+        viewModel.sharedChatController(task = task, model = selectedModel, sessionId = sessionId)
+      }
+    val sharedState by controller.state.collectAsState()
+
+    LaunchedEffect(selectedModel.name, downloadSucceeded) {
+      if (downloadSucceeded && !modelManagerViewModel.uiState.value.isModelInitialized(selectedModel)) {
+        controller.updateHostStatus(restoring = true)
+        modelManagerViewModel.initializeModel(
+          context = context,
+          task = task,
+          model = selectedModel,
+          onDone = { controller.updateHostStatus(restoring = false) },
+        )
+      }
+    }
+    BackHandler(enabled = !sharedState.composer.inProgress && !sharedState.restoring) { navigateUp() }
+
+    UgotChatExperience(
+      state = sharedState,
+      capabilities =
+        ChatUiCapabilities(
+          layout = ChatLayout.FULL,
+          showTopBar = showTopBar,
+          navigationMode = ChatNavigationMode.BACK,
+          showResetAction = true,
+          showModelPicker = true,
+          showProvider = true,
+          showSenderLabels = true,
+          showTimestamps = false,
+          showThinking = task.allowThinking(),
+          showMessageActions = false,
+          allowImages = false,
+          allowAudio = false,
+          showConnectors = false,
+          showWidgets = false,
+          showToolApproval = false,
+          showStopButton = true,
+          composerMaxLines = 4,
+        ),
+      labels = galleryChatUiLabels(),
+      onIntent = { intent ->
+        when (intent) {
+          ChatUiIntent.NavigateBackClicked -> navigateUp()
+          else -> controller.onIntent(intent)
+        }
+      },
+      modifier = modifier,
+    )
+  } else {
+    LegacySpecializedChatHost(
     viewModel = viewModel,
     modelManagerViewModel = modelManagerViewModel,
     taskId = taskId,
@@ -175,7 +280,8 @@ fun LlmChatScreen(
     mcpUiSession = mcpUiSession,
     onMcpWidgetHostStateChange = onMcpWidgetHostStateChange,
     mcpWidgetFullscreenOverlay = mcpWidgetFullscreenOverlay,
-  )
+    )
+  }
 }
 
 @Composable
@@ -185,7 +291,7 @@ fun LlmAskImageScreen(
   modifier: Modifier = Modifier,
   viewModel: LlmAskImageViewModel = hiltViewModel(),
 ) {
-  ChatViewWrapper(
+  LegacySpecializedChatHost(
     viewModel = viewModel,
     modelManagerViewModel = modelManagerViewModel,
     taskId = BuiltInTaskId.LLM_ASK_IMAGE,
@@ -225,7 +331,7 @@ fun LlmAskAudioScreen(
   modifier: Modifier = Modifier,
   viewModel: LlmAskAudioViewModel = hiltViewModel(),
 ) {
-  ChatViewWrapper(
+  LegacySpecializedChatHost(
     viewModel = viewModel,
     modelManagerViewModel = modelManagerViewModel,
     taskId = BuiltInTaskId.LLM_ASK_AUDIO,
@@ -256,7 +362,7 @@ fun LlmAskAudioScreen(
 }
 
 @Composable
-fun ChatViewWrapper(
+fun LegacySpecializedChatHost(
   viewModel: LlmChatViewModelBase,
   modelManagerViewModel: ModelManagerViewModel,
   taskId: String,

@@ -14,6 +14,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class ChatRuntimeContractTest {
   @Test
@@ -57,6 +58,22 @@ class ChatRuntimeContractTest {
     assertFailsWith<IllegalArgumentException> {
       descriptor("device", ChatRuntimeAvailability.UNAVAILABLE)
     }
+  }
+
+  @Test
+  fun unavailableExecutorRejectsReadyDescriptors() {
+    assertFailsWith<IllegalArgumentException> {
+      UnavailableChatRuntimeExecutor(descriptor("local", ChatRuntimeAvailability.READY))
+    }
+    val unavailable =
+      UnavailableChatRuntimeExecutor(
+        descriptor(
+          "device",
+          ChatRuntimeAvailability.UNAVAILABLE,
+          "Device AI is unavailable",
+        )
+      )
+    assertTrue(unavailable.activeExecutionKey == null)
   }
 
   private fun descriptor(

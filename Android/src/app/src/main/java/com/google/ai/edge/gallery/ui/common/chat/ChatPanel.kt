@@ -46,9 +46,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Timer
-import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
@@ -77,7 +74,6 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -94,15 +90,18 @@ import com.google.ai.edge.gallery.ui.common.AudioAnimation
 import com.google.ai.edge.gallery.ui.common.ErrorDialog
 import com.google.ai.edge.gallery.ui.common.FloatingBanner
 import com.google.ai.edge.gallery.ui.common.RotationalLoader
+import com.google.ai.edge.gallery.ui.common.humanReadableDuration
 import com.google.ai.edge.gallery.ui.unifiedchat.messages.ChatMessageMcpWidgetCard
 import com.google.ai.edge.gallery.ui.unifiedchat.messages.MessageBodyMcpWidgetCard
 import com.google.ai.edge.gallery.ui.modelmanager.ModelInitializationStatusType
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
-import com.google.ai.edge.gallery.ui.theme.customColors
 import com.ugot.chatkit.ui.ChatTurnActivity
 import com.ugot.chatkit.ui.ChatTurnActivityUiState
-import com.ugot.chatkit.ui.ChatSurfaceScaffold
 import com.ugot.chatkit.ui.ChatTimeline
+import com.ugot.chatkit.ui.ChatMessageActionUi
+import com.ugot.chatkit.ui.ChatRole
+import com.ugot.chatkit.ui.UgotChatExperienceScaffold
+import com.ugot.chatkit.ui.UgotChatMessageFrame
 import kotlinx.coroutines.delay
 
 /** Composable function for the main chat panel, displaying messages and handling user input. */
@@ -276,7 +275,7 @@ fun ChatPanel(
       AudioAnimation(bgColor = MaterialTheme.colorScheme.surface, amplitude = curAmplitude)
     }
 
-    ChatSurfaceScaffold(
+    UgotChatExperienceScaffold(
       modifier = modifier.padding(innerPadding).consumeWindowInsets(innerPadding).imePadding(),
       transcript = {
       Box(contentAlignment = Alignment.BottomCenter, modifier = Modifier.fillMaxSize()) {
@@ -291,78 +290,80 @@ fun ChatPanel(
           verticalArrangement = Arrangement.Top,
         ) { index, message ->
             val imageHistoryCurIndex = remember { mutableIntStateOf(0) }
-            var hAlign: Alignment.Horizontal = Alignment.End
-            var backgroundColor: Color = MaterialTheme.customColors.userBubbleBgColor
-            var hardCornerAtLeftOrRight = false
-            var extraPaddingStart = 48.dp
-            var extraPaddingEnd = 0.dp
-            if (message.side == ChatSide.AGENT) {
-              hAlign = Alignment.Start
-              backgroundColor = MaterialTheme.customColors.agentBubbleBgColor
-              hardCornerAtLeftOrRight = true
-              extraPaddingStart = 0.dp
-              if (
-                message.type !== ChatMessageType.LOADING &&
-                  message.type !== ChatMessageType.WEBVIEW &&
-                  message.type !== ChatMessageType.COLLAPSABLE_PROGRESS_PANEL
-              ) {
-                extraPaddingEnd = 48.dp
+            val role =
+              when (message.side) {
+                ChatSide.USER -> ChatRole.USER
+                ChatSide.AGENT -> ChatRole.ASSISTANT
+                ChatSide.SYSTEM -> ChatRole.SYSTEM
               }
-            } else if (message.side == ChatSide.SYSTEM) {
-              extraPaddingStart = 24.dp
-              extraPaddingEnd = 24.dp
-              if (message.type == ChatMessageType.PROMPT_TEMPLATES) {
-                extraPaddingStart = 12.dp
-                extraPaddingEnd = 12.dp
-              }
+            var agentName = stringResource(task.agentNameRes)
+            if (message.accelerator.isNotEmpty()) {
+              agentName = "$agentName on ${message.accelerator}"
             }
-            if (message.type == ChatMessageType.IMAGE) {
-              backgroundColor = Color.Transparent
-            }
-            val bubbleBorderRadius = dimensionResource(R.dimen.chat_bubble_corner_radius)
-
-            Column(
-              modifier =
-                Modifier.fillMaxWidth()
-                  .padding(
-                    start = 12.dp + extraPaddingStart,
-                    end = 12.dp + extraPaddingEnd,
-                    top = 6.dp,
-                    bottom = 6.dp,
-                  ),
-              horizontalAlignment = hAlign,
-            ) messageColumn@{
-              // Sender row.
-              var agentName = stringResource(task.agentNameRes)
-              if (message.accelerator.isNotEmpty()) {
-                agentName = "$agentName on ${message.accelerator}"
+            val senderLabel =
+              when (message.side) {
+                ChatSide.USER -> stringResource(R.string.chat_you)
+                ChatSide.AGENT -> agentName
+                ChatSide.SYSTEM -> null
               }
-              if (!message.hideSenderLabel) {
-                MessageSender(
-                  message = message,
-                  agentName = agentName,
-                  imageHistoryCurIndex = imageHistoryCurIndex.intValue,
-                )
+            val runAgainLabel = stringResource(R.string.run_again)
+            val benchmarkLabel = stringResource(R.string.run_benchmark)
+            val actions =
+              if (message.side == ChatSide.USER) {
+                buildList {
+                  if (selectedModel.showRunAgainButton) {
+                    add(ChatMessageActionUi("run_again", runAgainLabel, !uiState.inProgress))
+                  }
+                  if (selectedModel.showBenchmarkButton) {
+                    add(ChatMessageActionUi("benchmark", benchmarkLabel, !uiState.inProgress))
+                  }
+                }
+              } else {
+                emptyList()
               }
+            val bubbleEnabled =
+              !message.disableBubbleShape &&
+                message.type !in
+                  setOf(
+                    ChatMessageType.INFO,
+                    ChatMessageType.WARNING,
+                    ChatMessageType.ERROR,
+                    ChatMessageType.CONFIG_VALUES_CHANGE,
+                    ChatMessageType.PROMPT_TEMPLATES,
+                    ChatMessageType.IMAGE,
+                  )
 
-              // Message body.
+            UgotChatMessageFrame(
+              role = role,
+              senderLabel = senderLabel,
+              timestampLabel = null,
+              metadataLabel =
+                if (message.side == ChatSide.AGENT && message.latencyMs >= 0) {
+                  message.latencyMs.humanReadableDuration()
+                } else {
+                  null
+                },
+              actions = actions,
+              showSenderLabel = !message.hideSenderLabel,
+              showTimestamp = false,
+              showActions = true,
+              bubbleEnabled = bubbleEnabled,
+              onActionClicked = { actionId ->
+                when (actionId) {
+                  "run_again" -> onRunAgainClicked(selectedModel, message)
+                  "benchmark" -> {
+                    showBenchmarkConfigsDialog = true
+                    benchmarkMessage.value = message
+                  }
+                }
+              },
+            ) {
               when (message) {
-                // Loading.
                 is ChatMessageLoading -> MessageBodyLoading(message = message)
-
-                // Info.
                 is ChatMessageInfo -> MessageBodyInfo(message = message)
-
-                // Warning
                 is ChatMessageWarning -> MessageBodyWarning(message = message)
-
-                // Error
                 is ChatMessageError -> MessageBodyError(message = message)
-
-                // Config values change.
                 is ChatMessageConfigValuesChange -> MessageBodyConfigUpdate(message = message)
-
-                // Prompt templates.
                 is ChatMessagePromptTemplates ->
                   MessageBodyPromptTemplates(
                     message = message,
@@ -374,130 +375,38 @@ fun ChatPanel(
                       )
                     },
                   )
-
-                // Non-system messages.
-                else -> {
-                  // The bubble shape around the message body.
-                  var messageBubbleModifier: Modifier = Modifier
-                  if (!message.disableBubbleShape) {
-                    // Use a rounded rectangle clip for multi-image image message.
-                    if (message is ChatMessageImage && message.bitmaps.size > 1) {
-                      messageBubbleModifier = messageBubbleModifier.clip(RoundedCornerShape(6.dp))
-                    }
-                    // For other messages, use a bubble shape to clip.
-                    else {
-                      messageBubbleModifier =
-                        messageBubbleModifier.clip(
-                          MessageBubbleShape(
-                            radius = bubbleBorderRadius,
-                            hardCornerAtLeftOrRight = hardCornerAtLeftOrRight,
-                          )
-                        )
-                    }
-                    messageBubbleModifier = messageBubbleModifier.background(backgroundColor)
-                  }
-                  Box(modifier = messageBubbleModifier) {
-                    when (message) {
-                      // Text
-                      is ChatMessageText ->
-                        MessageBodyText(message = message, inProgress = uiState.inProgress)
-
-                      // Image
-                      is ChatMessageImage -> {
-                        MessageBodyImage(message = message, onImageClicked = onImageSelected)
-                      }
-
-                      // Image with history (for image gen)
-                      is ChatMessageImageWithHistory ->
-                        MessageBodyImageWithHistory(
-                          message = message,
-                          imageHistoryCurIndex = imageHistoryCurIndex,
-                        )
-
-                      // Audio clip.
-                      is ChatMessageAudioClip -> MessageBodyAudioClip(message = message)
-
-                      // Classification result
-                      is ChatMessageClassification ->
-                        MessageBodyClassification(
-                          message = message,
-                          modifier =
-                            Modifier.width(message.maxBarWidth ?: CLASSIFICATION_BAR_MAX_WIDTH),
-                        )
-
-                      // Benchmark result.
-                      is ChatMessageBenchmarkResult -> MessageBodyBenchmark(message = message)
-
-                      // Benchmark LLM result.
-                      is ChatMessageBenchmarkLlmResult ->
-                        MessageBodyBenchmarkLlm(
-                          message = message,
-                          modifier = Modifier.wrapContentWidth(),
-                        )
-
-                      // Webview.
-                      is ChatMessageWebView -> MessageBodyWebview(message = message)
-
-                      // MCP widget card.
-                      is ChatMessageMcpWidgetCard ->
-                        MessageBodyMcpWidgetCard(
-                          message = message,
-                          onExpandClicked = onMcpWidgetExpandClicked,
-                          onResumeClicked = onMcpWidgetResumeClicked,
-                        )
-
-                      // Collapsable progress panel.
-                      is ChatMessageCollapsableProgressPanel ->
-                        MessageBodyCollapsableProgressPanel(message = message)
-
-                      // Thinking
-                      is ChatMessageThinking ->
-                        MessageBodyThinking(
-                          thinkingText = message.content,
-                          inProgress = message.inProgress,
-                        )
-
-                      else -> {}
-                    }
-                  }
-
-                  if (message.side == ChatSide.AGENT) {
-                    Row(
-                      verticalAlignment = Alignment.CenterVertically,
-                      horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                      LatencyText(message = message)
-                    }
-                  } else if (message.side == ChatSide.USER) {
-                    Row(
-                      verticalAlignment = Alignment.CenterVertically,
-                      horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                      // Run again button.
-                      if (selectedModel.showRunAgainButton) {
-                        MessageActionButton(
-                          label = stringResource(R.string.run_again),
-                          icon = Icons.Rounded.Refresh,
-                          onClick = { onRunAgainClicked(selectedModel, message) },
-                          enabled = !uiState.inProgress,
-                        )
-                      }
-
-                      // Benchmark button
-                      if (selectedModel.showBenchmarkButton) {
-                        MessageActionButton(
-                          label = stringResource(R.string.run_benchmark),
-                          icon = Icons.Outlined.Timer,
-                          onClick = {
-                            showBenchmarkConfigsDialog = true
-                            benchmarkMessage.value = message
-                          },
-                          enabled = !uiState.inProgress,
-                        )
-                      }
-                    }
-                  }
-                }
+                is ChatMessageText ->
+                  MessageBodyText(message = message, inProgress = uiState.inProgress)
+                is ChatMessageImage ->
+                  MessageBodyImage(message = message, onImageClicked = onImageSelected)
+                is ChatMessageImageWithHistory ->
+                  MessageBodyImageWithHistory(
+                    message = message,
+                    imageHistoryCurIndex = imageHistoryCurIndex,
+                  )
+                is ChatMessageAudioClip -> MessageBodyAudioClip(message = message)
+                is ChatMessageClassification ->
+                  MessageBodyClassification(
+                    message = message,
+                    modifier = Modifier.width(message.maxBarWidth ?: CLASSIFICATION_BAR_MAX_WIDTH),
+                  )
+                is ChatMessageBenchmarkResult -> MessageBodyBenchmark(message = message)
+                is ChatMessageBenchmarkLlmResult ->
+                  MessageBodyBenchmarkLlm(message = message, modifier = Modifier.wrapContentWidth())
+                is ChatMessageWebView -> MessageBodyWebview(message = message)
+                is ChatMessageMcpWidgetCard ->
+                  MessageBodyMcpWidgetCard(
+                    message = message,
+                    onExpandClicked = onMcpWidgetExpandClicked,
+                    onResumeClicked = onMcpWidgetResumeClicked,
+                  )
+                is ChatMessageCollapsableProgressPanel ->
+                  MessageBodyCollapsableProgressPanel(message = message)
+                is ChatMessageThinking ->
+                  MessageBodyThinking(
+                    thinkingText = message.content,
+                    inProgress = message.inProgress,
+                  )
               }
             }
         }
