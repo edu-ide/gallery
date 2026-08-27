@@ -10,7 +10,10 @@
 
 package com.ugot.chatkit.runtime.litert
 
+import android.os.SystemClock
+import android.util.Log
 import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.litertlm.Channel
 import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.Conversation
@@ -36,6 +39,7 @@ import com.ugot.chatkit.runtime.ChatRuntimeSessionConfig
 import java.io.File
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 import kotlinx.coroutines.Dispatchers
@@ -124,7 +128,11 @@ class LiteRtLocalChatRuntimeExecutor(
     try {
       val activeConversation = withContext(Dispatchers.IO) { ensureConversation() }
       check(!closed.get()) { "Runtime executor was closed during initialization" }
+      val inferenceStartedAtMs = SystemClock.elapsedRealtime()
       val finished = AtomicBoolean(false)
+      val callbackCount = AtomicInteger(0)
+      val textCharacterCount = AtomicInteger(0)
+      val thoughtCharacterCount = AtomicInteger(0)
       suspendCancellableCoroutine { continuation ->
         fun finish(type: ChatRuntimeEventType, text: String = "") {
           if (!finished.compareAndSet(false, true)) return
@@ -140,13 +148,16 @@ class LiteRtLocalChatRuntimeExecutor(
           Contents.of(Content.Text(request.input)),
           object : MessageCallback {
             override fun onMessage(message: Message) {
+              callbackCount.incrementAndGet()
               val thought = message.channels["thought"].orEmpty()
+              thoughtCharacterCount.addAndGet(thought.length)
               if (request.allowThinking && thought.isNotEmpty()) {
                 listener.onEvent(
                   ChatRuntimeEvent(executionKey, ChatRuntimeEventType.THINKING_DELTA, thought)
                 )
               }
               val text = message.toString()
+              textCharacterCount.addAndGet(text.length)
               if (text.isNotEmpty() && !text.startsWith("<ctrl")) {
                 listener.onEvent(
                   ChatRuntimeEvent(executionKey, ChatRuntimeEventType.TEXT_DELTA, text)
@@ -155,6 +166,13 @@ class LiteRtLocalChatRuntimeExecutor(
             }
 
             override fun onDone() {
+              Log.i(
+                LOG_TAG,
+                "Completed ${executionKey.turnId}: callbacks=${callbackCount.get()}, " +
+                  "textChars=${textCharacterCount.get()}, " +
+                  "thoughtChars=${thoughtCharacterCount.get()}, " +
+                  "elapsedMs=${SystemClock.elapsedRealtime() - inferenceStartedAtMs}",
+              )
               finish(
                 if (interruptedExecution.get() == executionKey) {
                   ChatRuntimeEventType.INTERRUPTED
@@ -165,6 +183,7 @@ class LiteRtLocalChatRuntimeExecutor(
             }
 
             override fun onError(throwable: Throwable) {
+              Log.w(LOG_TAG, "Failed ${executionKey.turnId}", throwable)
               if (throwable is CancellationException) {
                 finish(ChatRuntimeEventType.INTERRUPTED)
               } else {
@@ -245,8 +264,9 @@ class LiteRtLocalChatRuntimeExecutor(
       .also { conversation = it }
   }
 
-  private fun createEngine(): Engine =
-    Engine(
+  private fun createEngine(): Engine {
+    val startedAtMs = SystemClock.elapsedRealtime()
+    return Engine(
         EngineConfig(
           modelPath = config.modelPath,
           backend =
@@ -260,7 +280,15 @@ class LiteRtLocalChatRuntimeExecutor(
           cacheDir = config.cacheDir,
         )
       )
-      .also(Engine::initialize)
+      .also {
+        it.initialize()
+        Log.i(
+          LOG_TAG,
+          "Initialized ${config.id} on ${config.backend} in " +
+            "${SystemClock.elapsedRealtime() - startedAtMs}ms",
+        )
+      }
+  }
 
   private fun createConversation(
     engine: Engine,
@@ -268,6 +296,8 @@ class LiteRtLocalChatRuntimeExecutor(
   ): Conversation =
     engine.createConversation(
       ConversationConfig(
+        channels = listOf(Channel(channelName = "thought", start = "<think>", end = "</think>")),
+        extraContext = mapOf("enable_thinking" to false),
         samplerConfig =
           if (config.backend == LiteRtLocalBackend.NPU) {
             null
@@ -288,6 +318,10 @@ class LiteRtLocalChatRuntimeExecutor(
           },
       )
     )
+
+  private companion object {
+    const val LOG_TAG = "LiteRtChatRuntime"
+  }
 
   private fun releaseResources() {
     conversation?.close()
