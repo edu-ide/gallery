@@ -75,7 +75,7 @@ import com.google.ai.edge.gallery.ui.common.chat.ChatView
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessage
 import com.google.ai.edge.gallery.ui.common.chat.ChatSide
 import com.google.ai.edge.gallery.ui.common.chat.SendMessageTrigger
-import com.google.ai.edge.gallery.ui.mcp.McpUiSession
+import com.ugot.chatkit.mcp.runtime.McpUiSession
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.gallery.ui.unifiedchat.ConnectorBar
 import com.google.ai.edge.gallery.ui.unifiedchat.ConnectorBarDisplayMode
@@ -84,9 +84,9 @@ import com.google.ai.edge.gallery.ui.unifiedchat.UnifiedChatEntryHint
 import com.google.ai.edge.gallery.ui.unifiedchat.createUnifiedChatSessionState
 import com.google.ai.edge.gallery.ui.unifiedchat.formatConnectorDisplayLabel
 import com.google.ai.edge.gallery.ui.unifiedchat.toUnifiedChatModelCapabilities
-import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetFullscreenOverlay
+import com.ugot.chatkit.mcp.ui.McpWidgetFullscreenOverlay
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetHostState
-import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSessionHost
+import com.ugot.chatkit.mcp.runtime.McpWidgetSessionHost
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSnapshot
 import com.google.ai.edge.gallery.ui.unifiedchat.messages.ChatMessageMcpWidgetCard
 import com.google.ai.edge.gallery.ui.unifiedchat.session.UnifiedChatPersistedSession
@@ -111,7 +111,7 @@ import com.ugot.chatkit.ui.ChatNavigationMode
 import com.ugot.chatkit.ui.ChatUiCapabilities
 import com.ugot.chatkit.ui.ChatUiIntent
 import com.ugot.chatkit.ui.ChatUiLabels
-import com.ugot.chatkit.ui.UgotChatExperience
+import com.ugot.chatkit.mcp.ui.McpEnabledUgotChatExperience
 
 private const val TAG = "AGLlmChatScreen"
 private const val UNIFIED_CHAT_SESSION_SAVE_DEBOUNCE_MS = 300L
@@ -125,7 +125,8 @@ private fun galleryChatUiLabels() =
     removeAttachment = "Remove attachment",
     allowOnce = "Allow once",
     deny = "Deny",
-    expand = "Expand",
+    expand = "Show",
+    fullscreen = "Full screen",
     close = "Close",
     inputPlaceholder = "Message UGOT Chat",
     navigateBack = "Back",
@@ -184,6 +185,14 @@ fun LlmChatScreen(
   val downloadSucceeded =
     modelManagerUiState.modelDownloadStatus[selectedModel.name]?.status ==
       ModelDownloadStatusType.SUCCEEDED
+  val sharedMcpSession = mcpUiSession as? McpUiSession
+  val isMcpSharedChat =
+    sharedMcpSession != null &&
+      entryHint.activateMcpConnectorIds.isNotEmpty() &&
+      !entryHint.activateImage &&
+      !entryHint.activateAudio &&
+      !entryHint.activateSkills &&
+      entryHint.activateAgentSkillIds.isEmpty()
   val isGeneralSharedChat =
     taskId == BuiltInTaskId.LLM_CHAT &&
       !showImagePicker &&
@@ -192,9 +201,10 @@ fun LlmChatScreen(
       !entryHint.activateAudio &&
       !entryHint.activateSkills &&
       entryHint.activateAgentSkillIds.isEmpty() &&
-      entryHint.activateMcpConnectorIds.isEmpty() &&
-      mcpWidgetHostState == null &&
-      mcpUiSession == null &&
+      (isMcpSharedChat ||
+        (entryHint.activateMcpConnectorIds.isEmpty() &&
+          mcpWidgetHostState == null &&
+          mcpUiSession == null)) &&
       downloadSucceeded
 
   if (isGeneralSharedChat) {
@@ -205,8 +215,14 @@ fun LlmChatScreen(
         entryHint = entryHint,
       )
     val controller =
-      remember(viewModel, task.id, selectedModel.name, sessionId) {
-        viewModel.sharedChatController(task = task, model = selectedModel, sessionId = sessionId)
+      remember(viewModel, task.id, selectedModel.name, sessionId, sharedMcpSession) {
+        viewModel.sharedChatController(
+          task = task,
+          model = selectedModel,
+          sessionId = sessionId,
+          mcpSession = sharedMcpSession,
+          activeConnectorIds = entryHint.activateMcpConnectorIds,
+        )
       }
     val sharedState by controller.state.collectAsState()
 
@@ -223,8 +239,9 @@ fun LlmChatScreen(
     }
     BackHandler(enabled = !sharedState.composer.inProgress && !sharedState.restoring) { navigateUp() }
 
-    UgotChatExperience(
+    McpEnabledUgotChatExperience(
       state = sharedState,
+      session = sharedMcpSession,
       capabilities =
         ChatUiCapabilities(
           layout = ChatLayout.FULL,
@@ -239,9 +256,9 @@ fun LlmChatScreen(
           showMessageActions = false,
           allowImages = false,
           allowAudio = false,
-          showConnectors = false,
-          showWidgets = false,
-          showToolApproval = false,
+          showConnectors = isMcpSharedChat,
+          showWidgets = isMcpSharedChat,
+          showToolApproval = isMcpSharedChat,
           showStopButton = true,
           composerMaxLines = 4,
         ),

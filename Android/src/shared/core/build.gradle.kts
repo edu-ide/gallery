@@ -39,12 +39,15 @@ kotlin {
     iosTarget.binaries.framework {
       baseName = "GallerySharedCore"
       isStatic = true
+      export(project(":shared:mcp-core"))
+      transitiveExport = true
       sharedCoreXcframework.add(this)
     }
   }
 
   sourceSets {
     commonMain.dependencies {
+      api(project(":shared:mcp-core"))
       implementation(libs.kotlinx.serialization.json)
       implementation(libs.okio)
     }

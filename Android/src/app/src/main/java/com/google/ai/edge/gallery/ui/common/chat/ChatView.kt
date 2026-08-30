@@ -71,10 +71,10 @@ import com.google.ai.edge.gallery.ui.common.ModelPageAppBar
 import com.google.ai.edge.gallery.ui.modelmanager.ModelInitializationStatusType
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetDisplayMode
-import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetFullscreenOverlay
+import com.ugot.chatkit.mcp.ui.McpWidgetFullscreenOverlay
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetHostState
-import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetInlinePanel
-import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSessionHost
+import com.ugot.chatkit.mcp.ui.McpWidgetInlinePanel
+import com.ugot.chatkit.mcp.runtime.McpWidgetSessionHost
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSnapshot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch

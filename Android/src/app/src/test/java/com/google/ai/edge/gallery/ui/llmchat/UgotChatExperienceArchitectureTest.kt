@@ -16,6 +16,7 @@ class UgotChatExperienceArchitectureTest {
         )
         .readText()
     val sharedUiSource = kotlinSourceUnder(File(root, "shared/chat-ui/src/main"))
+    val sharedMcpUiSource = kotlinSourceUnder(File(root, "shared/mcp-ui/src/main"))
     val generalChatBody =
       screen.substringAfter("fun LlmChatScreen(").substringBefore("fun LlmAskImageScreen(")
 
@@ -25,12 +26,16 @@ class UgotChatExperienceArchitectureTest {
         .containsMatchIn(sharedUiSource),
     )
     assertTrue(
-      "Gallery general LLM chat must import the shared UgotChatExperience",
-      screen.contains("import com.ugot.chatkit.ui.UgotChatExperience"),
+      "Gallery chat must import the common MCP-enabled UGOT experience",
+      screen.contains("import com.ugot.chatkit.mcp.ui.McpEnabledUgotChatExperience"),
     )
     assertTrue(
-      "Gallery general LLM chat must call UgotChatExperience",
-      Regex("\\bUgotChatExperience\\s*\\(").containsMatchIn(generalChatBody),
+      "Gallery chat must call the common MCP-enabled UGOT experience",
+      Regex("\\bMcpEnabledUgotChatExperience\\s*\\(").containsMatchIn(generalChatBody),
+    )
+    assertTrue(
+      "The MCP experience must delegate to the canonical UGOT chat surface",
+      Regex("\\bUgotChatExperience\\s*\\(").containsMatchIn(sharedMcpUiSource),
     )
     assertFalse(
       "Gallery general LLM chat must not enter the app-local ChatView path",

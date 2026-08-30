@@ -21,11 +21,14 @@ import com.ugot.chatkit.runtime.ChatRuntimeProviderKind
 import com.ugot.chatkit.runtime.ChatRuntimeRequest
 import com.ugot.chatkit.runtime.ChatRuntimeResetResult
 import com.ugot.chatkit.runtime.ChatRuntimeSessionConfig
+import com.ugot.chatkit.runtime.ChatRuntimeWidget
 import com.ugot.chatkit.ui.ChatBlockUi
+import com.ugot.chatkit.ui.ChatConnectorUi
 import com.ugot.chatkit.ui.ChatMessageUi
 import com.ugot.chatkit.ui.ChatRole
 import com.ugot.chatkit.ui.ChatUiIntent
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -45,6 +48,7 @@ class DefaultChatControllerTest {
     runCurrent()
     val oldListener = executor.listeners.single()
     val oldKey = executor.requests.single().executionKey()
+    oldListener.onEvent(ChatRuntimeEvent(oldKey, ChatRuntimeEventType.TEXT_DELTA, "buffered"))
 
     controller.onIntent(ChatUiIntent.StopClicked)
     controller.onIntent(ChatUiIntent.DraftChanged("second"))
@@ -52,14 +56,61 @@ class DefaultChatControllerTest {
     runCurrent()
 
     oldListener.onEvent(ChatRuntimeEvent(oldKey, ChatRuntimeEventType.TEXT_DELTA, "stale"))
+    runCurrent()
 
     val renderedText =
       controller.state.value.messages
         .flatMap(ChatMessageUi::blocks)
         .filterIsInstance<ChatBlockUi.Text>()
         .joinToString(separator = "") { it.value }
+    assertFalse(renderedText.contains("buffered"))
     assertFalse(renderedText.contains("stale"))
     assertTrue(controller.state.value.composer.inProgress)
+  }
+
+  @Test
+  fun streamingDeltasArePublishedAsOneFrameCoalescedBatch() = runTest {
+    val executor = FakeExecutor()
+    val controller = controller(executor)
+    controller.onIntent(ChatUiIntent.DraftChanged("prompt"))
+    controller.onIntent(ChatUiIntent.SendClicked)
+    runCurrent()
+    val listener = executor.listeners.single()
+    val key = executor.requests.single().executionKey()
+
+    repeat(100) { listener.onEvent(ChatRuntimeEvent(key, ChatRuntimeEventType.TEXT_DELTA, "x")) }
+    runCurrent()
+    assertEquals(1, controller.state.value.messages.size)
+
+    advanceTimeBy(31)
+    runCurrent()
+    assertEquals(1, controller.state.value.messages.size)
+
+    advanceTimeBy(1)
+    runCurrent()
+    val assistant = controller.state.value.messages.last()
+    assertEquals(100, assistant.blocks.filterIsInstance<ChatBlockUi.Text>().single().value.length)
+    assertTrue(assistant.inProgress)
+  }
+
+  @Test
+  fun completionFlushesPendingDeltaBeforeFinishingTheTurn() = runTest {
+    val executor = FakeExecutor()
+    val controller = controller(executor)
+    controller.onIntent(ChatUiIntent.DraftChanged("prompt"))
+    controller.onIntent(ChatUiIntent.SendClicked)
+    runCurrent()
+    val listener = executor.listeners.single()
+    val key = executor.requests.single().executionKey()
+
+    listener.onEvent(ChatRuntimeEvent(key, ChatRuntimeEventType.TEXT_DELTA, "final"))
+    listener.onEvent(ChatRuntimeEvent(key, ChatRuntimeEventType.COMPLETED))
+    runCurrent()
+
+    val assistant = controller.state.value.messages.last()
+    assertEquals("final", assistant.blocks.filterIsInstance<ChatBlockUi.Text>().single().value)
+    assertFalse(assistant.inProgress)
+    assertFalse(controller.state.value.composer.inProgress)
   }
 
   @Test
@@ -136,6 +187,56 @@ class DefaultChatControllerTest {
     assertEquals("사용 불가", controller.state.value.models.single { it.id == "offline" }.statusLabel)
   }
 
+  @Test
+  fun activeConnectorIsSentToRuntimeAndWidgetEventBecomesSharedUiState() = runTest {
+    val executor = FakeExecutor()
+    val controller =
+      DefaultChatController(
+        scope = this,
+        config =
+          ChatControllerConfig(
+            sessionId = "session",
+            taskId = "task",
+            title = "UGOT Chat",
+            initialRuntimeId = executor.descriptor.id,
+            connectors = listOf(ChatConnectorUi("fortune.ugot.uk/mcp", "Fortune", active = true)),
+          ),
+        executors = listOf(executor),
+      ).also(openControllers::add)
+
+    controller.onIntent(ChatUiIntent.DraftChanged("today"))
+    controller.onIntent(ChatUiIntent.SendClicked)
+    runCurrent()
+    val request = executor.requests.single()
+    val key = request.executionKey()
+    assertEquals("fortune.ugot.uk/mcp", request.context["mcp.activeConnectorIds"])
+
+    executor.listeners.single().onEvent(
+      ChatRuntimeEvent(
+        executionKey = key,
+        type = ChatRuntimeEventType.WIDGET_AVAILABLE,
+        widget =
+          ChatRuntimeWidget(
+            connectorId = "fortune.ugot.uk/mcp",
+            contentRef = "ui://fortune/today",
+            title = "Today",
+            summary = "Result",
+            stateJson = "{\"ready\":true}",
+          ),
+      )
+    )
+    runCurrent()
+
+    val widget =
+      controller.state.value.messages
+        .flatMap(ChatMessageUi::blocks)
+        .filterIsInstance<ChatBlockUi.Widget>()
+        .single()
+        .widget
+    assertEquals("ui://fortune/today", widget.contentRef)
+    assertEquals("fortune.ugot.uk/mcp", widget.connectorId)
+  }
+
   private fun controller(vararg executors: ChatRuntimeExecutor): DefaultChatController =
     controllerWithLabels(ChatControllerLabels(), *executors)
 
@@ -154,14 +255,21 @@ class DefaultChatControllerTest {
           labels = labels,
         ),
       executors = executors.toList(),
-    )
+    ).also(openControllers::add)
 
   private lateinit var thisScope: kotlinx.coroutines.CoroutineScope
+  private val openControllers = mutableListOf<DefaultChatController>()
 
   private fun runTest(block: suspend kotlinx.coroutines.test.TestScope.() -> Unit) =
     kotlinx.coroutines.test.runTest {
       thisScope = this
-      block()
+      try {
+        block()
+      } finally {
+        openControllers.toList().forEach(DefaultChatController::close)
+        openControllers.clear()
+        runCurrent()
+      }
     }
 }
 

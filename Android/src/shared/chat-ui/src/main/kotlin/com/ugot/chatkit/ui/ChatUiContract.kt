@@ -216,6 +216,9 @@ data class ChatWidgetUiState(
   val messageId: String,
   val title: String,
   val summary: String,
+  val connectorId: String = "",
+  val contentRef: String = "",
+  val stateJson: String = "{}",
   val displayMode: ChatWidgetDisplayMode = ChatWidgetDisplayMode.CARD,
 )
 
@@ -257,6 +260,7 @@ data class ChatUiLabels(
   val expand: String,
   val close: String,
   val inputPlaceholder: String,
+  val fullscreen: String = "Full screen",
   val navigateBack: String = "Back",
   val openHistory: String = "History",
   val openSettings: String = "Settings",

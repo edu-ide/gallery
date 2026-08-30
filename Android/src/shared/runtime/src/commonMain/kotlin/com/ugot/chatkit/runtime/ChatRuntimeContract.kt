@@ -116,15 +116,42 @@ enum class ChatRuntimeEventType {
   PREPARING,
   TEXT_DELTA,
   THINKING_DELTA,
+  TOOL_ACTIVITY,
+  WIDGET_AVAILABLE,
+  APPROVAL_REQUIRED,
   COMPLETED,
   FAILED,
   INTERRUPTED,
 }
 
+data class ChatRuntimeToolActivity(
+  val title: String,
+  val detail: String,
+  val showsProgress: Boolean = true,
+)
+
+data class ChatRuntimeWidget(
+  val connectorId: String,
+  val contentRef: String,
+  val title: String,
+  val summary: String,
+  val stateJson: String = "{}",
+)
+
+data class ChatRuntimePermissionRequest(
+  val requestId: String,
+  val title: String,
+  val rationale: String,
+  val riskLabel: String? = null,
+)
+
 data class ChatRuntimeEvent(
   val executionKey: ChatRuntimeExecutionKey,
   val type: ChatRuntimeEventType,
   val text: String = "",
+  val toolActivity: ChatRuntimeToolActivity? = null,
+  val widget: ChatRuntimeWidget? = null,
+  val permission: ChatRuntimePermissionRequest? = null,
 )
 
 fun interface ChatRuntimeEventListener {
@@ -148,6 +175,15 @@ interface ChatRuntimeExecutor {
   suspend fun resetSession(config: ChatRuntimeSessionConfig): ChatRuntimeResetResult
 
   fun close()
+}
+
+/** Optional capability for executors which suspend a tool call until the host resolves approval. */
+interface ChatRuntimePermissionResolver {
+  fun resolvePermission(
+    executionKey: ChatRuntimeExecutionKey,
+    requestId: String,
+    allow: Boolean,
+  ): Boolean
 }
 
 /**

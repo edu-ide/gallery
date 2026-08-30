@@ -38,11 +38,15 @@ import com.ugot.chatkit.runtime.ChatRuntimeResetResult
 import com.ugot.chatkit.runtime.ChatRuntimeSessionConfig
 import java.io.File
 import java.util.concurrent.CancellationException
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -85,6 +89,13 @@ class LiteRtLocalChatRuntimeExecutor(
   private val activeExecution = AtomicReference<ChatRuntimeExecutionKey?>(null)
   private val interruptedExecution = AtomicReference<ChatRuntimeExecutionKey?>(null)
   private val closed = AtomicBoolean(false)
+  private val nativeDispatcherClosed = AtomicBoolean(false)
+  private val nativeDispatcher =
+    Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "litert-${config.id}").apply { isDaemon = true }
+      }
+      .asCoroutineDispatcher()
+  private val nativeScope = CoroutineScope(SupervisorJob() + nativeDispatcher)
   private var engine: Engine? = null
   private var conversation: Conversation? = null
 
@@ -126,76 +137,78 @@ class LiteRtLocalChatRuntimeExecutor(
     activeExecution.set(executionKey)
     listener.onEvent(ChatRuntimeEvent(executionKey, ChatRuntimeEventType.PREPARING))
     try {
-      val activeConversation = withContext(Dispatchers.IO) { ensureConversation() }
-      check(!closed.get()) { "Runtime executor was closed during initialization" }
-      val inferenceStartedAtMs = SystemClock.elapsedRealtime()
-      val finished = AtomicBoolean(false)
-      val callbackCount = AtomicInteger(0)
-      val textCharacterCount = AtomicInteger(0)
-      val thoughtCharacterCount = AtomicInteger(0)
-      suspendCancellableCoroutine { continuation ->
-        fun finish(type: ChatRuntimeEventType, text: String = "") {
-          if (!finished.compareAndSet(false, true)) return
-          listener.onEvent(ChatRuntimeEvent(executionKey, type, text))
-          if (continuation.isActive) continuation.resume(Unit)
-        }
+      withContext(nativeDispatcher) {
+        val activeConversation = ensureConversation()
+        check(!closed.get()) { "Runtime executor was closed during initialization" }
+        val inferenceStartedAtMs = SystemClock.elapsedRealtime()
+        val finished = AtomicBoolean(false)
+        val callbackCount = AtomicInteger(0)
+        val textCharacterCount = AtomicInteger(0)
+        val thoughtCharacterCount = AtomicInteger(0)
+        suspendCancellableCoroutine { continuation ->
+          fun finish(type: ChatRuntimeEventType, text: String = "") {
+            if (!finished.compareAndSet(false, true)) return
+            listener.onEvent(ChatRuntimeEvent(executionKey, type, text))
+            if (continuation.isActive) continuation.resume(Unit)
+          }
 
-        continuation.invokeOnCancellation {
-          interruptedExecution.set(executionKey)
-          activeConversation.cancelProcess()
-        }
-        activeConversation.sendMessageAsync(
-          Contents.of(Content.Text(request.input)),
-          object : MessageCallback {
-            override fun onMessage(message: Message) {
-              callbackCount.incrementAndGet()
-              val thought = message.channels["thought"].orEmpty()
-              thoughtCharacterCount.addAndGet(thought.length)
-              if (request.allowThinking && thought.isNotEmpty()) {
-                listener.onEvent(
-                  ChatRuntimeEvent(executionKey, ChatRuntimeEventType.THINKING_DELTA, thought)
-                )
-              }
-              val text = message.toString()
-              textCharacterCount.addAndGet(text.length)
-              if (text.isNotEmpty() && !text.startsWith("<ctrl")) {
-                listener.onEvent(
-                  ChatRuntimeEvent(executionKey, ChatRuntimeEventType.TEXT_DELTA, text)
-                )
-              }
-            }
-
-            override fun onDone() {
-              Log.i(
-                LOG_TAG,
-                "Completed ${executionKey.turnId}: callbacks=${callbackCount.get()}, " +
-                  "textChars=${textCharacterCount.get()}, " +
-                  "thoughtChars=${thoughtCharacterCount.get()}, " +
-                  "elapsedMs=${SystemClock.elapsedRealtime() - inferenceStartedAtMs}",
-              )
-              finish(
-                if (interruptedExecution.get() == executionKey) {
-                  ChatRuntimeEventType.INTERRUPTED
-                } else {
-                  ChatRuntimeEventType.COMPLETED
+          continuation.invokeOnCancellation {
+            interruptedExecution.set(executionKey)
+            nativeScope.launch { activeConversation.cancelProcess() }
+          }
+          activeConversation.sendMessageAsync(
+            Contents.of(Content.Text(request.input)),
+            object : MessageCallback {
+              override fun onMessage(message: Message) {
+                callbackCount.incrementAndGet()
+                val thought = message.channels["thought"].orEmpty()
+                thoughtCharacterCount.addAndGet(thought.length)
+                if (request.allowThinking && thought.isNotEmpty()) {
+                  listener.onEvent(
+                    ChatRuntimeEvent(executionKey, ChatRuntimeEventType.THINKING_DELTA, thought)
+                  )
                 }
-              )
-            }
+                val text = message.toString()
+                textCharacterCount.addAndGet(text.length)
+                if (text.isNotEmpty() && !text.startsWith("<ctrl")) {
+                  listener.onEvent(
+                    ChatRuntimeEvent(executionKey, ChatRuntimeEventType.TEXT_DELTA, text)
+                  )
+                }
+              }
 
-            override fun onError(throwable: Throwable) {
-              Log.w(LOG_TAG, "Failed ${executionKey.turnId}", throwable)
-              if (throwable is CancellationException) {
-                finish(ChatRuntimeEventType.INTERRUPTED)
-              } else {
+              override fun onDone() {
+                Log.i(
+                  LOG_TAG,
+                  "Completed ${executionKey.turnId}: callbacks=${callbackCount.get()}, " +
+                    "textChars=${textCharacterCount.get()}, " +
+                    "thoughtChars=${thoughtCharacterCount.get()}, " +
+                    "elapsedMs=${SystemClock.elapsedRealtime() - inferenceStartedAtMs}",
+                )
                 finish(
-                  ChatRuntimeEventType.FAILED,
-                  throwable.message ?: "Local model inference failed",
+                  if (interruptedExecution.get() == executionKey) {
+                    ChatRuntimeEventType.INTERRUPTED
+                  } else {
+                    ChatRuntimeEventType.COMPLETED
+                  }
                 )
               }
-            }
-          },
-          request.context,
-        )
+
+              override fun onError(throwable: Throwable) {
+                Log.w(LOG_TAG, "Failed ${executionKey.turnId}", throwable)
+                if (throwable is CancellationException) {
+                  finish(ChatRuntimeEventType.INTERRUPTED)
+                } else {
+                  finish(
+                    ChatRuntimeEventType.FAILED,
+                    throwable.message ?: "Local model inference failed",
+                  )
+                }
+              }
+            },
+            request.context,
+          )
+        }
       }
     } catch (error: Throwable) {
       if (error is kotlinx.coroutines.CancellationException) throw error
@@ -217,14 +230,17 @@ class LiteRtLocalChatRuntimeExecutor(
     } finally {
       activeExecution.compareAndSet(executionKey, null)
       interruptedExecution.compareAndSet(executionKey, null)
-      if (closed.get()) releaseResources()
+      if (closed.get()) {
+        withContext(nativeDispatcher) { releaseResources() }
+        closeNativeDispatcher()
+      }
     }
   }
 
   override fun interrupt(key: ChatRuntimeExecutionKey): Boolean {
     if (activeExecution.get() != key) return false
     interruptedExecution.set(key)
-    conversation?.cancelProcess()
+    nativeScope.launch { conversation?.cancelProcess() }
     return true
   }
 
@@ -232,7 +248,7 @@ class LiteRtLocalChatRuntimeExecutor(
     lifecycleMutex.withLock {
       try {
         check(!closed.get()) { "Runtime executor is closed" }
-        withContext(Dispatchers.IO) {
+        withContext(nativeDispatcher) {
           conversation?.close()
           val initializedEngine = engine ?: createEngine().also { engine = it }
           conversation = createConversation(initializedEngine, config)
@@ -251,9 +267,12 @@ class LiteRtLocalChatRuntimeExecutor(
     val key = activeExecution.get()
     if (key != null) {
       interruptedExecution.set(key)
-      conversation?.cancelProcess()
+      nativeScope.launch { conversation?.cancelProcess() }
     } else {
-      releaseResources()
+      nativeScope.launch {
+        releaseResources()
+        closeNativeDispatcher()
+      }
     }
   }
 
@@ -328,6 +347,10 @@ class LiteRtLocalChatRuntimeExecutor(
     conversation = null
     engine?.close()
     engine = null
+  }
+
+  private fun closeNativeDispatcher() {
+    if (nativeDispatcherClosed.compareAndSet(false, true)) nativeDispatcher.close()
   }
 }
 

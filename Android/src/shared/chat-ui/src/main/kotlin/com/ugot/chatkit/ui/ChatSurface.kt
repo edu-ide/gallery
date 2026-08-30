@@ -12,6 +12,7 @@
 
 package com.ugot.chatkit.ui
 
+import android.view.Choreographer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -58,23 +59,85 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.halilibo.richtext.commonmark.Markdown
+import com.halilibo.richtext.ui.material3.RichText
+
+/**
+ * Lets an embedded native view participate in the transcript's active user drag without owning the
+ * list state. The transcript remains the only scroll owner; widget hosts only report pointer motion.
+ */
+interface ChatTranscriptVerticalDragHandler {
+  fun onDragStarted()
+
+  fun onDrag(deltaY: Float)
+
+  fun onDragStopped(cancelled: Boolean)
+}
+
+val LocalChatTranscriptVerticalDragHandler =
+  staticCompositionLocalOf<ChatTranscriptVerticalDragHandler?> { null }
+
+private class LazyListVerticalDragHandler(
+  private val listState: LazyListState,
+) : ChatTranscriptVerticalDragHandler, Choreographer.FrameCallback {
+  private val choreographer = Choreographer.getInstance()
+  private var pendingScrollDelta = 0f
+  private var frameScheduled = false
+
+  override fun onDragStarted() = Unit
+
+  override fun onDrag(deltaY: Float) {
+    if (deltaY != 0f) {
+      pendingScrollDelta -= deltaY
+      if (!frameScheduled) {
+        frameScheduled = true
+        choreographer.postFrameCallback(this)
+      }
+    }
+  }
+
+  override fun onDragStopped(cancelled: Boolean) {
+    if (cancelled) pendingScrollDelta = 0f
+  }
+
+  override fun doFrame(frameTimeNanos: Long) {
+    frameScheduled = false
+    val delta = pendingScrollDelta
+    pendingScrollDelta = 0f
+    if (delta != 0f) {
+      // The native container already owns this gesture. Coalesce input to one list mutation per
+      // display frame so a large WebView is never remeasured repeatedly inside the same vsync.
+      listState.dispatchRawDelta(delta)
+    }
+  }
+
+  fun dispose() {
+    if (frameScheduled) choreographer.removeFrameCallback(this)
+    frameScheduled = false
+    pendingScrollDelta = 0f
+  }
+}
 
 @Composable
 fun UgotChatExperience(
@@ -84,6 +147,14 @@ fun UgotChatExperience(
   onIntent: (ChatUiIntent) -> Unit,
   modifier: Modifier = Modifier,
   extensionRenderer: @Composable (ChatBlockUi.Extension) -> Unit = {},
+  widgetRenderer: @Composable (ChatWidgetUiState, ChatUiLabels, (ChatUiIntent) -> Unit) -> Unit =
+    { widget, currentLabels, currentOnIntent ->
+      ChatWidgetCard(widget, currentLabels, currentOnIntent)
+    },
+  widgetOverlayRenderer: @Composable (ChatWidgetUiState, ChatUiLabels, (ChatUiIntent) -> Unit) -> Unit =
+    { widget, currentLabels, currentOnIntent ->
+      UgotChatWidgetOverlay(widget, currentLabels, currentOnIntent)
+    },
 ) {
   UgotChatExperienceScaffold(
     modifier = modifier,
@@ -110,6 +181,7 @@ fun UgotChatExperience(
           labels = labels,
           onIntent = onIntent,
           extensionRenderer = extensionRenderer,
+          widgetRenderer = widgetRenderer,
           modifier = Modifier.fillMaxSize(),
         )
       }
@@ -151,7 +223,7 @@ fun UgotChatExperience(
   }
   state.activeWidget?.let { widget ->
     if (capabilities.showWidgets && widget.displayMode == ChatWidgetDisplayMode.FULLSCREEN) {
-      UgotChatWidgetOverlay(widget = widget, labels = labels, onIntent = onIntent)
+      widgetOverlayRenderer(widget, labels, onIntent)
     }
   }
 }
@@ -262,6 +334,14 @@ fun ChatSurface(
   onIntent: (ChatUiIntent) -> Unit,
   modifier: Modifier = Modifier,
   extensionRenderer: @Composable (ChatBlockUi.Extension) -> Unit = {},
+  widgetRenderer: @Composable (ChatWidgetUiState, ChatUiLabels, (ChatUiIntent) -> Unit) -> Unit =
+    { widget, currentLabels, currentOnIntent ->
+      ChatWidgetCard(widget, currentLabels, currentOnIntent)
+    },
+  widgetOverlayRenderer: @Composable (ChatWidgetUiState, ChatUiLabels, (ChatUiIntent) -> Unit) -> Unit =
+    { widget, currentLabels, currentOnIntent ->
+      UgotChatWidgetOverlay(widget, currentLabels, currentOnIntent)
+    },
 ) =
   UgotChatExperience(
     state = state,
@@ -270,6 +350,8 @@ fun ChatSurface(
     onIntent = onIntent,
     modifier = modifier,
     extensionRenderer = extensionRenderer,
+    widgetRenderer = widgetRenderer,
+    widgetOverlayRenderer = widgetOverlayRenderer,
   )
 
 /** Shared small-app shell. Hosts can retain specialized renderers without duplicating layout. */
@@ -416,28 +498,38 @@ fun ChatTranscript(
   onIntent: (ChatUiIntent) -> Unit,
   modifier: Modifier = Modifier,
   extensionRenderer: @Composable (ChatBlockUi.Extension) -> Unit = {},
+  widgetRenderer: @Composable (ChatWidgetUiState, ChatUiLabels, (ChatUiIntent) -> Unit) -> Unit =
+    { widget, currentLabels, currentOnIntent ->
+      ChatWidgetCard(widget, currentLabels, currentOnIntent)
+    },
 ) {
   val listState = rememberLazyListState()
-  val lastMessage = messages.lastOrNull()
-  LaunchedEffect(messages.size, lastMessage?.blocks, lastMessage?.inProgress) {
+  val verticalDragHandler =
+    remember(listState) { LazyListVerticalDragHandler(listState = listState) }
+  DisposableEffect(verticalDragHandler) { onDispose(verticalDragHandler::dispose) }
+  val autoScrollKey = transcriptAutoScrollKey(messages)
+  LaunchedEffect(autoScrollKey) {
     if (messages.isNotEmpty()) {
       listState.scrollToItem(messages.lastIndex)
     }
   }
-  ChatTimeline(
-    items = messages,
-    itemKey = { _, message -> message.id },
-    state = listState,
-    modifier = modifier.padding(horizontal = if (capabilities.layout == ChatLayout.COMPACT) 8.dp else 12.dp),
-    verticalArrangement = Arrangement.spacedBy(8.dp),
-  ) { _, message ->
-    ChatMessageRow(
-      message = message,
-      capabilities = capabilities,
-      labels = labels,
-      onIntent = onIntent,
-      extensionRenderer = extensionRenderer,
-    )
+  CompositionLocalProvider(LocalChatTranscriptVerticalDragHandler provides verticalDragHandler) {
+    ChatTimeline(
+      items = messages,
+      itemKey = { _, message -> message.id },
+      state = listState,
+      modifier = modifier.padding(horizontal = if (capabilities.layout == ChatLayout.COMPACT) 8.dp else 12.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) { _, message ->
+      ChatMessageRow(
+        message = message,
+        capabilities = capabilities,
+        labels = labels,
+        onIntent = onIntent,
+        extensionRenderer = extensionRenderer,
+        widgetRenderer = widgetRenderer,
+      )
+    }
   }
 }
 
@@ -472,51 +564,160 @@ private fun ChatMessageRow(
   labels: ChatUiLabels,
   onIntent: (ChatUiIntent) -> Unit,
   extensionRenderer: @Composable (ChatBlockUi.Extension) -> Unit,
+  widgetRenderer: @Composable (ChatWidgetUiState, ChatUiLabels, (ChatUiIntent) -> Unit) -> Unit,
 ) {
-  UgotChatMessageFrame(
-    role = message.role,
-    senderLabel = message.senderLabel,
-    timestampLabel = message.timestampLabel,
-    metadataLabel = message.metadataLabel,
-    actions = message.actions,
-    showSenderLabel = capabilities.showSenderLabels,
-    showTimestamp = capabilities.showTimestamps,
-    showActions = capabilities.showMessageActions,
-    onActionClicked = { actionId ->
-      onIntent(ChatUiIntent.MessageActionClicked(message.id, actionId))
-    },
-  ) {
-      Column(
-        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-      ) {
-        message.blocks.forEach { block ->
-          when (block) {
-            is ChatBlockUi.Text -> Text(block.value, style = MaterialTheme.typography.bodyMedium)
-            is ChatBlockUi.Thinking ->
-              if (capabilities.showThinking) {
-                Text(
-                  block.value,
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-              }
-            is ChatBlockUi.Notice ->
-              Text(
-                block.text,
-                color =
-                  if (block.level == ChatNoticeLevel.ERROR) MaterialTheme.colorScheme.error
-                  else MaterialTheme.colorScheme.onSurfaceVariant,
-              )
-            is ChatBlockUi.Attachment -> Text(block.attachment.displayName)
-            is ChatBlockUi.Widget ->
-              if (capabilities.showWidgets) {
-                ChatWidgetCard(block.widget, labels, onIntent)
-              }
-            is ChatBlockUi.Extension -> extensionRenderer(block)
-          }
-        }
+  val runs = orderedVisibleChatBlockRuns(message.blocks, capabilities)
+  runs.forEachIndexed { index, run ->
+    val isFirstRun = index == 0
+    val isLastRun = index == runs.lastIndex
+    UgotChatMessageFrame(
+      role = message.role,
+      senderLabel = message.senderLabel,
+      timestampLabel = if (isLastRun) message.timestampLabel else null,
+      metadataLabel = if (isLastRun) message.metadataLabel else null,
+      actions = if (isLastRun) message.actions else emptyList(),
+      showSenderLabel = isFirstRun && capabilities.showSenderLabels,
+      showTimestamp = isLastRun && capabilities.showTimestamps,
+      showActions = isLastRun && capabilities.showMessageActions,
+      bubbleEnabled = !run.isWidget,
+      fullWidth = run.isWidget,
+      onActionClicked = { actionId ->
+        onIntent(ChatUiIntent.MessageActionClicked(message.id, actionId))
+      },
+    ) {
+      ChatMessageBlocks(
+        blocks = run.blocks,
+        messageInProgress = message.inProgress,
+        capabilities = capabilities,
+        labels = labels,
+        onIntent = onIntent,
+        extensionRenderer = extensionRenderer,
+        widgetRenderer = widgetRenderer,
+        modifier =
+          if (run.isWidget) Modifier.fillMaxWidth()
+          else Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+      )
+    }
+  }
+}
+
+internal data class ChatBlockRenderRun(
+  val isWidget: Boolean,
+  val blocks: List<ChatBlockUi>,
+)
+
+/** Preserves the canonical block order while keeping widgets outside regular message bubbles. */
+internal fun orderedVisibleChatBlockRuns(
+  blocks: List<ChatBlockUi>,
+  capabilities: ChatUiCapabilities,
+): List<ChatBlockRenderRun> {
+  val runs = mutableListOf<ChatBlockRenderRun>()
+  val pendingRegularBlocks = mutableListOf<ChatBlockUi>()
+
+  fun flushRegularBlocks() {
+    if (pendingRegularBlocks.isEmpty()) return
+    runs += ChatBlockRenderRun(isWidget = false, blocks = pendingRegularBlocks.toList())
+    pendingRegularBlocks.clear()
+  }
+
+  blocks.forEach { block ->
+    val visible =
+      when (block) {
+        is ChatBlockUi.Widget -> capabilities.showWidgets
+        is ChatBlockUi.Text -> block.value.isNotBlank()
+        is ChatBlockUi.Thinking -> capabilities.showThinking && block.value.isNotBlank()
+        else -> true
       }
+    if (!visible) return@forEach
+
+    if (block is ChatBlockUi.Widget) {
+      flushRegularBlocks()
+      runs += ChatBlockRenderRun(isWidget = true, blocks = listOf(block))
+    } else {
+      pendingRegularBlocks += block
+    }
+  }
+  flushRegularBlocks()
+  return runs
+}
+
+@Composable
+private fun ChatMessageBlocks(
+  blocks: List<ChatBlockUi>,
+  messageInProgress: Boolean,
+  capabilities: ChatUiCapabilities,
+  labels: ChatUiLabels,
+  onIntent: (ChatUiIntent) -> Unit,
+  extensionRenderer: @Composable (ChatBlockUi.Extension) -> Unit,
+  widgetRenderer: @Composable (ChatWidgetUiState, ChatUiLabels, (ChatUiIntent) -> Unit) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    blocks.forEach { block ->
+      when (block) {
+        is ChatBlockUi.Text ->
+          if (shouldRenderMarkdown(block.markdown, messageInProgress)) {
+            ChatMarkdownText(block.value)
+          } else {
+            Text(block.value, style = MaterialTheme.typography.bodyMedium)
+          }
+        is ChatBlockUi.Thinking ->
+          if (capabilities.showThinking) {
+            Text(
+              block.value,
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+        is ChatBlockUi.Notice ->
+          Text(
+            block.text,
+            color =
+              if (block.level == ChatNoticeLevel.ERROR) MaterialTheme.colorScheme.error
+              else MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        is ChatBlockUi.Attachment -> Text(block.attachment.displayName)
+        is ChatBlockUi.Widget ->
+          if (capabilities.showWidgets) {
+            widgetRenderer(block.widget, labels, onIntent)
+          }
+        is ChatBlockUi.Extension -> extensionRenderer(block)
+      }
+    }
+  }
+}
+
+internal data class TranscriptAutoScrollKey(
+  val messageCount: Int,
+  val lastMessageId: String?,
+  val lastMessageInProgress: Boolean,
+)
+
+/**
+ * Token deltas only change blocks, so they deliberately keep the same key. The transcript follows
+ * a newly inserted message and its terminal transition without forcing a synchronous list layout
+ * for every model callback.
+ */
+internal fun transcriptAutoScrollKey(messages: List<ChatMessageUi>): TranscriptAutoScrollKey {
+  val lastMessage = messages.lastOrNull()
+  return TranscriptAutoScrollKey(
+    messageCount = messages.size,
+    lastMessageId = lastMessage?.id,
+    lastMessageInProgress = lastMessage?.inProgress == true,
+  )
+}
+
+/** CommonMark parsing is deferred until the complete message is stable. */
+internal fun shouldRenderMarkdown(markdown: Boolean, messageInProgress: Boolean): Boolean =
+  markdown && !messageInProgress
+
+/** Markdown is owned by the shared chat renderer so every host presents the same message body. */
+@Composable
+private fun ChatMarkdownText(text: String, modifier: Modifier = Modifier) {
+  ProvideTextStyle(
+    MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface)
+  ) {
+    RichText(modifier = modifier) { Markdown(content = text) }
   }
 }
 
@@ -531,6 +732,7 @@ fun UgotChatMessageFrame(
   showTimestamp: Boolean,
   showActions: Boolean,
   bubbleEnabled: Boolean = true,
+  fullWidth: Boolean = false,
   onActionClicked: (String) -> Unit,
   modifier: Modifier = Modifier,
   content: @Composable () -> Unit,
@@ -557,8 +759,14 @@ fun UgotChatMessageFrame(
   Column(
     modifier =
       modifier.fillMaxWidth().padding(
-        start = if (role == ChatRole.ASSISTANT) 12.dp else horizontalPadding,
-        end = if (role == ChatRole.USER) 12.dp else horizontalPadding,
+        start =
+          if (fullWidth) 0.dp
+          else if (role == ChatRole.ASSISTANT) 12.dp
+          else horizontalPadding,
+        end =
+          if (fullWidth) 0.dp
+          else if (role == ChatRole.USER) 12.dp
+          else horizontalPadding,
         top = 6.dp,
         bottom = 6.dp,
       ),

@@ -11,7 +11,7 @@ import com.google.ai.edge.gallery.data.DataStoreRepository
 import com.google.ai.edge.gallery.data.Model
 import com.google.ai.edge.gallery.data.Task
 import com.google.ai.edge.gallery.data.UgotAuthStorage
-import com.google.ai.edge.gallery.ui.mcp.McpUiSession
+import com.ugot.chatkit.mcp.runtime.McpUiSession
 import java.io.File
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope

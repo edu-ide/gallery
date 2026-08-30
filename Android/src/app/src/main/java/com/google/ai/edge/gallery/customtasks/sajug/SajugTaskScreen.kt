@@ -10,9 +10,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -24,16 +21,12 @@ import com.google.ai.edge.gallery.ui.common.chat.ChatSide
 import com.google.ai.edge.gallery.ui.common.chat.ChatMessageText
 import com.google.ai.edge.gallery.ui.llmchat.LlmChatScreen
 import com.google.ai.edge.gallery.ui.llmchat.LlmChatViewModel
-import com.google.ai.edge.gallery.ui.mcp.McpUiSession
+import com.ugot.chatkit.mcp.runtime.McpUiSession
 import com.google.ai.edge.gallery.ui.modelmanager.ModelInitializationStatusType
 import com.google.ai.edge.gallery.ui.modelmanager.ModelManagerViewModel
 import com.google.ai.edge.gallery.ui.unifiedchat.UnifiedChatEntryHint
-import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetHostState
 import com.google.ai.edge.gallery.ui.unifiedchat.mcp.McpWidgetSnapshot
 import com.google.ai.edge.gallery.ui.unifiedchat.messages.ChatMessageMcpWidgetCard
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.launch
 
 internal const val UGOT_FORTUNE_CONNECTOR_ID = "fortune.ugot.uk/mcp"
 private const val UGOT_FORTUNE_BOOTSTRAP_SUMMARY =
@@ -71,52 +64,8 @@ internal fun SajugTaskScreen(
     )
   val initializationStatus = modelManagerUiState.modelInitializationStatus[routeModel.name]?.status
   val session = routeModel.instance as? McpUiSession
-  val messages = viewModel.uiState.collectAsState().value.messagesByModel[chatModel.name].orEmpty()
-  var hostState by remember(chatModel.name) { mutableStateOf(McpWidgetHostState()) }
-
   LaunchedEffect(Unit) { setTopBarVisible(false) }
   DisposableEffect(Unit) { onDispose { setTopBarVisible(true) } }
-
-  DisposableEffect(session) {
-    onDispose {
-      if (session == null) {
-        return@onDispose
-      }
-      kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch { session.close() }
-    }
-  }
-
-  LaunchedEffect(session, chatModel.name) {
-    if (session == null) {
-      hostState = hostState.close()
-    }
-  }
-
-  LaunchedEffect(chatModel.name, messages) {
-    if (shouldClearBootstrapOnlyFortuneTranscript(messages)) {
-      viewModel.clearAllMessages(chatModel)
-    }
-  }
-
-  LaunchedEffect(session, chatModel.name) {
-    if (session == null) {
-      return@LaunchedEffect
-    }
-
-    session.toolCallEvents.collect { event ->
-      val mutation =
-        createFortuneToolCallMutation(
-          messages = viewModel.uiState.value.messagesByModel[chatModel.name].orEmpty(),
-          toolName = event.toolName,
-          widgetStateJson = event.widgetStateJson,
-          artifactContextSummary = event.artifactContextSummary,
-        )
-      mutation.replaceIndex?.let { index ->
-        viewModel.replaceMessage(chatModel, index, mutation.card)
-      } ?: viewModel.addMessage(chatModel, mutation.card)
-      hostState = hostState.activate(mutation.card.snapshot, fullscreen = false)
-    }
-  }
 
   LlmChatScreen(
     modelManagerViewModel = modelManagerViewModel,
@@ -140,13 +89,11 @@ internal fun SajugTaskScreen(
         )
       }
     },
-    showImagePicker = true,
-    showAudioPicker = true,
+    showImagePicker = false,
+    showAudioPicker = false,
     showTopBar = true,
     selectedModelOverride = chatModel,
-    mcpWidgetHostState = hostState,
     mcpUiSession = session,
-    onMcpWidgetHostStateChange = { hostState = it },
   )
 }
 

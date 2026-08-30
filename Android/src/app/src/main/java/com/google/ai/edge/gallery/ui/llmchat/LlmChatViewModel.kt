@@ -46,6 +46,9 @@ import com.ugot.chatkit.runtime.ChatRuntimeRequest
 import com.ugot.chatkit.runtime.ChatRuntimeSessionConfig
 import com.ugot.chatkit.controller.ChatControllerConfig
 import com.ugot.chatkit.controller.DefaultChatController
+import com.ugot.chatkit.mcp.runtime.McpAgentChatRuntimeExecutor
+import com.ugot.chatkit.mcp.runtime.McpUiSession
+import com.ugot.chatkit.ui.ChatConnectorUi
 import com.ugot.chatkit.ui.ChatEmptyStateUi
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.io.ByteArrayOutputStream
@@ -69,12 +72,23 @@ open class LlmChatViewModelBase() : ChatViewModel() {
     task: Task,
     model: Model,
     sessionId: String,
+    mcpSession: McpUiSession? = null,
+    activeConnectorIds: List<String> = emptyList(),
   ): DefaultChatController {
-    val key = "$sessionId:${model.name}"
+    val key =
+      "$sessionId:${model.name}:${activeConnectorIds.joinToString(",")}:${System.identityHashCode(mcpSession)}"
     return sharedControllers.getOrPut(key) {
+      val baseExecutor = GalleryChatRuntimeExecutor(model = model, coroutineScope = viewModelScope)
       val executor =
-        runtimeExecutors.getOrPut(model.name) {
-          GalleryChatRuntimeExecutor(model = model, coroutineScope = viewModelScope)
+        if (mcpSession != null && activeConnectorIds.isNotEmpty()) {
+          McpAgentChatRuntimeExecutor(
+            delegate = baseExecutor,
+            session = mcpSession,
+            connectorId = activeConnectorIds.first(),
+            connectorTitle = "UGOT Fortune",
+          )
+        } else {
+          baseExecutor
         }
       DefaultChatController(
         scope = viewModelScope,
@@ -89,6 +103,14 @@ open class LlmChatViewModelBase() : ChatViewModel() {
                 title = "Chat with ${model.displayName.ifBlank { model.name }}",
                 description = "Run the selected model on your device with the shared UGOT Chat experience.",
               ),
+            connectors =
+              activeConnectorIds.map { connectorId ->
+                ChatConnectorUi(
+                  id = connectorId,
+                  label = "Fortune",
+                  active = true,
+                )
+              },
           ),
         executors = listOf(executor),
       )
@@ -162,6 +184,9 @@ open class LlmChatViewModelBase() : ChatViewModel() {
                 appendTextDelta(model, accelerator, event.text)
                 deliverFirstToken(firstTokenDelivered, model, onFirstToken)
               }
+              ChatRuntimeEventType.TOOL_ACTIVITY,
+              ChatRuntimeEventType.WIDGET_AVAILABLE,
+              ChatRuntimeEventType.APPROVAL_REQUIRED -> Unit
               ChatRuntimeEventType.COMPLETED -> {
                 removeLoadingMessage(model)
                 finishThinkingMessage(model)

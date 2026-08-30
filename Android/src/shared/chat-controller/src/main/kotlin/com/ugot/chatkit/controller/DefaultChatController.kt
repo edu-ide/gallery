@@ -12,27 +12,38 @@ package com.ugot.chatkit.controller
 
 import com.ugot.chatkit.runtime.ChatRuntimeAvailability
 import com.ugot.chatkit.runtime.ChatRuntimeEvent
+import com.ugot.chatkit.runtime.ChatRuntimeEventListener
 import com.ugot.chatkit.runtime.ChatRuntimeEventType
 import com.ugot.chatkit.runtime.ChatRuntimeExecutionKey
 import com.ugot.chatkit.runtime.ChatRuntimeExecutor
 import com.ugot.chatkit.runtime.ChatRuntimeMessage
 import com.ugot.chatkit.runtime.ChatRuntimeMessageRole
+import com.ugot.chatkit.runtime.ChatRuntimePermissionResolver
 import com.ugot.chatkit.runtime.ChatRuntimeRequest
 import com.ugot.chatkit.runtime.ChatRuntimeSessionConfig
 import com.ugot.chatkit.runtime.ExplicitChatRuntimeRegistry
 import com.ugot.chatkit.ui.ChatBlockUi
 import com.ugot.chatkit.ui.ChatComposerUiState
+import com.ugot.chatkit.ui.ChatConnectorUi
 import com.ugot.chatkit.ui.ChatEmptyStateUi
 import com.ugot.chatkit.ui.ChatMessageUi
 import com.ugot.chatkit.ui.ChatModelState
 import com.ugot.chatkit.ui.ChatModelUi
+import com.ugot.chatkit.ui.ChatPermissionDecision
+import com.ugot.chatkit.ui.ChatPermissionKind
+import com.ugot.chatkit.ui.ChatPermissionUiState
 import com.ugot.chatkit.ui.ChatRole
 import com.ugot.chatkit.ui.ChatSurfaceState
 import com.ugot.chatkit.ui.ChatTurnActivityUiState
 import com.ugot.chatkit.ui.ChatUiIntent
+import com.ugot.chatkit.ui.ChatWidgetDisplayMode
+import com.ugot.chatkit.ui.ChatWidgetUiState
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -46,6 +57,7 @@ data class ChatControllerConfig(
   val initialRuntimeId: String,
   val emptyState: ChatEmptyStateUi? = null,
   val systemInstruction: String? = null,
+  val connectors: List<ChatConnectorUi> = emptyList(),
   val labels: ChatControllerLabels = ChatControllerLabels(),
 ) {
   init {
@@ -86,6 +98,15 @@ class DefaultChatController(
   private var selectedRuntimeId = config.initialRuntimeId
   private var activeExecution: ChatRuntimeExecutionKey? = null
   private var activeJob: Job? = null
+  private val pendingDeltaLock = Any()
+  private val pendingDeltas = mutableListOf<PendingDelta>()
+  private var pendingDeltaExecution: ChatRuntimeExecutionKey? = null
+  private var pendingDeltaFlushJob: Job? = null
+  private val runtimeEvents = Channel<ChatRuntimeEvent>(Channel.UNLIMITED)
+  private val runtimeEventJob = scope.launch {
+    for (event in runtimeEvents) reduceRuntimeEvent(event)
+  }
+  private val runtimeEventListener = ChatRuntimeEventListener { event -> runtimeEvents.trySend(event) }
 
   private val _state = MutableStateFlow(initialState())
   val state: StateFlow<ChatSurfaceState> = _state.asStateFlow()
@@ -98,6 +119,9 @@ class DefaultChatController(
       ChatUiIntent.StopClicked -> stop()
       ChatUiIntent.ResetConversationClicked -> resetConversation()
       is ChatUiIntent.ModelSelected -> selectRuntime(intent.id)
+      is ChatUiIntent.ConnectorToggled -> toggleConnector(intent.id)
+      is ChatUiIntent.OpenWidget -> openWidget(intent.messageId, intent.fullscreen)
+      is ChatUiIntent.ResolvePermission -> resolvePermission(intent)
       ChatUiIntent.CloseWidget -> {
         _state.update { it.copy(activeWidget = null) }
         hostEffectHandler.handle(intent)
@@ -140,6 +164,7 @@ class DefaultChatController(
       composer =
         ChatComposerUiState(enabled = selected?.availability == ChatRuntimeAvailability.READY),
       models = descriptors.map { descriptor -> descriptor.toUiModel(selectedRuntimeId, config.labels) },
+      connectors = config.connectors,
       emptyState = config.emptyState,
       error = selected?.unavailableReason,
     )
@@ -224,8 +249,13 @@ class DefaultChatController(
                 modelId = executor.descriptor.modelId,
                 input = input,
                 allowThinking = executor.descriptor.capabilities.thinking,
+                context =
+                  mapOf(
+                    ACTIVE_CONNECTORS_CONTEXT_KEY to
+                      snapshot.connectors.filter(ChatConnectorUi::active).joinToString(",") { it.id }
+                  ),
               ),
-              ::reduceRuntimeEvent,
+              runtimeEventListener,
             )
           }
           .onFailure { error ->
@@ -240,64 +270,176 @@ class DefaultChatController(
     if (activeExecution != event.executionKey) return
     when (event.type) {
       ChatRuntimeEventType.PREPARING -> Unit
-      ChatRuntimeEventType.TEXT_DELTA -> appendDelta(event.text, thinking = false)
-      ChatRuntimeEventType.THINKING_DELTA -> appendDelta(event.text, thinking = true)
-      ChatRuntimeEventType.COMPLETED -> finishTurn()
-      ChatRuntimeEventType.FAILED -> finishTurn(event.text)
-      ChatRuntimeEventType.INTERRUPTED -> finishTurn()
+      ChatRuntimeEventType.TEXT_DELTA -> enqueueDelta(event.executionKey, event.text, thinking = false)
+      ChatRuntimeEventType.THINKING_DELTA ->
+        enqueueDelta(event.executionKey, event.text, thinking = true)
+      ChatRuntimeEventType.TOOL_ACTIVITY -> {
+        event.toolActivity?.let { activity ->
+          _state.update { current ->
+            current.copy(
+              turnActivity =
+                ChatTurnActivityUiState(
+                  title = activity.title,
+                  detail = activity.detail,
+                  showsProgress = activity.showsProgress,
+                )
+            )
+          }
+        }
+      }
+      ChatRuntimeEventType.WIDGET_AVAILABLE -> {
+        flushPendingDeltas(event.executionKey)
+        event.widget?.let(::appendWidget)
+      }
+      ChatRuntimeEventType.APPROVAL_REQUIRED -> {
+        flushPendingDeltas(event.executionKey)
+        event.permission?.let { permission ->
+          _state.update { current ->
+            current.copy(
+              pendingPermission =
+                ChatPermissionUiState(
+                  requestId = permission.requestId,
+                  kind = ChatPermissionKind.MCP_TOOL,
+                  title = permission.title,
+                  rationale = permission.rationale,
+                  riskLabel = permission.riskLabel,
+                )
+            )
+          }
+        }
+      }
+      ChatRuntimeEventType.COMPLETED -> {
+        flushPendingDeltas(event.executionKey)
+        finishTurn()
+      }
+      ChatRuntimeEventType.FAILED -> {
+        flushPendingDeltas(event.executionKey)
+        finishTurn(event.text)
+      }
+      ChatRuntimeEventType.INTERRUPTED -> {
+        flushPendingDeltas(event.executionKey)
+        finishTurn()
+      }
     }
   }
 
-  private fun appendDelta(delta: String, thinking: Boolean) {
+  private fun enqueueDelta(
+    executionKey: ChatRuntimeExecutionKey,
+    delta: String,
+    thinking: Boolean,
+  ) {
     if (delta.isEmpty()) return
+    val scheduledJob =
+      synchronized(pendingDeltaLock) {
+        if (pendingDeltaExecution != executionKey) {
+          pendingDeltaFlushJob?.cancel()
+          pendingDeltaFlushJob = null
+          pendingDeltas.clear()
+          pendingDeltaExecution = executionKey
+        }
+        val last = pendingDeltas.lastOrNull()
+        if (last?.thinking == thinking) {
+          last.text.append(delta)
+        } else {
+          pendingDeltas += PendingDelta(thinking = thinking, text = StringBuilder(delta))
+        }
+        if (pendingDeltaFlushJob == null) {
+          scope
+            .launch(start = CoroutineStart.LAZY) {
+              delay(DELTA_FLUSH_INTERVAL_MS)
+              flushPendingDeltas(executionKey)
+            }
+            .also { pendingDeltaFlushJob = it }
+        } else {
+          null
+        }
+      }
+    scheduledJob?.start()
+  }
+
+  private fun flushPendingDeltas(executionKey: ChatRuntimeExecutionKey) {
+    val batch: List<PendingDeltaSnapshot>
+    val scheduledJob: Job?
+    synchronized(pendingDeltaLock) {
+      if (pendingDeltaExecution != executionKey) return
+      batch = pendingDeltas.map { PendingDeltaSnapshot(it.thinking, it.text.toString()) }
+      pendingDeltas.clear()
+      pendingDeltaExecution = null
+      scheduledJob = pendingDeltaFlushJob
+      pendingDeltaFlushJob = null
+    }
+    scheduledJob?.cancel()
+    appendDeltaBatch(executionKey, batch)
+  }
+
+  private fun discardPendingDeltas(executionKey: ChatRuntimeExecutionKey) {
+    val scheduledJob: Job?
+    synchronized(pendingDeltaLock) {
+      if (pendingDeltaExecution != executionKey) return
+      pendingDeltas.clear()
+      pendingDeltaExecution = null
+      scheduledJob = pendingDeltaFlushJob
+      pendingDeltaFlushJob = null
+    }
+    scheduledJob?.cancel()
+  }
+
+  private fun appendDeltaBatch(
+    executionKey: ChatRuntimeExecutionKey,
+    batch: List<PendingDeltaSnapshot>,
+  ) {
+    if (batch.isEmpty()) return
     _state.update { current ->
+      if (activeExecution != executionKey) return@update current
       val last = current.messages.lastOrNull()
-      if (last?.role == ChatRole.ASSISTANT && last.inProgress) {
-        val blocks = last.blocks.toMutableList()
+      val appendingToExisting = last?.role == ChatRole.ASSISTANT && last.inProgress
+      val assistant =
+        if (appendingToExisting) {
+          requireNotNull(last)
+        } else {
+          ChatMessageUi(
+            id = "message_${messageSequence.getAndIncrement()}",
+            role = ChatRole.ASSISTANT,
+            blocks = emptyList(),
+            senderLabel = config.title,
+            inProgress = true,
+          )
+        }
+      val blocks = assistant.blocks.toMutableList()
+      batch.forEach { pending ->
         val index =
           blocks.indexOfLast {
-            if (thinking) it is ChatBlockUi.Thinking else it is ChatBlockUi.Text
+            if (pending.thinking) it is ChatBlockUi.Thinking else it is ChatBlockUi.Text
           }
         if (index >= 0) {
           blocks[index] =
-            if (thinking) {
+            if (pending.thinking) {
               val block = blocks[index] as ChatBlockUi.Thinking
-              block.copy(value = block.value + delta, inProgress = true)
+              block.copy(value = block.value + pending.text, inProgress = true)
             } else {
               val block = blocks[index] as ChatBlockUi.Text
-              block.copy(value = block.value + delta)
+              block.copy(value = block.value + pending.text)
             }
         } else {
           blocks +=
-            if (thinking) ChatBlockUi.Thinking(delta, inProgress = true)
-            else ChatBlockUi.Text(delta)
+            if (pending.thinking) ChatBlockUi.Thinking(pending.text, inProgress = true)
+            else ChatBlockUi.Text(pending.text)
         }
-        current.copy(
-          messages = current.messages.dropLast(1) + last.copy(blocks = blocks),
-          turnActivity =
-            ChatTurnActivityUiState(
-              title = config.labels.writingResponse,
-              detail = current.providerLabel,
-              showsProgress = true,
-            ),
-        )
-      } else {
-        current.copy(
-          messages =
-            current.messages +
-              ChatMessageUi(
-                id = "message_${messageSequence.getAndIncrement()}",
-                role = ChatRole.ASSISTANT,
-                blocks =
-                  listOf(
-                    if (thinking) ChatBlockUi.Thinking(delta, inProgress = true)
-                    else ChatBlockUi.Text(delta)
-                  ),
-                senderLabel = config.title,
-                inProgress = true,
-              ),
-        )
       }
+      current.copy(
+        messages =
+          if (appendingToExisting) {
+            current.messages.dropLast(1) + assistant.copy(blocks = blocks)
+          } else {
+            current.messages + assistant.copy(blocks = blocks)
+          },
+        turnActivity =
+          ChatTurnActivityUiState(
+            title = config.labels.writingResponse,
+            detail = current.providerLabel,
+            showsProgress = true,
+          ),
+      )
     }
   }
 
@@ -322,6 +464,7 @@ class DefaultChatController(
           },
         composer = current.composer.copy(inProgress = false),
         turnActivity = null,
+        pendingPermission = null,
         error = error?.takeIf(String::isNotBlank),
       )
     }
@@ -330,6 +473,7 @@ class DefaultChatController(
   private fun stop() {
     val key = activeExecution ?: return
     activeExecution = null
+    discardPendingDeltas(key)
     activeJob?.cancel()
     activeJob = null
     executorsById[selectedRuntimeId]?.interrupt(key)
@@ -367,6 +511,8 @@ class DefaultChatController(
                 inProgress = false,
               ),
             turnActivity = null,
+            activeWidget = null,
+            pendingPermission = null,
             restoring = false,
             error = null,
           )
@@ -410,11 +556,105 @@ class DefaultChatController(
   private fun selectedRuntimeIsReady(): Boolean =
     executorsById[selectedRuntimeId]?.descriptor?.availability == ChatRuntimeAvailability.READY
 
+  private fun toggleConnector(connectorId: String) {
+    _state.update { current ->
+      current.copy(
+        connectors =
+          current.connectors.map { connector ->
+            if (connector.id == connectorId && connector.enabled) {
+              connector.copy(active = !connector.active)
+            } else {
+              connector
+            }
+          }
+      )
+    }
+  }
+
+  private fun openWidget(messageId: String, fullscreen: Boolean) {
+    val widget =
+      _state.value.messages
+        .asSequence()
+        .flatMap { it.blocks.asSequence() }
+        .filterIsInstance<ChatBlockUi.Widget>()
+        .map(ChatBlockUi.Widget::widget)
+        .firstOrNull { it.messageId == messageId }
+        ?: return
+    _state.update { current ->
+      current.copy(
+        activeWidget =
+          widget.copy(
+            displayMode =
+              if (fullscreen) ChatWidgetDisplayMode.FULLSCREEN else ChatWidgetDisplayMode.INLINE
+          )
+      )
+    }
+  }
+
+  private fun resolvePermission(intent: ChatUiIntent.ResolvePermission) {
+    val key = activeExecution ?: return
+    val resolver = executorsById[selectedRuntimeId] as? ChatRuntimePermissionResolver ?: return
+    val resolved =
+      resolver.resolvePermission(
+        executionKey = key,
+        requestId = intent.requestId,
+        allow = intent.decision == ChatPermissionDecision.ALLOW_ONCE,
+      )
+    if (resolved) {
+      _state.update { current -> current.copy(pendingPermission = null) }
+    }
+  }
+
+  private fun appendWidget(widget: com.ugot.chatkit.runtime.ChatRuntimeWidget) {
+    val messageId = "message_${messageSequence.getAndIncrement()}"
+    val widgetState =
+      ChatWidgetUiState(
+        messageId = messageId,
+        title = widget.title,
+        summary = widget.summary,
+        connectorId = widget.connectorId,
+        contentRef = widget.contentRef,
+        stateJson = widget.stateJson,
+        displayMode = ChatWidgetDisplayMode.INLINE,
+      )
+    _state.update { current ->
+      val last = current.messages.lastOrNull()
+      if (last?.role == ChatRole.ASSISTANT && last.inProgress) {
+        current.copy(
+          messages =
+            current.messages.dropLast(1) +
+              last.copy(blocks = last.blocks + ChatBlockUi.Widget(widgetState))
+        )
+      } else {
+        current.copy(
+          messages =
+            current.messages +
+              ChatMessageUi(
+                id = messageId,
+                role = ChatRole.ASSISTANT,
+                blocks = listOf(ChatBlockUi.Widget(widgetState)),
+                senderLabel = config.title,
+                inProgress = true,
+              )
+        )
+      }
+    }
+  }
+
   override fun close() {
     stop()
+    runtimeEvents.close()
+    runtimeEventJob.cancel()
     executorsById.values.forEach(ChatRuntimeExecutor::close)
   }
 }
+
+private const val ACTIVE_CONNECTORS_CONTEXT_KEY = "mcp.activeConnectorIds"
+private const val DELTA_FLUSH_INTERVAL_MS = 32L
+
+private data class PendingDelta(val thinking: Boolean, val text: StringBuilder)
+
+private data class PendingDeltaSnapshot(val thinking: Boolean, val text: String)
 
 private fun com.ugot.chatkit.runtime.ChatRuntimeDescriptor.toUiModel(
   selectedRuntimeId: String,

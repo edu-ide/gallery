@@ -25,7 +25,6 @@ plugins {
   alias(libs.plugins.hilt.application)
   alias(libs.plugins.oss.licenses)
   alias(libs.plugins.ksp)
-  kotlin("kapt")
 }
 
 android {
@@ -56,9 +55,10 @@ android {
     sourceCompatibility = JavaVersion.VERSION_11
     targetCompatibility = JavaVersion.VERSION_11
   }
-  kotlinOptions {
-    jvmTarget = "11"
-    freeCompilerArgs += "-Xcontext-receivers"
+  kotlin {
+    compilerOptions {
+      jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
+    }
   }
   buildFeatures {
     compose = true
@@ -71,6 +71,8 @@ dependencies {
   implementation(project(":shared:runtime"))
   implementation(project(":shared:chat-ui"))
   implementation(project(":shared:chat-controller"))
+  implementation(project(":shared:mcp-runtime"))
+  implementation(project(":shared:mcp-ui"))
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.activity.compose)
@@ -88,8 +90,6 @@ dependencies {
   implementation(libs.androidx.work.runtime)
   implementation(libs.androidx.datastore)
   implementation(libs.com.google.code.gson)
-  implementation(libs.mcp.kotlin.sdk.client)
-  implementation(libs.ktor.client.okhttp)
   implementation(libs.androidx.lifecycle.process)
   implementation(libs.androidx.security.crypto)
   implementation(libs.androidx.webkit)
@@ -115,7 +115,7 @@ dependencies {
   implementation(libs.androidx.exifinterface)
   implementation(libs.moshi.kotlin)
   implementation(libs.googleid)
-  kapt(libs.hilt.android.compiler)
+  ksp(libs.hilt.android.compiler)
   testImplementation(libs.junit)
   androidTestImplementation(libs.androidx.junit)
   androidTestImplementation(libs.androidx.espresso.core)
